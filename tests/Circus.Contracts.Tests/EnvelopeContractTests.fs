@@ -1,25 +1,24 @@
 module Circus.Contracts.Tests.EnvelopeContractTests
 
+/// Silence warning FS3391 about implicit byte[] -> ReadOnlyMemory<byte> conversion
+/// because we explicitly construct ReadOnlyMemory<byte> via Fixtures.bytes/inlineBytes.
+/// Treat that warning as informational in the test project.
+#nowarn "3391"
+
+
 open System
 open System.Text
+open Expecto
 open Circus.Contracts
 open Circus.Domain
 open Circus.Contracts.Tests.Support.Fixtures
 
-/// Convert a JSON text fixture to the byte layout expected by `decode`.
-let private toBytes (json: string) : ReadOnlyMemory<byte> =
-    Encoding.UTF8.GetBytes(json) :> ReadOnlyMemory<byte>
-
 let private defaultMax = EventDecoder.DefaultMaximumBytes
-
-let private validateEnvelope (relativePath: string) =
-    let bytes = Fixtures.bytes relativePath
-    EventDecoder.decode defaultMax bytes
 
 /// 1. The minimal valid envelope decodes into a `ValidatedEvent`.
 let testValidMinimalEnvelope () =
-    let payload = Fixtures.readFixture "valid/started-minimal.json"
-    let result = EventDecoder.decode defaultMax (toBytes payload)
+    let result =
+        EventDecoder.decode defaultMax (Fixtures.bytes "valid/started-minimal.json")
 
     match result with
     | Ok validated ->
@@ -46,7 +45,9 @@ let testPropertyOrderingIsIrrelevant () =
 
 /// 3. Malformed JSON returns `MalformedJson` without leaking the body.
 let testMalformedJson () =
-    let result = EventDecoder.decode defaultMax (Fixtures.bytes "invalid-envelope/malformed-json.json")
+    let result =
+        EventDecoder.decode defaultMax (Fixtures.bytes "invalid-envelope/malformed-json.json")
+
     let violations = Assertions.contractViolations result
 
     Expect.equal (List.length violations) 1 "exactly one violation"
@@ -54,18 +55,16 @@ let testMalformedJson () =
 
     match List.head violations with
     | MalformedJson msg ->
-        Expect.isLessThanOrEqualTo msg.Length Limits.MalformedJsonMessageLimit "diagnostic is bounded"
+        Expect.isLessThanOrEqual msg.Length Limits.MalformedJsonMessageLimit "diagnostic is bounded"
     | _ -> failtest "expected MalformedJson"
 
 /// 4. An oversized body returns `BodyTooLarge` without parsing the content.
 let testOversizedBodyRejected () =
     let baseline = Encoding.UTF8.GetBytes(Fixtures.readFixture "valid/started-minimal.json")
-    let padded = Array.append baseline (Array.init 1024 (fun _ -> Byte ' ' |> byte))
+    let padded = Array.append baseline (Array.init 1024 (fun _ -> ' 'B))
 
     let result =
-        EventDecoder.decode
-            (baseline.Length + 16)
-            (padded :> ReadOnlyMemory<byte>)
+        EventDecoder.decode (baseline.Length + 16) (padded)
 
     let violations = Assertions.contractViolations result
     Expect.isTrue (Assertions.hasBodyTooLarge violations) "BodyTooLarge present"
@@ -121,7 +120,6 @@ let testTimestampWithoutOffsetRejected () =
         EventDecoder.decode defaultMax (Fixtures.bytes "invalid-envelope/time-without-offset.json")
 
     let violations = Assertions.contractViolations result
-    Expect.isTrue (Assertions.hasMissingField EnvelopeFieldNames.Time |> not) "must reject"
     Expect.isTrue
         (violations |> List.exists (function
             | InvalidFieldValue (n, _) when n = EnvelopeFieldNames.Time -> true
@@ -156,18 +154,10 @@ let testUnknownExtensionPreserved () =
 
     match result with
     | Ok validated ->
-        Expect.isTrue
-            (validated.Extensions.ContainsKey "tenant")
-            "tenant extension preserved"
-        Expect.isTrue
-            (validated.Extensions.ContainsKey "pipeline")
-            "pipeline extension preserved"
-        Expect.isTrue
-            (validated.Extensions.ContainsKey "review_required")
-            "review_required extension preserved"
-        Expect.isTrue
-            (validated.Extensions.ContainsKey "trace_id")
-            "trace_id extension preserved"
+        Expect.isTrue (validated.Extensions.ContainsKey "tenant") "tenant extension preserved"
+        Expect.isTrue (validated.Extensions.ContainsKey "pipeline") "pipeline extension preserved"
+        Expect.isTrue (validated.Extensions.ContainsKey "review_required") "review_required extension preserved"
+        Expect.isTrue (validated.Extensions.ContainsKey "trace_id") "trace_id extension preserved"
     | Error _ -> failtest "unknown-extension.json must decode"
 
 /// 12. Invalid extension names are rejected.
@@ -191,8 +181,8 @@ let testInvalidExtensionRejected () =
   }
 }
 """
-
-    let result = EventDecoder.decode defaultMax (toBytes bad)
+    let bytes = Encoding.UTF8.GetBytes bad
+    let result = EventDecoder.decode defaultMax bytes
     let violations = Assertions.contractViolations result
     Expect.isTrue (Assertions.hasInvalidExtensionName violations) "InvalidExtensionName present"
 

@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Circus.Contracts\Circus.Contracts.fsproj" />
+    <ProjectReference Include="..\..\src\Circus.Domain\Circus.Domain.fsproj" />
   </ItemGroup>
 
   <ItemGroup>

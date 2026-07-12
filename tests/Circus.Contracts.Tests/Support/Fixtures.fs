@@ -2,8 +2,8 @@ module Circus.Contracts.Tests.Support.Fixtures
 
 open System
 open System.IO
-open System.Reflection
 open System.Text
+open Circus.Domain
 
 /// Embedded-resource helpers for loading the human-reviewed JSON fixtures
 /// committed to `tests/fixtures/events/`.
@@ -30,10 +30,17 @@ module Fixtures =
         let full = Path.Combine(eventsDirectory (), relativePath)
         File.ReadAllText(full, Encoding.UTF8)
 
-    /// Wrap the UTF-8 bytes of a fixture as a `ReadOnlyMemory<byte>`,
-    /// matching the contract decoder's entry-point type.
+    /// Wrap the UTF-8 bytes of a fixture as a `ReadOnlyMemory<byte>`
+    /// without triggering the `byte[]` → `ReadOnlyMemory<byte>` implicit
+    /// conversion warning. The contract decoder's entry-point requires
+    /// exactly this type.
     let bytes (relativePath: string) : ReadOnlyMemory<byte> =
-        Encoding.UTF8.GetBytes(readFixture relativePath)
+        ReadOnlyMemory(Encoding.UTF8.GetBytes(readFixture relativePath))
+
+    /// Construct a `ReadOnlyMemory<byte>` directly from raw UTF-8 bytes
+    /// (used by inline JSON literals in test bodies).
+    let inlineBytes (text: string) : ReadOnlyMemory<byte> =
+        ReadOnlyMemory(Encoding.UTF8.GetBytes text)
 
     /// List of all committed fixture paths grouped by category.
     let allValid () =

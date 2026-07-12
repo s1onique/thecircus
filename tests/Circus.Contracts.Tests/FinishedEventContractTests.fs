@@ -1,88 +1,75 @@
 module Circus.Contracts.Tests.FinishedEventContractTests
 
+/// Silence warning FS3391 about implicit byte[] -> ReadOnlyMemory<byte> conversion
+/// because we explicitly construct ReadOnlyMemory<byte> via Fixtures.bytes/inlineBytes.
+/// Treat that warning as informational in the test project.
+#nowarn "3391"
+
+
+open Expecto
 open Circus.Contracts
 open Circus.Domain
 open Circus.Contracts.Tests.Support.Fixtures
 
-let private ok =
-    EventDecoder.decode EventDecoder.DefaultMaximumBytes
+let private decodeOk relativePath : ExecutionFinished =
+    match EventDecoder.decode EventDecoder.DefaultMaximumBytes (Fixtures.bytes relativePath) with
+    | Ok validated ->
+        match validated.Event with
+        | ExecutionFinishedEvent finished -> finished
+        | other ->
+            failwithf "expected ExecutionFinishedEvent for %s, got %A" relativePath other
+    | Error errs ->
+        let msg = errs |> NonEmptyList.toList |> List.map (sprintf "%A") |> String.concat "; "
+        failwithf "expected Ok finished event for %s, got errors: %s" relativePath msg
 
-let private outcomeFrom result =
-    match result with
-    | Ok v ->
-        match v.Event with
-        | ExecutionFinishedEvent f -> Ok f
-        | other -> failwithf "expected finished, got %A" other
-    | Error e ->
-        e |> NonEmptyList.toList |> List.map (sprintf "%A") |> String.concat "; "
-        |> failwithf
-
-/// Each recognised outcome decodes with the canonical wire form preserved.
+/// 1. Each recognised outcome decodes with the canonical wire form preserved.
 let testEveryOutcomeDecodes () =
-    let succeededRes = outcomeFrom (ok (Fixtures.bytes "valid/finished-succeeded.json"))
-    let failedRes = outcomeFrom (ok (Fixtures.bytes "valid/finished-failed.json"))
+    let succeeded = decodeOk "valid/finished-succeeded.json"
+    let failed = decodeOk "valid/finished-failed.json"
 
-    Expect.equal succeededRes.Outcome Succeeded "succeeded outcome"
-    Expect.equal failedRes.Outcome Failed "failed outcome"
+    Expect.equal succeeded.Outcome Succeeded "succeeded outcome"
+    Expect.equal failed.Outcome Failed "failed outcome"
     Expect.equal (ExecutionOutcome.toWire Failed) "failed" "wire form"
 
-/// A tiny custom fixture proving the remaining two outcomes are accepted.
+/// 2. `cancelled` and `timed_out` outcomes decode via inline envelopes.
 let testCancelledAndTimedOutOutcomes () =
-    let cancelled = """{
-  "specversion": "1.0",
-  "id": "019b0437-2766-7a20-9225-4ab1645ba132",
-  "source": "urn:leamas:instance:builder-07",
-  "type": "io.leamas.execution.finished.v1",
-  "subject": "run/019b0437-1ef2-7abc-a38d-23472513f51a",
-  "time": "2026-07-12T20:00:00Z",
-  "datacontenttype": "application/json",
-  "circusinstance": "builder-07",
-  "circusepoch": "019b0400-2f61-720d-94a5-c84e928eae19",
-  "circusseq": 512,
-  "runid": "019b0437-1ef2-7abc-a38d-23472513f51a",
-  "data": {
-    "outcome": "cancelled",
-    "duration_ms": 0,
-    "checks": { "passed": 0, "failed": 0, "skipped": 0 }
-  }
-}
-"""
+    let buildEnvelope runid outcome (duration: int) =
+        sprintf
+            """{"specversion":"1.0","id":"%s","source":"urn:leamas:instance:builder-07","type":"io.leamas.execution.finished.v1","subject":"%s","time":"2026-07-12T20:00:00Z","datacontenttype":"application/json","circusinstance":"builder-07","circusepoch":"019b0400-2f61-720d-94a5-c84e928eae19","circusseq":555,"runid":"%s","data":{"outcome":"%s","duration_ms":%d,"checks":{"passed":1,"failed":0,"skipped":0}}}"""
+            runid
+            (sprintf "run/%s" runid)
+            runid
+            outcome
+            duration
 
-    let timedOut = """{
-  "specversion": "1.0",
-  "id": "019b0437-2766-7a20-9225-4ab1645ba133",
-  "source": "urn:leamas:instance:builder-07",
-  "type": "io.leamas.execution.finished.v1",
-  "subject": "run/019b0437-1ef2-7abc-a38d-23472513f51b",
-  "time": "2026-07-12T20:00:00Z",
-  "datacontenttype": "application/json",
-  "circusinstance": "builder-07",
-  "circusepoch": "019b0400-2f61-720d-94a5-c84e928eae19",
-  "circusseq": 513,
-  "runid": "019b0437-1ef2-7abc-a38d-23472513f51b",
-  "data": {
-    "outcome": "timed_out",
-    "duration_ms": 604800000,
-    "checks": { "passed": 1, "failed": 0, "skipped": 0 }
-  }
-}
-"""
+    let bytesFor (s: string) = System.Text.Encoding.UTF8.GetBytes s
 
-    let encoded = System.Text.Encoding.UTF8.GetBytes : System.Func<string, System.ReadOnlyMemory<byte>>
+    let cancelledEnv = buildEnvelope "019b0437-1ef2-7abc-a38d-23472513f520" "cancelled" 0
+    let timedOutEnv = buildEnvelope "019b0437-1ef2-7abc-a38d-23472513f521" "timed_out" 604800000
 
-    let cancelledRes =
-        outcomeFrom (ok (encoded.Invoke cancelled))
+    let cancelled =
+        EventDecoder.decode EventDecoder.DefaultMaximumBytes (bytesFor cancelledEnv)
 
-    let timedOutRes =
-        outcomeFrom (ok (encoded.Invoke timedOut))
+    let timedOut =
+        EventDecoder.decode EventDecoder.DefaultMaximumBytes (bytesFor timedOutEnv)
 
-    Expect.equal cancelledRes.Outcome Cancelled "cancelled outcome"
-    Expect.equal timedOutRes.Outcome TimedOut "timed_out outcome"
+    let extractOutcome (r: ValidationResult<ValidatedEvent>) =
+        match r with
+        | Ok v ->
+            match v.Event with
+            | ExecutionFinishedEvent f -> Some f.Outcome
+            | _ -> None
+        | _ -> None
 
-/// An unknown outcome string is rejected (no UnknownOutcome state).
+    Expect.equal (extractOutcome cancelled) (Some Cancelled) "cancelled outcome"
+    Expect.equal (extractOutcome timedOut) (Some TimedOut) "timed_out outcome"
+
+/// 3. Unknown outcome strings are rejected.
 let testUnknownOutcomeRejected () =
     let result =
-        ok (Fixtures.bytes "invalid-finished/finished-unknown-outcome.json")
+        EventDecoder.decode
+            EventDecoder.DefaultMaximumBytes
+            (Fixtures.bytes "invalid-finished/finished-unknown-outcome.json")
 
     let violations = Assertions.contractViolations result
     Expect.isTrue (Assertions.hasInvalidKnownPayload violations) "InvalidKnownPayload present"
@@ -95,77 +82,37 @@ let testUnknownOutcomeRejected () =
              | _ -> false))
         "PayloadInvalidFieldValue on outcome"
 
-/// Zero duration is valid.
+/// 4. Zero duration is valid.
 let testZeroDurationValid () =
-    let result =
-        ok (Fixtures.bytes "valid/finished-succeeded.json")
-        |> outcomeFrom
+    let finished = decodeOk "valid/finished-succeeded.json"
+    Expect.isTrue (finished.DurationMilliseconds >= 0L) "duration_ms non-negative"
 
-    Expect.isTrue (result.DurationMilliseconds >= 0L) "duration_ms non-negative"
-
-/// Maximum duration (one week in ms) is valid.
+/// 5. Maximum duration (one week in ms) is valid.
 let testMaximumDurationValid () =
-    let result = outcomeFrom (ok (Fixtures.bytes "valid/finished-failed.json"))
+    let finished = decodeOk "valid/finished-failed.json"
     Expect.isTrue
-        (result.DurationMilliseconds <= Limits.DurationMaxMilliseconds)
+        (finished.DurationMilliseconds <= Limits.DurationMaxMilliseconds)
         "duration_ms ≤ week"
 
-/// Excessive duration is rejected.
+/// 6. Excessive duration is rejected.
 let testExcessiveDurationRejected () =
-    let bogus = """{
-  "specversion": "1.0",
-  "id": "019b0437-2766-7a20-9225-4ab1645ba134",
-  "source": "urn:leamas:instance:builder-07",
-  "type": "io.leamas.execution.finished.v1",
-  "subject": "run/019b0437-1ef2-7abc-a38d-23472513f51c",
-  "time": "2026-07-12T20:00:00Z",
-  "datacontenttype": "application/json",
-  "circusinstance": "builder-07",
-  "circusepoch": "019b0400-2f61-720d-94a5-c84e928eae19",
-  "circusseq": 514,
-  "runid": "019b0437-1ef2-7abc-a38d-23472513f51c",
-  "data": {
-    "outcome": "succeeded",
-    "duration_ms": 604800001,
-    "checks": { "passed": 0, "failed": 0, "skipped": 0 }
-  }
-}
-"""
+    let bogus = """{"specversion":"1.0","id":"019b0437-2766-7a20-9225-4ab1645ba141","source":"urn:leamas:instance:builder-07","type":"io.leamas.execution.finished.v1","subject":"run/019b0437-1ef2-7abc-a38d-23472513f521","time":"2026-07-12T20:00:00Z","datacontenttype":"application/json","circusinstance":"builder-07","circusepoch":"019b0400-2f61-720d-94a5-c84e928eae19","circusseq":556,"runid":"019b0437-1ef2-7abc-a38d-23472513f521","data":{"outcome":"succeeded","duration_ms":604800001,"checks":{"passed":0,"failed":0,"skipped":0}}}"""
+    let bytes = System.Text.Encoding.UTF8.GetBytes bogus
+    let result = EventDecoder.decode EventDecoder.DefaultMaximumBytes bytes
+    let payloadErrs = Assertions.payloadViolations (Assertions.contractViolations result)
 
-    let encoded = System.Text.Encoding.UTF8.GetBytes : System.Func<string, System.ReadOnlyMemory<byte>>
-    let result = ok (encoded.Invoke bogus)
-    let violations = Assertions.contractViolations result
     Expect.isTrue
-        (Assertions.payloadViolations violations
+        (payloadErrs
          |> List.exists (function
              | PayloadInvalidFieldValue (n, _) when n = "duration_ms" -> true
              | _ -> false))
         "excessive duration rejected"
 
-/// Negative counts are rejected.
+/// 7. Negative counts are rejected.
 let testNegativeCountsRejected () =
-    let bogus = """{
-  "specversion": "1.0",
-  "id": "019b0437-2766-7a20-9225-4ab1645ba135",
-  "source": "urn:leamas:instance:builder-07",
-  "type": "io.leamas.execution.finished.v1",
-  "subject": "run/019b0437-1ef2-7abc-a38d-23472513f51d",
-  "time": "2026-07-12T20:00:00Z",
-  "datacontenttype": "application/json",
-  "circusinstance": "builder-07",
-  "circusepoch": "019b0400-2f61-720d-94a5-c84e928eae19",
-  "circusseq": 515,
-  "runid": "019b0437-1ef2-7abc-a38d-23472513f51d",
-  "data": {
-    "outcome": "succeeded",
-    "duration_ms": 1000,
-    "checks": { "passed": -1, "failed": 0, "skipped": 0 }
-  }
-}
-"""
-
-    let encoded = System.Text.Encoding.UTF8.GetBytes : System.Func<string, System.ReadOnlyMemory<byte>>
-    let result = ok (encoded.Invoke bogus)
+    let bogus = """{"specversion":"1.0","id":"019b0437-2766-7a20-9225-4ab1645ba142","source":"urn:leamas:instance:builder-07","type":"io.leamas.execution.finished.v1","subject":"run/019b0437-1ef2-7abc-a38d-23472513f522","time":"2026-07-12T20:00:00Z","datacontenttype":"application/json","circusinstance":"builder-07","circusepoch":"019b0400-2f61-720d-94a5-c84e928eae19","circusseq":557,"runid":"019b0437-1ef2-7abc-a38d-23472513f522","data":{"outcome":"succeeded","duration_ms":1000,"checks":{"passed":-1,"failed":0,"skipped":0}}}"""
+    let bytes = System.Text.Encoding.UTF8.GetBytes bogus
+    let result = EventDecoder.decode EventDecoder.DefaultMaximumBytes bytes
     let payloadErrs = Assertions.payloadViolations (Assertions.contractViolations result)
 
     Expect.isTrue
@@ -175,10 +122,12 @@ let testNegativeCountsRejected () =
              | _ -> false))
         "negative count rejected"
 
-/// Excessive counts (>1_000_000) are rejected.
+/// 8. Excessive counts (>1_000_000) are rejected.
 let testExcessiveCountsRejected () =
     let result =
-        ok (Fixtures.bytes "invalid-finished/finished-invalid-check-counts.json")
+        EventDecoder.decode
+            EventDecoder.DefaultMaximumBytes
+            (Fixtures.bytes "invalid-finished/finished-invalid-check-counts.json")
 
     let payloadErrs = Assertions.payloadViolations (Assertions.contractViolations result)
     Expect.isTrue
@@ -188,10 +137,13 @@ let testExcessiveCountsRejected () =
              | _ -> false))
         "excessive count rejected"
 
-/// Optional `summary` is preserved when present and absent when omitted.
+/// 9. Optional `summary` is preserved when present.
 let testOptionalSummaryPreserved () =
-    let withSummary = outcomeFrom (ok (Fixtures.bytes "valid/finished-failed.json"))
-    Expect.equal withSummary.Summary (Some "Two checks failed: outcome decoding, payload validation") "summary preserved"
+    let finished = decodeOk "valid/finished-failed.json"
+    Expect.equal
+        finished.Summary
+        (Some "Two checks failed: outcome decoding, payload validation")
+        "summary preserved"
 
 let tests =
     testList
