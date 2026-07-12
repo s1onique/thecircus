@@ -1,0 +1,21 @@
+{
+  "specversion": "1.0",
+  "id": "019b0437-2766-7a20-9225-4ab1645ba11a",
+  "source": "urn:leamas:instance:builder-07",
+  "type": "io.leamas.execution.started.v1",
+  "subject": "run/019b0437-1ef2-7abc-a38d-23472513f50b",
+  "time": "2026-07-12T20:36:00Z",
+  "datacontenttype": "application/json",
+  "circusinstance": "builder-07",
+  "circusepoch": "019b0400-2f61-720d-94a5-c84e928eae19",
+  "circusseq": 423,
+  "runid": "019b0437-1ef2-7abc-a38d-23472513f50b",
+  "tenant": "team-leamas-core",
+  "pipeline": "nightly",
+  "review_required": true,
+  "trace_id": "019b04cc-7e6f-7f50-9a92-7f0d00000001",
+  "data": {
+    "repository_ref": "k9b",
+    "leamas_version": "0.1.0"
+  }
+}

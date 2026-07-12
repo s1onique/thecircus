@@ -4,6 +4,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Validation.fs" />
+    <Compile Include="EventIdentity.fs" />
+    <Compile Include="ExecutionEvent.fs" />
     <Compile Include="ProductIdentity.fs" />
   </ItemGroup>
 </Project>

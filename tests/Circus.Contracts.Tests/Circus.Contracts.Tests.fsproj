@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Circus.Contracts.Tests</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Support/Fixtures.fs" />
+    <Compile Include="EnvelopeContractTests.fs" />
+    <Compile Include="StartedEventContractTests.fs" />
+    <Compile Include="FinishedEventContractTests.fs" />
+    <Compile Include="UnknownEventContractTests.fs" />
+    <Compile Include="FixtureContractTests.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Expecto" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Circus.Contracts\Circus.Contracts.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\..\fixtures\events\**\*.json" />
+  </ItemGroup>
+</Project>

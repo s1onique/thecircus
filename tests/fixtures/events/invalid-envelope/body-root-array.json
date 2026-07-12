@@ -1,0 +1,12 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "019b0437-2766-7a20-9225-4ab1645ba11d",
+    "type": "io.leamas.execution.started.v1"
+  },
+  {
+    "specversion": "1.0",
+    "id": "019b0437-2766-7a20-9225-4ab1645ba11e",
+    "type": "io.leamas.execution.finished.v1"
+  }
+]

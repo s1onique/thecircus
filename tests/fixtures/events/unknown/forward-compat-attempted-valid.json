@@ -1,0 +1,18 @@
+{
+  "specversion": "1.0",
+  "id": "019b0437-2766-7a20-9225-4ab1645ba129",
+  "source": "urn:leamas:instance:builder-07",
+  "type": "io.leamas.evidence.collected.v1",
+  "subject": "run/019b0437-1ef2-7abc-a38d-23472513f517",
+  "time": "2026-07-12T20:40:00Z",
+  "datacontenttype": "application/json",
+  "circusinstance": "builder-07",
+  "circusepoch": "019b0400-2f61-720d-94a5-c84e928eae19",
+  "circusseq": 509,
+  "runid": "019b0437-1ef2-7abc-a38d-23472513f517",
+  "data": {
+    "evidence_kind": "log_bundle",
+    "uri": "s3://leamas-evidence/builder-07/2026-07-12/k9b.jsonl",
+    "byte_length": 524288
+  }
+}

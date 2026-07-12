@@ -23,7 +23,29 @@ design decisions.
 │                 F# Domain Core                               │
 │              (Circus.Domain)                                │
 └─────────────────────────────────────────────────────────────┘
+                         ▲
+┌────────────────────────┴────────────────────────────────────┐
+│             F# Contracts (Leamas events)                     │
+│           (Circus.Contracts — future ingestion)             │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+### Decoding pipeline (untrusted bytes → typed domain)
+
+The first versioned Leamas → Circus contract sits in front of the
+domain layer. Its job is to convert untrusted bytes into a typed
+`ValidatedEvent` without any persistence, networking, or exceptions.
+
+```
+bytes
+  → Circus.Contracts (pure F# decoder, validates envelope + payload)
+  → Circus.Domain validated event (ExecutionStarted | Finished | Unrecognized)
+```
+
+This boundary owns everything through `validated domain event`.
+PostgreSQL, authentication, idempotency, and HTTP response behaviour
+are deferred to `ACT-CIRCUS-INGESTION-JOURNAL01` and beyond. Until then
+the decoder is pure: it produces `ValidatedEvent`s without side effects.
 
 ## F# Domain Core (Circus.Domain)
 

@@ -62,10 +62,15 @@ format-check: restore
 build-backend: restore
 	$(DOTNET) build $(SLN) -c Release --no-restore
 
+.PHONY: test-contracts
+test-contracts: build-backend
+	$(DOTNET) run --project tests/Circus.Contracts.Tests -c Release --no-build --no-restore
+
 .PHONY: test-backend
 test-backend: build-backend
-	$(DOTNET) run --project tests/Circus.Domain.Tests -c Release --no-build --no-restore
-	$(DOTNET) run --project tests/Circus.Api.Tests    -c Release --no-build --no-restore
+	$(DOTNET) run --project tests/Circus.Domain.Tests   -c Release --no-build --no-restore
+	$(DOTNET) run --project tests/Circus.Contracts.Tests -c Release --no-build --no-restore
+	$(DOTNET) run --project tests/Circus.Api.Tests      -c Release --no-build --no-restore
 
 # =============================================================================
 # Web build and test

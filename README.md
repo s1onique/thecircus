@@ -119,8 +119,9 @@ The application runs at: http://127.0.0.1:5000
 ## Verification Status
 
 * `make factorize` returns `doctrine verify: OK`.
-* `dotnet build Circus.sln -c Release --no-restore` exits with 0 errors. (Two `MSB3277` FSharp.Core version warnings remain because Giraffe 8.2.0 transitively pulls FSharp.Core 6.0.0; documented as a non-blocking follow-up.)
+* `dotnet build Circus.sln -c Release --no-restore` exits with 0 errors. Three `MSB3277` FSharp.Core version warnings remain because Giraffe 8.2.0 transitively pulls FSharp.Core 6.0.0 and the `Circus.Api.Tests` test project pulls FSharp.Core 7.0.200; future resolution requires dependency-graph investigation.
 * `dotnet run --project tests/Circus.Domain.Tests` runs **4/4 Expecto tests**.
+* `dotnet run --project tests/Circus.Contracts.Tests` runs the contract suite.
 * `dotnet run --project tests/Circus.Api.Tests` runs **10/10 Expecto tests**.
 * `cd web && ./node_modules/.bin/elm-test --compiler ./node_modules/.bin/elm` runs **17/17 tests** in ~140 ms.
 * `bash scripts/smoke.sh` exercises the four documented endpoints and the `/styles.css` static asset.
@@ -132,8 +133,9 @@ This ACT establishes the foundational vertical slice:
 
 * **F# Backend**: Giraffe HTTP API with liveness, product, and static-asset endpoints.
 * **Elm Frontend**: Pure Elm 0.19.2 application loading product identity from the API. Loading, success, failure, and retry states are visible.
-* **F# Domain**: Pure domain module exposing a single canonical `ProductIdentity` value.
-* **F# Tests**: Expecto suites for domain invariants and HTTP contracts.
+* **F# Domain**: Pure domain module exposing a single canonical `ProductIdentity` value, a `NonEmptyList` validation primitive, opaque domain identifiers (`EventId`, `EventSource`, `EventType`, `InstanceId`, `EpochId`, `EventSequence`, `RunId`, `RepositoryRef`, `ActId`, `LeamasVersion`), the four-state `ExecutionOutcome`, the `CheckCounts` check-record, `ExecutionStarted`/`ExecutionFinished` payload records, and the `ExecutionEvent` union for `started`/`finished`/`unrecognized` events.
+* **F# Contracts** (`Circus.Contracts`): pure, deterministic decoder that turns CloudEvents-structured JSON envelopes into `ValidatedEvent`s, validates Circus-specific extension attributes, and dispatches onto known or unknown event payload types.
+* **F# Tests**: Expecto suites for domain invariants, the Leamas-events contract (envelope, started, finished, unknown, safety), and HTTP contracts.
 * **Elm Tests**: `elm-explorations/test` suites for the JSON decoder and the application view and update transitions.
 * **Smoke**: Single-shell `set -euo pipefail` transaction with trap-based cleanup, bounded readiness polling, exact JSON assertions, and a non-empty `app.js` assertion.
 

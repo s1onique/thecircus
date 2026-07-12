@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Circus.Contracts</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="CloudEventEnvelope.fs" />
+    <Compile Include="ExecutionStartedDecoder.fs" />
+    <Compile Include="ExecutionFinishedDecoder.fs" />
+    <Compile Include="EventDecoder.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Circus.Domain\Circus.Domain.fsproj" />
+  </ItemGroup>
+</Project>
