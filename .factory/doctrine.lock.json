@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "pack_id": "factory-core-v1",
+  "pack_version": "1.0.0",
+  "pack_digest": "1b8c9936f7c3fbfbc5cae0f7c5485b9df72b8b17f8e63d3463f5feada63c9b89",
+  "profile_id": "fsharp-elm-service-v1",
+  "compiler_version": "0.1.0+dev.df5525c11c72.20260712T153212Z",
+  "compiler_commit": "df5525c11c72",
+  "managed_files": [
+    {
+      "path": ".factory/generated/doctrine-inventory.md",
+      "digest": "403f7c38e6e90da62d3f716279bbb40afec3369f95eff33a7957b894eb81efb1"
+    },
+    {
+      "path": ".factory/generated/factory.mk",
+      "digest": "326dda415d87791643842f84e07adedc70b0c6816654e80e98414eb392c1a17b"
+    },
+    {
+      "path": "docs/factory/README.md",
+      "digest": "3cfa1969f6896f832b61da6199531f679629e18fb33b18a5206329bdd41fe833"
+    }
+  ],
+  "seeded_files": [
+    {
+      "path": ".factory/project.json"
+    },
+    {
+      "path": "Makefile"
+    }
+  ],
+  "observed_contracts": [
+    {
+      "id": "gate-depends-on-factorize",
+      "kind": "makefile-target-dep",
+      "path": "Makefile",
+      "target": "gate",
+      "dependency": "factorize"
+    },
+    {
+      "id": "makefile-includes-factory-fragment",
+      "kind": "makefile-include",
+      "path": "Makefile"
+    }
+  ]
+}
