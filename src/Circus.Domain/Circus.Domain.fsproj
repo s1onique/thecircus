@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Circus.Domain</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="ProductIdentity.fs" />
+  </ItemGroup>
+</Project>

@@ -1,7 +1,38 @@
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
 .idea/
 .vscode/
+
+# Environment
 .env
 .env.*
+!.env.template
+
+# Temporary files
 *.tmp
 *.swp
+*.swo
+*~
+
+# Build outputs
+**/bin/
+**/obj/
+**/packages.lock.json.tmp
+
+# Elm
+web/elm-stuff/
+web/node_modules/
+web/dist/
+
+# Test results
+TestResults/
+*.trx
+
+# .NET
+*.user
+*.suo
+project.lock.json

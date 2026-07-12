@@ -3,7 +3,129 @@
 
 include .factory/generated/factory.mk
 
-# Native gate prerequisites will be introduced by later ACTs
+# =============================================================================
+# Tool paths (overridable)
+# =============================================================================
+DOTNET  ?= dotnet
+NPM     ?= npm
+SLN      := Circus.sln
+WEB_DIR  := web
+WEB_DIST := $(WEB_DIR)/dist
+
+# Sources that should trigger an Elm rebuild.
+WEB_SOURCES := \
+    $(WEB_DIR)/elm.json \
+    $(WEB_DIR)/package.json \
+    $(WEB_DIR)/package-lock.json \
+    $(WEB_DIR)/index.html \
+    $(WEB_DIR)/styles.css \
+    $(wildcard $(WEB_DIR)/src/*.elm)
+
+# =============================================================================
+# Restore
+# =============================================================================
+
+.PHONY: restore
+restore: dotnet-tool-restore dotnet-restore-locked npm-ci
+
+.PHONY: dotnet-tool-restore
+dotnet-tool-restore:
+	$(DOTNET) tool restore
+
+.PHONY: dotnet-restore-locked
+dotnet-restore-locked:
+	$(DOTNET) restore $(SLN) --locked-mode
+
+.PHONY: npm-ci
+npm-ci:
+	cd $(WEB_DIR) && $(NPM) ci
+
+# =============================================================================
+# Format (mutating; must not run inside factorize or gate)
+# =============================================================================
+
+.PHONY: format
+format: dotnet-tool-restore npm-ci
+	$(DOTNET) fantomas src/ tests/
+	cd $(WEB_DIR) && ./node_modules/.bin/elm-format src tests --yes
+
+.PHONY: format-check
+format-check: restore
+	$(DOTNET) fantomas --check src/ tests/
+	cd $(WEB_DIR) && ./node_modules/.bin/elm-format src tests --validate
+
+# =============================================================================
+# Backend build and test
+# =============================================================================
+
+.PHONY: build-backend
+build-backend: restore
+	$(DOTNET) build $(SLN) -c Release --no-restore
+
+.PHONY: test-backend
+test-backend: build-backend
+	$(DOTNET) run --project tests/Circus.Domain.Tests -c Release --no-build --no-restore
+	$(DOTNET) run --project tests/Circus.Api.Tests    -c Release --no-build --no-restore
+
+# =============================================================================
+# Web build and test
+# =============================================================================
+
+.PHONY: build-web
+build-web: $(WEB_DIST)/app.js
+
+$(WEB_DIST)/app.js: $(WEB_SOURCES) | npm-ci
+	mkdir -p $(WEB_DIST)
+	cd $(WEB_DIR) && ./node_modules/.bin/elm make src/Main.elm --optimize --output=dist/app.js
+	cp $(WEB_DIR)/index.html $(WEB_DIR)/styles.css $(WEB_DIST)/
+
+$(WEB_DIST):
+	mkdir -p $(WEB_DIST)
+
+.PHONY: test-web
+test-web: npm-ci
+	cd $(WEB_DIR) && ./node_modules/.bin/elm-test --compiler ./node_modules/.bin/elm
+
+# =============================================================================
+# Composite targets
+# =============================================================================
+
+.PHONY: build
+build: build-backend build-web
+
+.PHONY: test
+test: test-backend test-web
+
+# =============================================================================
+# Run
+# =============================================================================
+
+.PHONY: run
+run: build-backend
+	$(DOTNET) run --project src/Circus.Api -c Release --no-build --no-restore
+
+# =============================================================================
+# Smoke (single shell transaction)
+# =============================================================================
+
+.PHONY: smoke
+smoke: build-backend build-web
+	bash scripts/smoke.sh
+
+# =============================================================================
+# Clean
+# =============================================================================
+
+.PHONY: clean
+clean:
+	$(DOTNET) build $(SLN) --no-restore -t:Clean 2>/dev/null || true
+	cd $(WEB_DIR) && rm -rf dist elm-stuff
+	find . -type d \( -name bin -o -name obj -o -name TestResults \) -exec rm -rf {} + 2>/dev/null || true
+
+# =============================================================================
+# Native gate
+# =============================================================================
 
 .PHONY: gate
-gate: factorize
+gate: factorize format-check test-backend test-web smoke
+	@echo "=== Native gate passed ==="

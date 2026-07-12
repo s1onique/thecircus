@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>Circus.Api</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Http.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Giraffe" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Circus.Domain\Circus.Domain.fsproj" />
+  </ItemGroup>
+</Project>
