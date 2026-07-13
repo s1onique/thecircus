@@ -129,17 +129,17 @@ let testInvalidExtensionRejected () =
         (Assertions.hasInvalidExtensionName (Assertions.contractViolations result))
         "InvalidExtensionName present"
 
-let tests =
-    testList "Envelope Contract" [test "valid minimal envelope decodes" testValidMinimalEnvelope
-        test "property ordering is irrelevant" testPropertyOrderingIsIrrelevant
-        test "malformed JSON returns MalformedJson" testMalformedJson
-        test "oversized body returns BodyTooLarge" testOversizedBodyRejected
-        test "root array is rejected" testRootArrayRejected
-        test "independent envelope violations accumulate" testIndependentEnvelopeViolationsAccumulate
-        test "unsupported specversion is rejected" testUnsupportedSpecVersion
-        test "timestamp without offset is rejected" testTimestampWithoutOffsetRejected
-        test "negative sequence is rejected" testNegativeSequenceRejected
-        test "subject/runid mismatch is rejected" testSubjectRunIdMismatch
-        test "unknown extension is preserved" testUnknownExtensionPreserved
-        test "invalid extension name is rejected" testInvalidExtensionRejected
+let bundle =
+    testList "Envelope Contract" [Tests.testCase "valid minimal envelope decodes" testValidMinimalEnvelope
+        Tests.testCase "property ordering is irrelevant" testPropertyOrderingIsIrrelevant
+        Tests.testCase "malformed JSON returns MalformedJson" testMalformedJson
+        Tests.testCase "oversized body returns BodyTooLarge" testOversizedBodyRejected
+        Tests.testCase "root array is rejected" testRootArrayRejected
+        Tests.testCase "independent envelope violations accumulate" testIndependentEnvelopeViolationsAccumulate
+        Tests.testCase "unsupported specversion is rejected" testUnsupportedSpecVersion
+        Tests.testCase "timestamp without offset is rejected" testTimestampWithoutOffsetRejected
+        Tests.testCase "negative sequence is rejected" testNegativeSequenceRejected
+        Tests.testCase "subject/runid mismatch is rejected" testSubjectRunIdMismatch
+        Tests.testCase "unknown extension is preserved" testUnknownExtensionPreserved
+        Tests.testCase "invalid extension name is rejected" testInvalidExtensionRejected
     ]

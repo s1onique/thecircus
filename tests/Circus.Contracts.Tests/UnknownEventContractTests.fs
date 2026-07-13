@@ -12,7 +12,6 @@ let private maxBytes = EventDecoder.DefaultMaximumBytes
 
 /// Local wrapper that anchors `test` to a single function value,
 /// avoiding the FS0003 cascade on F#'s `test` overload set.
-let private test (name: string) (body: unit -> unit) = Tests.test name body
 
 let private decodeOk relativePath : ValidatedEvent =
     match EventDecoder.decode maxBytes (Fixtures.bytes relativePath) with
@@ -76,10 +75,10 @@ let testRepeatedDecodingIsStable () =
     let secondText = secondData |> Option.map RawJson.value
     Expect.equal firstText secondText "stable data"
 
-let tests =
-    testList "Unknown Event Behaviour" [test "unknown type is accepted" testUnknownTypeAccepted
-        test "unknown data is preserved" testUnknownDataPreserved
-        test "common metadata is preserved" testCommonMetadataPreserved
-        test "extensions are preserved on unknown events" testExtensionsPreservedForUnknownEvents
-        test "repeated decoding is stable" testRepeatedDecodingIsStable
+let bundle =
+    testList "Unknown Event Behaviour" [Tests.testCase "unknown type is accepted" testUnknownTypeAccepted
+        Tests.testCase "unknown data is preserved" testUnknownDataPreserved
+        Tests.testCase "common metadata is preserved" testCommonMetadataPreserved
+        Tests.testCase "extensions are preserved on unknown events" testExtensionsPreservedForUnknownEvents
+        Tests.testCase "repeated decoding is stable" testRepeatedDecodingIsStable
     ]

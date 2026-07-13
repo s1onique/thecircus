@@ -13,7 +13,6 @@ let private maxBytes = EventDecoder.DefaultMaximumBytes
 
 /// Local wrapper that anchors `test` to a single function value,
 /// avoiding the FS0003 cascade on F#'s `test` overload set.
-let private test (name: string) (body: unit -> unit) = Tests.test name body
 
 /// 1. The invalid-fixture corpus does not throw for any committed file.
 let testInvalidFixturesDoNotThrow () =
@@ -92,9 +91,9 @@ let testDecoderDoesNotRetainDisposedDocuments () =
          | _ -> false)
         "subjects isolated across decodes"
 
-let tests =
-    testList "Safety" [test "invalid fixture corpus does not throw" testInvalidFixturesDoNotThrow
-        test "diagnostics do not echo full body" testDiagnosticsDoNotEchoBody
-        test "malformed diagnostics are bounded" testMalformedDiagnosticsBounded
-        test "decoder does not retain disposed documents" testDecoderDoesNotRetainDisposedDocuments
+let bundle =
+    testList "Safety" [Tests.testCase "invalid fixture corpus does not throw" testInvalidFixturesDoNotThrow
+        Tests.testCase "diagnostics do not echo full body" testDiagnosticsDoNotEchoBody
+        Tests.testCase "malformed diagnostics are bounded" testMalformedDiagnosticsBounded
+        Tests.testCase "decoder does not retain disposed documents" testDecoderDoesNotRetainDisposedDocuments
     ]

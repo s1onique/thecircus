@@ -81,13 +81,12 @@ let testMalformedKnownPayloadIsNotUnknown () =
     | Ok _ -> failtest "must reject the envelope, not convert to UnrecognizedEvent"
     | Error _ -> ()
 
-let tests =
-    testList "Started Event Contract" [
-        test "minimal started event decodes" testMinimalStarted
-        test "complete started event decodes" testCompleteStarted
-        test "repository_ref is required" testRepositoryRefRequired
-        test "leamas_version is required" testLeamasVersionRequired
-        test "optional values remain optional" testOptionalFieldsRemainOptional
-        test "oversized strings are rejected" testOversizedStringsRejected
-        test "malformed known payload is not unknown" testMalformedKnownPayloadIsNotUnknown
+let bundle =
+    testList "Started Event Contract" [Tests.testCase "minimal started event decodes" testMinimalStarted
+        Tests.testCase "complete started event decodes" testCompleteStarted
+        Tests.testCase "repository_ref is required" testRepositoryRefRequired
+        Tests.testCase "leamas_version is required" testLeamasVersionRequired
+        Tests.testCase "optional values remain optional" testOptionalFieldsRemainOptional
+        Tests.testCase "oversized strings are rejected" testOversizedStringsRejected
+        Tests.testCase "malformed known payload is not unknown" testMalformedKnownPayloadIsNotUnknown
     ]

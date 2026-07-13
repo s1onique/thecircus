@@ -6,11 +6,11 @@ open Expecto
 let main (args: string[]) =
     let suites =
         [
-            EnvelopeContractTests.tests
-            StartedEventContractTests.tests
-            FinishedEventContractTests.tests
-            UnknownEventContractTests.tests
-            FixtureContractTests.tests
+            EnvelopeContractTests.bundle
+            StartedEventContractTests.bundle
+            FinishedEventContractTests.bundle
+            UnknownEventContractTests.bundle
+            FixtureContractTests.bundle
         ]
 
     Tests.runTestsWithCLIArgs [||] args (testList "Circus.Contracts" suites)

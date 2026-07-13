@@ -118,15 +118,14 @@ let testOptionalSummaryPreserved () =
     let finished = decodeOk "valid/finished-failed.json"
     Expect.equal finished.Summary (Some "Two checks failed: outcome decoding, payload validation") "summary preserved"
 
-let tests =
-    testList "Finished Event Contract" [
-        test "every execution outcome decodes" testEveryOutcomeDecodes
-        test "cancelled and timed_out outcomes decode" testCancelledAndTimedOutOutcomes
-        test "unknown outcome is rejected" testUnknownOutcomeRejected
-        test "zero duration is valid" testZeroDurationValid
-        test "maximum duration is valid" testMaximumDurationValid
-        test "excessive duration is rejected" testExcessiveDurationRejected
-        test "negative counts are rejected" testNegativeCountsRejected
-        test "excessive counts are rejected" testExcessiveCountsRejected
-        test "optional summary is preserved" testOptionalSummaryPreserved
+let bundle =
+    testList "Finished Event Contract" [Tests.testCase "every execution outcome decodes" testEveryOutcomeDecodes
+        Tests.testCase "cancelled and timed_out outcomes decode" testCancelledAndTimedOutOutcomes
+        Tests.testCase "unknown outcome is rejected" testUnknownOutcomeRejected
+        Tests.testCase "zero duration is valid" testZeroDurationValid
+        Tests.testCase "maximum duration is valid" testMaximumDurationValid
+        Tests.testCase "excessive duration is rejected" testExcessiveDurationRejected
+        Tests.testCase "negative counts are rejected" testNegativeCountsRejected
+        Tests.testCase "excessive counts are rejected" testExcessiveCountsRejected
+        Tests.testCase "optional summary is preserved" testOptionalSummaryPreserved
     ]
