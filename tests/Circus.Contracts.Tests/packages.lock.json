@@ -12,11 +12,6 @@
           "Mono.Cecil": "[0.11.6, 1.0.0)"
         }
       },
-      "FSharp.Core": {
-        "type": "Transitive",
-        "resolved": "7.0.200",
-        "contentHash": "NmgUnpNH6Zu9B0SPIhojyo38gnPdkdYFYQfbd6zosEH32kbGY/g/Klk7PfOWe1NAe/O1YOMmK9KhwQ2OWsWEbg=="
-      },
       "Mono.Cecil": {
         "type": "Transitive",
         "resolved": "0.11.6",
