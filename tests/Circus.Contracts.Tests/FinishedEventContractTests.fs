@@ -34,7 +34,7 @@ let testCancelledAndTimedOutOutcomes () =
         sprintf
             """{"specversion":"1.0","id":"%s","source":"urn:leamas:instance:builder-07","type":"io.leamas.execution.finished.v1","subject":"run/%s","time":"2026-07-12T20:00:00Z","datacontenttype":"application/json","circusinstance":"builder-07","circusepoch":"019b0400-2f61-720d-94a5-c84e928eae19","circusseq":555,"runid":"%s","data":{"outcome":"%s","duration_ms":%d,"checks":{"passed":1,"failed":0,"skipped":0}}}"""
             runid
-            (sprintf "run/%s" runid)
+            runid
             runid
             outcome
             duration
@@ -95,7 +95,7 @@ let testExcessiveDurationRejected () =
 
 /// 7. Negative counts are rejected.
 let testNegativeCountsRejected () =
-    let bogus = """{"specversion":"1.0","id":"019b0437-2766-7a20-9225-4ab1645ba142","source":"urn:leamas:instance:builder-07","type":"io.leamas.execution.finished.v1","subject":"run/019b0437-1ef2-7abc-a38d-23472513f522","time":"2026-07-12T20:00:00Z","datacontenttype":"application/json","circusinstance":"builder-07","circusepoch":"019b0400-2f61-720d-94a5-c84e928eae19","circusseq":557,"runid":"019b0437-1ef2-7abc-a38d-23472513f521","data":{"outcome":"succeeded","duration_ms":1000,"checks":{"passed":-1,"failed":0,"skipped":0}}}"""
+    let bogus = """{"specversion":"1.0","id":"019b0437-2766-7a20-9225-4ab1645ba142","source":"urn:leamas:instance:builder-07","type":"io.leamas.execution.finished.v1","subject":"run/019b0437-1ef2-7abc-a38d-23472513f522","time":"2026-07-12T20:00:00Z","datacontenttype":"application/json","circusinstance":"builder-07","circusepoch":"019b0400-2f61-720d-94a5-c84e928eae19","circusseq":557,"runid":"019b0437-1ef2-7abc-a38d-23472513f522","data":{"outcome":"succeeded","duration_ms":1000,"checks":{"passed":-1,"failed":0,"skipped":0}}}"""
     let bytes = System.Text.Encoding.UTF8.GetBytes bogus
     let result = EventDecoder.decode maxBytes bytes
     let payloadErrs = Assertions.payloadViolations (Assertions.contractViolations result)
@@ -119,13 +119,14 @@ let testOptionalSummaryPreserved () =
     Expect.equal finished.Summary (Some "Two checks failed: outcome decoding, payload validation") "summary preserved"
 
 let bundle =
-    testList "Finished Event Contract" [Tests.testCase "every execution outcome decodes" testEveryOutcomeDecodes
-        Tests.testCase "cancelled and timed_out outcomes decode" testCancelledAndTimedOutOutcomes
-        Tests.testCase "unknown outcome is rejected" testUnknownOutcomeRejected
-        Tests.testCase "zero duration is valid" testZeroDurationValid
-        Tests.testCase "maximum duration is valid" testMaximumDurationValid
-        Tests.testCase "excessive duration is rejected" testExcessiveDurationRejected
-        Tests.testCase "negative counts are rejected" testNegativeCountsRejected
-        Tests.testCase "excessive counts are rejected" testExcessiveCountsRejected
-        Tests.testCase "optional summary is preserved" testOptionalSummaryPreserved
+    testList "Finished Event Contract" [
+        testCase "every execution outcome decodes" testEveryOutcomeDecodes
+        testCase "cancelled and timed_out outcomes decode" testCancelledAndTimedOutOutcomes
+        testCase "unknown outcome is rejected" testUnknownOutcomeRejected
+        testCase "zero duration is valid" testZeroDurationValid
+        testCase "maximum duration is valid" testMaximumDurationValid
+        testCase "excessive duration is rejected" testExcessiveDurationRejected
+        testCase "negative counts are rejected" testNegativeCountsRejected
+        testCase "excessive counts are rejected" testExcessiveCountsRejected
+        testCase "optional summary is preserved" testOptionalSummaryPreserved
     ]

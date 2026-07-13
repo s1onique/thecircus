@@ -4,6 +4,7 @@ open Expecto
 
 [<EntryPoint>]
 let main (args: string[]) =
+    AssemblyResolver.install ()
     let suites =
         [
             EnvelopeContractTests.bundle

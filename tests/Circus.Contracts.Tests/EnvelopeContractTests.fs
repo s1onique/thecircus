@@ -130,16 +130,17 @@ let testInvalidExtensionRejected () =
         "InvalidExtensionName present"
 
 let bundle =
-    testList "Envelope Contract" [Tests.testCase "valid minimal envelope decodes" testValidMinimalEnvelope
-        Tests.testCase "property ordering is irrelevant" testPropertyOrderingIsIrrelevant
-        Tests.testCase "malformed JSON returns MalformedJson" testMalformedJson
-        Tests.testCase "oversized body returns BodyTooLarge" testOversizedBodyRejected
-        Tests.testCase "root array is rejected" testRootArrayRejected
-        Tests.testCase "independent envelope violations accumulate" testIndependentEnvelopeViolationsAccumulate
-        Tests.testCase "unsupported specversion is rejected" testUnsupportedSpecVersion
-        Tests.testCase "timestamp without offset is rejected" testTimestampWithoutOffsetRejected
-        Tests.testCase "negative sequence is rejected" testNegativeSequenceRejected
-        Tests.testCase "subject/runid mismatch is rejected" testSubjectRunIdMismatch
-        Tests.testCase "unknown extension is preserved" testUnknownExtensionPreserved
-        Tests.testCase "invalid extension name is rejected" testInvalidExtensionRejected
+    testList "Envelope Contract" [
+        testCase "valid minimal envelope decodes" testValidMinimalEnvelope
+        testCase "property ordering is irrelevant" testPropertyOrderingIsIrrelevant
+        testCase "malformed JSON returns MalformedJson" testMalformedJson
+        testCase "oversized body returns BodyTooLarge" testOversizedBodyRejected
+        testCase "root array is rejected" testRootArrayRejected
+        testCase "independent envelope violations accumulate" testIndependentEnvelopeViolationsAccumulate
+        testCase "unsupported specversion is rejected" testUnsupportedSpecVersion
+        testCase "timestamp without offset is rejected" testTimestampWithoutOffsetRejected
+        testCase "negative sequence is rejected" testNegativeSequenceRejected
+        testCase "subject/runid mismatch is rejected" testSubjectRunIdMismatch
+        testCase "unknown extension is preserved" testUnknownExtensionPreserved
+        testCase "invalid extension name is rejected" testInvalidExtensionRejected
     ]

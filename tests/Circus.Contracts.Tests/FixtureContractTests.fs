@@ -92,8 +92,9 @@ let testDecoderDoesNotRetainDisposedDocuments () =
         "subjects isolated across decodes"
 
 let bundle =
-    testList "Safety" [Tests.testCase "invalid fixture corpus does not throw" testInvalidFixturesDoNotThrow
-        Tests.testCase "diagnostics do not echo full body" testDiagnosticsDoNotEchoBody
-        Tests.testCase "malformed diagnostics are bounded" testMalformedDiagnosticsBounded
-        Tests.testCase "decoder does not retain disposed documents" testDecoderDoesNotRetainDisposedDocuments
+    testList "Safety" [
+        testCase "invalid fixture corpus does not throw" testInvalidFixturesDoNotThrow
+        testCase "diagnostics do not echo full body" testDiagnosticsDoNotEchoBody
+        testCase "malformed diagnostics are bounded" testMalformedDiagnosticsBounded
+        testCase "decoder does not retain disposed documents" testDecoderDoesNotRetainDisposedDocuments
     ]

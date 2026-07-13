@@ -76,9 +76,10 @@ let testRepeatedDecodingIsStable () =
     Expect.equal firstText secondText "stable data"
 
 let bundle =
-    testList "Unknown Event Behaviour" [Tests.testCase "unknown type is accepted" testUnknownTypeAccepted
-        Tests.testCase "unknown data is preserved" testUnknownDataPreserved
-        Tests.testCase "common metadata is preserved" testCommonMetadataPreserved
-        Tests.testCase "extensions are preserved on unknown events" testExtensionsPreservedForUnknownEvents
-        Tests.testCase "repeated decoding is stable" testRepeatedDecodingIsStable
+    testList "Unknown Event Behaviour" [
+        testCase "unknown type is accepted" testUnknownTypeAccepted
+        testCase "unknown data is preserved" testUnknownDataPreserved
+        testCase "common metadata is preserved" testCommonMetadataPreserved
+        testCase "extensions are preserved on unknown events" testExtensionsPreservedForUnknownEvents
+        testCase "repeated decoding is stable" testRepeatedDecodingIsStable
     ]

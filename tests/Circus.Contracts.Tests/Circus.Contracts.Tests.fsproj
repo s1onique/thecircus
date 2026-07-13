@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <Compile Include="Support/Fixtures.fs" />
+    <Compile Include="AssemblyResolver.fs" />
     <Compile Include="EnvelopeContractTests.fs" />
     <Compile Include="StartedEventContractTests.fs" />
     <Compile Include="FinishedEventContractTests.fs" />
@@ -17,7 +18,8 @@
 
   <ItemGroup>
     <PackageReference Include="Expecto" />
-  </ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+    </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Circus.Contracts\Circus.Contracts.fsproj" />
