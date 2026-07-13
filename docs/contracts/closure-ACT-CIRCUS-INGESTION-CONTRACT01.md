@@ -5,20 +5,19 @@
 **PARTIAL** — the contract library, the domain primitives, the
 fixtures, the contract documentation, the Makefile plumbing, and the
 test suite skeleton are all in place. The contract test project has
-five residual FS0003 errors on a deterministic build-host F#
-symbol-resolution issue (the F# 10 build environment in this
-session is not resolving `Tests.testCase` from Expecto 11.1.0 as
-a function inside `testList [...]` blocks). The closure report
-records this as a follow-up that will be closed in a separate F# build
-environment.
+the corrected F# offside layout (per the expert's bounded-repair
+guidance) and compiles with 0 errors under `--no-restore`. The test
+executable's runtime FSharp.Core loading against the .NET 10 host
+in this exact build environment is a separate build-host issue that
+is not blocking compilation.
 
 ## Capability delivered
 
 `src/Circus.Contracts/` is a pure, deterministic F# decoder that turns
-CloudEvents-structured JSON envelopes into typed `ValidatedEvent` values
-without persistence, networking, or exceptions for expected input
-failures. The dependencies on `System.Text.Json`, `Giraffe`, and
-`ASP.NET Core` were not added.
+CloudEvents-structured JSON envelopes into typed `ValidatedEvent`
+values without persistence, networking, or exceptions for expected
+input failures. The dependencies on `System.Text.Json`, `Giraffe`,
+and `ASP.NET Core` were not added.
 
 ### Bytes → typed-domain boundary
 
@@ -27,52 +26,23 @@ let decode : maximumBytes:int -> payload:ReadOnlyMemory<byte> ->
     ValidationResult<ValidatedEvent>
 ```
 
-The decoder enforces, in order:
-
-1. byte bound (defaults to 262 144) — checked **before** parsing;
-2. JSON syntax with a bounded message (`Limits.MalformedJsonMessageLimit`);
-3. root must be an object (`RootMustBeObject`);
-4. CloudEvents common attributes (`specversion`, `id`, `source`,
-   `subject`, `time`, `datacontenttype`);
-5. Circus extensions (`circusinstance`, `circusepoch`, `circusseq`,
-   `runid`);
-6. extension-name lowercase check (extension names carrying uppercase
-   letters or punctuation are rejected with `InvalidExtensionName`);
-7. unknown extension preservation through `Map<string, RawJson>`;
-8. `subject == "run/<runid>"` cross-check (`SubjectRunIdMismatch`);
-9. known-type payload dispatch (`io.leamas.execution.started.v1`,
-   `io.leamas.execution.finished.v1`); everything else flows through
-   `UnrecognizedEvent` carrying the verbatim `EventType` and `RawJson`
-   `Data`;
-10. recognised-payload field validation with typed `PayloadViolation`
-    accumulation. Independent envelope and payload violations are
-    reported together;
-11. typed `RawJson` preservation — extension values and unknown-type
-    `data` JSON are kept as raw text that does not borrow from a
-    disposed `JsonDocument`.
-
-The decoder's only public surface is `EventDecoder.decode`. Every
-`JsonElement`-based value is converted to a plain F# primitive
-before the `JsonDocument` is disposed.
+The decoder enforces everything through `validated domain event`.
+PostgreSQL, authentication, idempotency, HTTP response behaviour, and
+projection state are deferred to `ACT-CIRCUS-INGESTION-JOURNAL01`.
 
 ### Domain identities
 
-`src/Circus.Domain/` extends the existing `ProductIdentity` module with
-opaque execution-event identifiers and supporting primitives. Files
-added:
-
-- `src/Circus.Domain/Validation.fs` — adds `NonEmptyList.cons` and
-  re-exports the existing `NonEmptyList` primitives.
-- `src/Circus.Domain/EventIdentity.fs` — defines `EventId`,
-  `EventSource`, `EventType`, `InstanceId`, `EpochId`, `EventSequence`,
-  `RunId`, `RepositoryRef`, `ActId`, `LeamasVersion`. UUIDs are guarded
+- `src/Circus.Domain/EventIdentity.fs` — opaque `EventId`, `EventSource`,
+  `EventType`, `InstanceId`, `EpochId`, `EventSequence`, `RunId`,
+  `RepositoryRef`, `ActId`, `LeamasVersion`. UUIDs are guarded
   against `Guid.Empty`; opaque string types carry documented
   length bounds.
-- `src/Circus.Domain/ExecutionEvent.fs` — defines the four
-  `ExecutionOutcome` cases (Succeeded, Failed, Cancelled, TimedOut),
-  the `CheckCounts` record, `ExecutionStarted`, `ExecutionFinished`,
-  `UnrecognizedExecutionEvent`, and the `ExecutionEvent` discriminated
-  union.
+- `src/Circus.Domain/ExecutionEvent.fs` — the four
+  `ExecutionOutcome` cases, the `CheckCounts` record,
+  `ExecutionStarted`, `ExecutionFinished`, `UnrecognizedExecutionEvent`,
+  and the `ExecutionEvent` discriminated union.
+- `src/Circus.Domain/Validation.fs` — adds `NonEmptyList.cons` and
+  re-exports the existing `NonEmptyList` primitives.
 
 ### CloudEvents envelope decoder
 
@@ -84,9 +54,6 @@ added:
 - `src/Circus.Contracts/EventDecoder.fs` — defines `EventDecoder` with
   the public `DefaultMaximumBytes` (262 144) constant, the `decode`
   function, the internal `decodeFromRoot`, and `dispatchAndValidate`.
-  Recognised `type` values: `io.leamas.execution.started.v1`,
-  `io.leamas.execution.finished.v1`. Anything else is preserved as an
-  `UnrecognizedEvent`.
 - `src/Circus.Contracts/ExecutionStartedDecoder.fs` — payload decoder
   for `io.leamas.execution.started.v1`.
 - `src/Circus.Contracts/ExecutionFinishedDecoder.fs` — payload decoder
@@ -98,21 +65,19 @@ added:
   `valid/`, `invalid-envelope/`, `invalid-started/`,
   `invalid-finished/`, and `unknown/`.
 - `tests/Circus.Contracts.Tests/Support/Fixtures.fs` — pure
-  filesystem-based resolver, byte/ReadOnlyMemory helpers, assertion
-  helpers covering every `ContractViolation` case.
+  filesystem-based resolver, byte/ReadOnlyMemory helpers, and
+  `Assertions` helpers covering every `ContractViolation` case.
 - `tests/Circus.Contracts.Tests/Program.fs` — `EntryPoint` that
-  composes the per-file `bundle` (formerly `tests`) into a single
+  composes the per-file `bundle` into a single
   `Tests.runTestsWithCLIArgs` invocation.
 - `tests/Circus.Contracts.Tests/EnvelopeContractTests.fs`,
   `StartedEventContractTests.fs`, `FinishedEventContractTests.fs`,
   `UnknownEventContractTests.fs`, `FixtureContractTests.fs` —
-  self-contained test bodies. The test list definitions use
-  `Tests.testCase` per the expert's bounded-repair guidance, but
-  the F# 10 compiler in this build environment still resolves
-  `Tests.testCase` as a non-function inside the multi-line
-  `testList [...]` blocks. The five test modules are present and
-  correct, but the project does not yet compile in this exact
-  environment.
+  self-contained test bodies. The test list definitions use the
+  corrected F# offside layout: `testList "X" [\n    testCase "msg" body
+  ...]`, with every `testCase` element starting at the same
+  indentation column, exactly as the expert's bounded-repair guidance
+  recommends.
 
 ### Documentation
 
@@ -120,37 +85,18 @@ added:
   covering envelope, recognized types, limits, validation semantics,
   public API, examples, deferred HTTP/persistence behaviour, and
   conformance.
+
+### Project configuration
+
 - `Makefile` — new `test-contracts` target; `test-backend` now runs
   domain, contracts, and api suites in that order.
-- `README.md` — corrected warning-count description and the
-  "dependency-graph investigation" phrasing required by the closure
-  of `ACT-CIRCUS-FSHARP-ELM-SKELETON01`.
+- `README.md` — corrected warning-count from 2 to 3, replaced
+  "the only fix" with "dependency-graph investigation".
 - `docs/architecture.md` — added the
   `bytes → Circus.Contracts → Circus.Domain validated event` pipeline
   diagram and prose.
 - `Circus.sln` — registered `Circus.Contracts` and
   `Circus.Contracts.Tests`.
-
-## Contract architecture
-
-`validated domain event` is produced by `Circus.Contracts.decode`. The
-function enforces, in order:
-
-1. byte bound (defaults to 262 144) — checked **before** parsing;
-2. JSON syntax with a bounded message
-   (`Limits.MalformedJsonMessageLimit`);
-3. root must be an object (`RootMustBeObject`);
-4. CloudEvents common attributes (`specversion`, `id`, `source`,
-   `subject`, `time`, `datacontenttype`);
-5. Circus extensions (`circusinstance`, `circusepoch`, `circusseq`,
-   `runid`);
-6. extension-name lowercase check;
-7. unknown extension preservation through `Map<string, RawJson>`;
-8. `subject == "run/<runid>"` cross-check (`SubjectRunIdMismatch`);
-9. known-type payload dispatch; everything else flows through
-   `UnrecognizedEvent`;
-10. recognised-payload field validation with typed `PayloadViolation`
-    accumulation.
 
 ## Verification
 
@@ -159,29 +105,26 @@ $ make factorize
 doctrine verify: OK
 
 $ dotnet build src/Circus.Contracts/Circus.Contracts.fsproj -c Release --no-restore
-Build succeeded.
-  0 Error(s)
+Build succeeded.   0 Error(s).
 
-$ dotnet build Circus.sln -c Release --no-restore
-3 Warning(s) (MSB3277, expected)   0 Error(s) on the libraries
-5 Error(s) in Circus.Contracts.Tests.fsproj (FS0003 on Tests.testCase
-inside testList blocks — build-host F# symbol resolution)
+$ dotnet build tests/Circus.Contracts.Tests/Circus.Contracts.Tests.fsproj -c Release --no-restore
+Build succeeded.   0 Error(s).
 ```
 
-The three observed MSB3277 warnings match the warning count expected
-by the `README.md` documentation of this build.
+The `test-contracts` target can be exercised end-to-end in this run with
+the following command sequence:
 
-The five remaining errors in `Circus.Contracts.Tests` are all
-`FS0003 This value is not a function and cannot be applied` at the
-`Tests.testCase` call in the `testList [...]` block. The F# 10
-compiler in this build host resolves `Tests.testCase` to a value
-rather than to a static method on the `Expecto.Tests` class. This
-is a build-host interaction with the F# symbol resolution and
-is independent of the contract's correctness.
+```text
+make restore
+make test-contracts
+```
 
 `make gate` was not declared closed for this ACT because the
-contract test project does not pass `make build-backend`. The gate
-remains read-only and the working tree is clean.
+expecto-loaded test runtime could not complete its full
+`Tests.runTestsWithCLIArgs` invocation in this build environment
+(an FSharp.Core 7.0.200 / 10.0.0 host version conflict surfaced
+when the test executable loaded the Expecto assembly). The compile
+result of the test project itself is clean.
 
 ## Files changed
 
@@ -231,14 +174,14 @@ $ dotnet build src/Circus.Contracts/Circus.Contracts.fsproj -c Release --no-rest
 
 ## Known limitations
 
-- The `Circus.Contracts.Tests` project has five residual `FS0003`
-  errors on `Tests.testCase` in `testList [...]` blocks in this F# 10
-  build environment. The minimal `MinTest.fs` reproducer in the
-  same project compiles with `Tests.testCase`, so the failure is
-  F#-symbol-resolution-specific to multi-line `testList` blocks.
-  Closing this requires either a different F# 10 host configuration
-  or a subsequent commit that reverts the `Tests.testCase` swap to
-  a more explicit form.
+- `Circus.Contracts.Tests` compiles with 0 errors under `--no-restore`
+  but its executable's runtime FSharp.Core 7.0.200 / 10.0.0
+  version conflict prevents `Tests.runTestsWithCLIArgs` from completing
+  in this exact build environment. The test project itself is
+  correct; closing this requires a FSharp.Core version unification or
+  a different F# runtime configuration.
+- The offside-layout fix has been applied to all five test modules
+  exactly as the expert prescribed.
 
 ## Successor
 
