@@ -130,16 +130,16 @@ let testInvalidExtensionRejected () =
         "InvalidExtensionName present"
 
 let tests =
-    testList "Envelope Contract" [mkTest "valid minimal envelope decodes" testValidMinimalEnvelope
-        mkTest "property ordering is irrelevant" testPropertyOrderingIsIrrelevant
-        mkTest "malformed JSON returns MalformedJson" testMalformedJson
-        mkTest "oversized body returns BodyTooLarge" testOversizedBodyRejected
-        mkTest "root array is rejected" testRootArrayRejected
-        mkTest "independent envelope violations accumulate" testIndependentEnvelopeViolationsAccumulate
-        mkTest "unsupported specversion is rejected" testUnsupportedSpecVersion
-        mkTest "timestamp without offset is rejected" testTimestampWithoutOffsetRejected
-        mkTest "negative sequence is rejected" testNegativeSequenceRejected
-        mkTest "subject/runid mismatch is rejected" testSubjectRunIdMismatch
-        mkTest "unknown extension is preserved" testUnknownExtensionPreserved
-        mkTest "invalid extension name is rejected" testInvalidExtensionRejected
+    testList "Envelope Contract" [test "valid minimal envelope decodes" testValidMinimalEnvelope
+        test "property ordering is irrelevant" testPropertyOrderingIsIrrelevant
+        test "malformed JSON returns MalformedJson" testMalformedJson
+        test "oversized body returns BodyTooLarge" testOversizedBodyRejected
+        test "root array is rejected" testRootArrayRejected
+        test "independent envelope violations accumulate" testIndependentEnvelopeViolationsAccumulate
+        test "unsupported specversion is rejected" testUnsupportedSpecVersion
+        test "timestamp without offset is rejected" testTimestampWithoutOffsetRejected
+        test "negative sequence is rejected" testNegativeSequenceRejected
+        test "subject/runid mismatch is rejected" testSubjectRunIdMismatch
+        test "unknown extension is preserved" testUnknownExtensionPreserved
+        test "invalid extension name is rejected" testInvalidExtensionRejected
     ]

@@ -67,22 +67,20 @@ let testUnknownOutcomeRejected () =
     let violations = Assertions.contractViolations result
     Expect.isTrue (Assertions.hasInvalidKnownPayload violations) "InvalidKnownPayload present"
     let payloadErrs = Assertions.payloadViolations violations
-    Expect.isTrue
-        (payloadErrs
+    Expect.equal (payloadErrs
          |> List.exists (function
              | PayloadInvalidFieldValue (n, _) when n = "outcome" -> true
-             | _ -> false))
-        "PayloadInvalidFieldValue on outcome"
+             | _ -> false)) true "PayloadInvalidFieldValue on outcome"
 
 /// 4. Zero duration is valid.
 let testZeroDurationValid () =
     let finished = decodeOk "valid/finished-succeeded.json"
-    Expect.isTrue (finished.DurationMilliseconds >= 0L) "duration_ms non-negative"
+    Expect.equal (finished.DurationMilliseconds >= 0L) true "duration_ms non-negative"
 
 /// 5. Maximum duration (one week in ms) is valid.
 let testMaximumDurationValid () =
     let finished = decodeOk "valid/finished-failed.json"
-    Expect.isTrue (finished.DurationMilliseconds <= Limits.DurationMaxMilliseconds) "duration_ms ≤ week"
+    Expect.equal (finished.DurationMilliseconds <= Limits.DurationMaxMilliseconds) true "duration_ms ≤ week"
 
 /// 6. Excessive duration is rejected.
 let testExcessiveDurationRejected () =
@@ -90,12 +88,10 @@ let testExcessiveDurationRejected () =
     let bytes = System.Text.Encoding.UTF8.GetBytes bogus
     let result = EventDecoder.decode maxBytes bytes
     let payloadErrs = Assertions.payloadViolations (Assertions.contractViolations result)
-    Expect.isTrue
-        (payloadErrs
+    Expect.equal (payloadErrs
          |> List.exists (function
              | PayloadInvalidFieldValue (n, _) when n = "duration_ms" -> true
-             | _ -> false))
-        "excessive duration rejected"
+             | _ -> false)) true "excessive duration rejected"
 
 /// 7. Negative counts are rejected.
 let testNegativeCountsRejected () =
@@ -103,23 +99,19 @@ let testNegativeCountsRejected () =
     let bytes = System.Text.Encoding.UTF8.GetBytes bogus
     let result = EventDecoder.decode maxBytes bytes
     let payloadErrs = Assertions.payloadViolations (Assertions.contractViolations result)
-    Expect.isTrue
-        (payloadErrs
+    Expect.equal (payloadErrs
          |> List.exists (function
              | PayloadInvalidFieldValue (n, _) when n = "passed" -> true
-             | _ -> false))
-        "negative count rejected"
+             | _ -> false)) true "negative count rejected"
 
 /// 8. Excessive counts (>1_000_000) are rejected.
 let testExcessiveCountsRejected () =
     let result = EventDecoder.decode maxBytes (Fixtures.bytes "invalid-finished/finished-invalid-check-counts.json")
     let payloadErrs = Assertions.payloadViolations (Assertions.contractViolations result)
-    Expect.isTrue
-        (payloadErrs
+    Expect.equal (payloadErrs
          |> List.exists (function
              | PayloadInvalidFieldValue (n, _) when n = "passed" -> true
-             | _ -> false))
-        "excessive count rejected"
+             | _ -> false)) true "excessive count rejected"
 
 /// 9. Optional `summary` is preserved when present.
 let testOptionalSummaryPreserved () =
