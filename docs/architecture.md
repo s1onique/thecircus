@@ -51,14 +51,46 @@ design decisions.
 
 ```
 HTTP bytes
-  → authorization seam
-  → Circus.Contracts (validates envelope + payload)
+  → authorization seam (production: deny-all)
+  → Circus.Contracts (bounded byte size, duplicate-key detection, valid JSON,
+     contract validation)
   → IngestEvent application service
-  → serializable PostgreSQL transaction
-       ├── append-only journal
-       └── run projection
-  → typed HTTP outcome
+  → serializable PostgreSQL transaction (one fresh connection per attempt)
+       ├── insert into circus.circus_event_journal (raw + digest, ON CONFLICT DO NOTHING)
+       └── upsert circus.circus_run_projection through RunProjection.applyEvent
+  → typed HTTP outcome (201 / 200 / 409 / 422 / 503 / 500)
 ```
+
+The HTTP boundary receives the authorization port and the ingestion port
+through dependency injection.  Production composes the route, the real
+authorization adapter, the real `IngestEventService`, the PostgreSQL
+persistence adapter, and the single host-owned `NpgsqlDataSource`.
+
+### Persistence invariants
+
+* All PostgreSQL objects (tables, sequences, indexes, triggers, functions)
+  live in the `circus` schema and are qualified as `circus.*` in every
+  statement, migration, test, grant, and revoke.
+* The migration/owner role `circus_owner` owns the journal, the
+  projection, the migration tracker, and the trigger function.  The
+  runtime role `circus_app` owns nothing.
+* The runtime role is `NOSUPERUSER`, has no `BYPASSRLS`, does not
+  inherit, and has `SELECT, INSERT` on the journal only.  `UPDATE`,
+  `DELETE`, and `TRUNCATE` all fail at execution time through the real
+  service credentials.
+* The serializable transaction commits only when both the journal insert
+  and the projection upsert succeed; atomicity is verified by an
+  end-to-end test that forces a projection trigger to fail and proves the
+  journal row is rolled back.
+
+### Bounded retry
+
+`RetryPolicy.execute` runs the complete transaction once per attempt,
+obtains a fresh connection for each attempt, and never reuses a failed
+`NpgsqlTransaction`.  The policy retries on SQLSTATE `40001` and `40P01`
+only.  All other database errors are converted to a typed
+`PersistenceFailure` that the API layer maps to a generic 5xx response
+without leaking internals.
 
 ## F# Domain Core (Circus.Domain)
 

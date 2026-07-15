@@ -2,38 +2,78 @@ module Circus.Persistence.Postgres.Tests.PostgresFixture
 
 open System
 open System.Threading.Tasks
+open DotNet.Testcontainers.Builders
 open DotNet.Testcontainers.Containers
+open Testcontainers.PostgreSql
 open Npgsql
+open Circus.Application
 open Circus.Persistence.Postgres
 
-/// Fixture that manages a Testcontainers PostgreSQL instance.
-type PostgresFixture(connectionString: string) =
-    let container =
-        let c = PostgreSqlBuilder()
-            .WithImage("postgres:17.4")
+let waitUnit (value: Task) = value.GetAwaiter().GetResult()
+let wait<'value> (value: Task<'value>) = value.GetAwaiter().GetResult()
+
+type PostgresFixture() =
+    let container: PostgreSqlContainer =
+        (new PostgreSqlBuilder("postgres:17.4"))
             .WithDatabase("circus_test")
             .WithUsername("postgres")
             .WithPassword("postgres")
             .Build()
-        c.StartAsync() |> WaitTask |> ignore
-        c
 
-    let dataSource =
-        let builder = NpgsqlDataSourceBuilder container.ConnectionString
+    do container.StartAsync() |> waitUnit
+
+    let adminDataSource =
+        let builder = NpgsqlDataSourceBuilder(container.GetConnectionString())
         builder.Build()
 
-    member this.ConnectionString: string = container.ConnectionString
-    member this.DataSource: NpgsqlDataSource = dataSource
+    do Migration.migrate adminDataSource |> waitUnit
 
-    member this.RunMigration(): Task = 
-        Migration.migrate dataSource
+    // This is a database-role test credential, not a producer credential.  It
+    // exists only inside the ephemeral integration database.
+    do
+        use conn = adminDataSource.CreateConnection()
+        conn.OpenAsync() |> waitUnit
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- "ALTER ROLE circus_app WITH PASSWORD 'circus_test_runtime_password'"
+        wait (cmd.ExecuteNonQueryAsync()) |> ignore
 
-    member this.Dispose() =
-        container.StopAsync() |> WaitTask |> ignore
-        dataSource.Dispose()
+    let runtimeConnectionString =
+        let builder = NpgsqlConnectionStringBuilder(container.GetConnectionString())
+        builder.Username <- "circus_app"
+        builder.Password <- "circus_test_runtime_password"
+        builder.ConnectionString
 
-/// Create a fresh fixture with migration applied.
-let createFixture (): PostgresFixture = 
-    let fixture = PostgresFixture("")
-    fixture.RunMigration() |> WaitTask |> ignore
-    fixture
+    let runtimeDataSource =
+        let builder = NpgsqlDataSourceBuilder(runtimeConnectionString)
+        builder.Build()
+
+    let ingestion = IngestEventService.create runtimeDataSource
+    let journal = JournalRepository.create runtimeDataSource
+    let projections = ProjectionRepository.create runtimeDataSource
+
+    member _.ConnectionString = runtimeConnectionString
+    member _.AdminDataSource = adminDataSource
+    member _.DataSource = runtimeDataSource
+    member _.Ingestion = ingestion
+    member _.JournalRepo = journal
+    member _.ProjectionRepo = projections
+
+    member _.Reset() =
+        use conn = adminDataSource.CreateConnection()
+        conn.OpenAsync() |> waitUnit
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- "TRUNCATE circus.circus_run_projection, circus.circus_event_journal RESTART IDENTITY"
+        wait (cmd.ExecuteNonQueryAsync()) |> ignore
+
+    member _.ExecuteAsAdmin(sql: string) =
+        use conn = adminDataSource.CreateConnection()
+        conn.OpenAsync() |> waitUnit
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- sql
+        wait (cmd.ExecuteNonQueryAsync()) |> ignore
+
+    interface IDisposable with
+        member _.Dispose() =
+            runtimeDataSource.Dispose()
+            adminDataSource.Dispose()
+            container.StopAsync() |> waitUnit

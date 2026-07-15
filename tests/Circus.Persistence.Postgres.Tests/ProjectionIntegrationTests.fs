@@ -1,237 +1,128 @@
 module Circus.Persistence.Postgres.Tests.ProjectionIntegrationTests
 
 open System
-open System.Threading.Tasks
 open Expecto
 open Circus.Application
-open Circus.Contracts
 open Circus.Domain
+open Circus.Persistence.Postgres
 open Circus.Persistence.Postgres.Tests.PostgresFixture
+open Circus.Persistence.Postgres.Tests.Support
+
+let private ingest (fixture: PostgresFixture) event pretty =
+    fixture.Ingestion.Ingest(requestWithFormatting event pretty) |> wait
+
+let private unwrap result =
+    match result with
+    | Ok value -> value
+    | Error failure -> failwithf "Unexpected result error: %A" failure
+
+let private getProjection (fixture: PostgresFixture) (runId: RunId) =
+    match fixture.ProjectionRepo.GetByRunId runId |> wait with
+    | Ok value -> value
+    | Error failure -> failwithf "Projection read failed: %A" failure
 
 let tests (fixture: PostgresFixture) =
     testList
-        "Projection"
-        [ testTask "started only projection" {
-              fixture.TruncateTables() |> WaitTask |> ignore
-
+        "Incremental projection equals journal rebuild"
+        [ test "started then finished is equal to rebuild" {
+              fixture.Reset()
               let runId = Guid.NewGuid()
-              let epochId = Guid.NewGuid()
+              let epoch = Guid.NewGuid()
+              let started = startedEvent "rebuild-started" runId epoch 1L
 
-              // Create started event
-              let candidate =
-                  { Identity = { Source = EventSource "source1"; EventId = EventId "id1" }
-                    StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId epochId; Sequence = EventSequence 1L }
-                    RunId = RunId runId
-                    EventType = EventType "io.leamas.execution.started.v1"
-                    Subject = sprintf "run/%O" runId
-                    ObservedAt = DateTimeOffset.UtcNow
-                    RawBody = [||]
-                    EnvelopeJson = "{}" }
+              let finished =
+                  finishedEvent "rebuild-finished" runId epoch 2L ExecutionOutcome.Succeeded
 
-              let! inserted = fixture.JournalRepo.tryInsert candidate
-              Expect.isSome inserted "Event should be inserted"
+              ingest fixture started false |> ignore
+              ingest fixture finished false |> ignore
+              let incremental = getProjection fixture started.RunId |> Option.get
 
-              // Build projection from journal
-              let journalEntries = fixture.JournalRepo.lookupByRunId runId |> WaitTask
+              let rebuilt =
+                  ProjectionRebuild.rebuildFromJournal fixture.DataSource
+                  |> wait
+                  |> unwrap
+                  |> Map.find incremental.RunId
 
-              let events =
-                  journalEntries
-                  |> List.map (fun e ->
-                      let validated: ValidatedEvent =
-                          { EventId = EventId e.EventId
-                            Source = EventSource e.Source
-                            EventType = EventType e.EventType
-                            Subject = sprintf "run/%O" e.RunId
-                            ObservedAt = DateTimeOffset.UtcNow
-                            InstanceId = InstanceId e.InstanceId
-                            EpochId = EpochId e.EpochId
-                            Sequence = EventSequence e.Sequence
-                            RunId = RunId e.RunId
-                            Extensions = Map.empty
-                            Event =
-                                ExecutionStartedEvent
-                                    { RunId = RunId e.RunId
-                                      Repository = RepositoryRef "test"
-                                      ActId = None
-                                      LeamasVersion = LeamasVersion "1.0.0"
-                                      GitRevision = None
-                                      StartedBy = None } }
-
-                      JournalPosition e.JournalPosition, validated)
-
-              let projections = RunProjection.rebuild events
-              let proj = projections |> Map.find (RunId runId)
-
-              Expect.equal proj.State StartedOnly "State should be StartedOnly"
+              Expect.equal incremental rebuilt "Complete projection equals reducer rebuild"
           }
 
-          testTask "unknown event leaves projection unchanged" {
-              fixture.TruncateTables() |> WaitTask |> ignore
-
+          test "finished then started is complete and rebuild-equivalent" {
+              fixture.Reset()
               let runId = Guid.NewGuid()
-              let epochId = Guid.NewGuid()
+              let epoch = Guid.NewGuid()
 
-              // Create started event
-              let startedCandidate =
-                  { Identity = { Source = EventSource "source1"; EventId = EventId "id1" }
-                    StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId epochId; Sequence = EventSequence 1L }
-                    RunId = RunId runId
-                    EventType = EventType "io.leamas.execution.started.v1"
-                    Subject = sprintf "run/%O" runId
-                    ObservedAt = DateTimeOffset.UtcNow
-                    RawBody = [||]
-                    EnvelopeJson = "{}" }
+              let finished =
+                  finishedEvent "rebuild-finished-first" runId epoch 1L ExecutionOutcome.Failed
 
-              let! _ = fixture.JournalRepo.tryInsert startedCandidate
+              let started = startedEvent "rebuild-started-second" runId epoch 2L
+              ingest fixture finished false |> ignore
+              ingest fixture started false |> ignore
+              let incremental = getProjection fixture finished.RunId |> Option.get
+              Expect.equal incremental.State Completed "Finished-first then started completes"
 
-              // Create unknown event
-              let unknownCandidate =
-                  { Identity = { Source = EventSource "source1"; EventId = EventId "id2" }
-                    StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId epochId; Sequence = EventSequence 2L }
-                    RunId = RunId runId
-                    EventType = EventType "io.leamas.execution.unknown.v1"
-                    Subject = sprintf "run/%O" runId
-                    ObservedAt = DateTimeOffset.UtcNow
-                    RawBody = [||]
-                    EnvelopeJson = "{}" }
+              let rebuilt =
+                  ProjectionRebuild.rebuildFromJournal fixture.DataSource
+                  |> wait
+                  |> unwrap
+                  |> Map.find incremental.RunId
 
-              let! _ = fixture.JournalRepo.tryInsert unknownCandidate
-
-              // Build projection - only started event should affect it
-              let journalEntries = fixture.JournalRepo.lookupByRunId runId |> WaitTask
-              Expect.equal (List.length journalEntries) 2 "Both events should be in journal"
-
-              let events =
-                  journalEntries
-                  |> List.map (fun e ->
-                      let validated: ValidatedEvent =
-                          { EventId = EventId e.EventId
-                            Source = EventSource e.Source
-                            EventType = EventType e.EventType
-                            Subject = sprintf "run/%O" e.RunId
-                            ObservedAt = DateTimeOffset.UtcNow
-                            InstanceId = InstanceId e.InstanceId
-                            EpochId = EpochId e.EpochId
-                            Sequence = EventSequence e.Sequence
-                            RunId = RunId e.RunId
-                            Extensions = Map.empty
-                            Event = UnrecognizedEvent { EventType = e.EventType; Data = None } }
-
-                      JournalPosition e.JournalPosition, validated)
-
-              let projections = RunProjection.rebuild events
-              let proj = projections |> Map.find (RunId runId)
-
-              // Unknown event should not have created a conflict
-              Expect.equal proj.State StartedOnly "State should still be StartedOnly"
-              Expect.equal proj.ConflictCount 0 "No conflicts"
+              Expect.equal incremental rebuilt "Order is preserved by both paths"
           }
 
-          testTask "rebuilt and incremental projections are equal" {
-              fixture.TruncateTables() |> WaitTask |> ignore
-
+          test "conflict is monotonic and first authority survives rebuild" {
+              fixture.Reset()
               let runId = Guid.NewGuid()
-              let epochId = Guid.NewGuid()
+              let epoch = Guid.NewGuid()
+              let first = startedEvent "conflict-first" runId epoch 1L
+              let second = startedEvent "conflict-second" runId epoch 2L
+              ingest fixture first false |> ignore
+              ingest fixture second false |> ignore
+              let incremental = getProjection fixture first.RunId |> Option.get
+              Expect.equal incremental.State Conflicted "Conflict state"
+              Expect.equal incremental.StartedEvent (Some(JournalPosition 1L)) "First started authority preserved"
+              Expect.equal incremental.Version 2L "Conflict mutation increments once"
 
-              // Insert started and finished events
-              for seq in [ 1L; 2L ] do
-                  let candidate =
-                      { Identity = { Source = EventSource "source1"; EventId = EventId (sprintf "id%d" seq) }
-                        StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId epochId; Sequence = EventSequence seq }
-                        RunId = RunId runId
-                        EventType = EventType (if seq = 1L then "io.leamas.execution.started.v1" else "io.leamas.execution.finished.v1")
-                        Subject = sprintf "run/%O" runId
-                        ObservedAt = DateTimeOffset.UtcNow
-                        RawBody = [||]
-                        EnvelopeJson = "{}" }
+              let rebuilt =
+                  ProjectionRebuild.rebuildFromJournal fixture.DataSource
+                  |> wait
+                  |> unwrap
+                  |> Map.find incremental.RunId
 
-                  let! _ = fixture.JournalRepo.tryInsert candidate
-                  ()
+              Expect.equal rebuilt.State Conflicted "Rebuild remains conflicted"
+              Expect.equal rebuilt.StartedEvent incremental.StartedEvent "Rebuild preserves first authority"
+              Expect.equal rebuilt incremental "Complete semantic equality"
+          }
 
-              // Build projection incrementally
-              let journalEntries = fixture.JournalRepo.lookupByRunId runId |> WaitTask
+          test "unknown event is durable but ignored by incremental and rebuild reducers" {
+              fixture.Reset()
+              let runId = Guid.NewGuid()
+              let epoch = Guid.NewGuid()
+              let started = startedEvent "unknown-start" runId epoch 1L
+              let unknown = unknownEvent "unknown-kind" runId epoch 2L
+              ingest fixture started false |> ignore
+              ingest fixture unknown false |> ignore
+              let incremental = getProjection fixture started.RunId |> Option.get
 
-              let mutable incrementalProj: RunProjection option = None
+              let rebuilt =
+                  ProjectionRebuild.rebuildFromJournal fixture.DataSource
+                  |> wait
+                  |> unwrap
+                  |> Map.find incremental.RunId
 
-              for entry in journalEntries do
-                  let eventType, evt =
-                      if entry.Sequence = 1L then
-                          "io.leamas.execution.started.v1",
-                          (ExecutionStartedEvent
-                              { RunId = RunId entry.RunId
-                                Repository = RepositoryRef "test"
-                                ActId = None
-                                LeamasVersion = LeamasVersion "1.0.0"
-                                GitRevision = None
-                                StartedBy = None } |> box)
-                      else
-                          "io.leamas.execution.finished.v1",
-                          (ExecutionFinishedEvent
-                              { RunId = RunId entry.RunId
-                                Outcome = Succeeded
-                                DurationMilliseconds = 1000L
-                                Summary = None
-                                Checks = { Passed = 10; Failed = 0; Skipped = 0 } } |> box)
+              Expect.equal incremental.State StartedOnly "Unknown does not mutate state"
+              Expect.equal incremental.Version 1L "Unknown does not increment version"
+              Expect.equal incremental rebuilt "Unknown is ignored by both paths"
+          }
 
-                  let validated: ValidatedEvent =
-                      { EventId = EventId entry.EventId
-                        Source = EventSource entry.Source
-                        EventType = EventType eventType
-                        Subject = sprintf "run/%O" entry.RunId
-                        ObservedAt = DateTimeOffset.UtcNow
-                        InstanceId = InstanceId entry.InstanceId
-                        EpochId = EpochId entry.EpochId
-                        Sequence = EventSequence entry.Sequence
-                        RunId = RunId entry.RunId
-                        Extensions = Map.empty
-                        Event = unbox evt }
+          test "replay does not create a second projection version" {
+              fixture.Reset()
+              let runId = Guid.NewGuid()
+              let event = startedEvent "projection-replay" runId (Guid.NewGuid()) 1L
 
-                  incrementalProj <- RunProjection.applyEvent incrementalProj (JournalPosition entry.JournalPosition) validated
-
-              // Rebuild projection
-              let events =
-                  journalEntries
-                  |> List.map (fun e ->
-                      let eventType, evt =
-                          if e.Sequence = 1L then
-                              "io.leamas.execution.started.v1",
-                              (ExecutionStartedEvent
-                                  { RunId = RunId e.RunId
-                                    Repository = RepositoryRef "test"
-                                    ActId = None
-                                    LeamasVersion = LeamasVersion "1.0.0"
-                                    GitRevision = None
-                                    StartedBy = None } |> box)
-                          else
-                              "io.leamas.execution.finished.v1",
-                              (ExecutionFinishedEvent
-                                  { RunId = RunId e.RunId
-                                    Outcome = Succeeded
-                                    DurationMilliseconds = 1000L
-                                    Summary = None
-                                    Checks = { Passed = 10; Failed = 0; Skipped = 0 } } |> box)
-
-                      let validated: ValidatedEvent =
-                          { EventId = EventId e.EventId
-                            Source = EventSource e.Source
-                            EventType = EventType eventType
-                            Subject = sprintf "run/%O" e.RunId
-                            ObservedAt = DateTimeOffset.UtcNow
-                            InstanceId = InstanceId e.InstanceId
-                            EpochId = EpochId e.EpochId
-                            Sequence = EventSequence e.Sequence
-                            RunId = RunId e.RunId
-                            Extensions = Map.empty
-                            Event = unbox evt }
-
-                      JournalPosition e.JournalPosition, validated)
-
-              let rebuiltProjections = RunProjection.rebuild events
-              let rebuiltProj = rebuiltProjections |> Map.find (RunId runId)
-
-              match incrementalProj with
-              | Some incProj ->
-                  Expect.equal incProj.State rebuiltProj.State "States should match"
-                  Expect.equal incProj.Version rebuiltProj.Version "Versions should match"
-              | None -> failwith "Incremental projection should exist"
+              match ingest fixture event false, ingest fixture event true with
+              | Success(Inserted _, Some first), Success(IdempotentReplay _, None) ->
+                  let current = getProjection fixture event.RunId |> Option.get
+                  Expect.equal current first "Replay leaves projection unchanged"
+                  Expect.equal current.Version 1L "Replay leaves version at one"
+              | firstResult, secondResult -> failwithf "Expected insert/replay, got %A and %A" firstResult secondResult
           } ]

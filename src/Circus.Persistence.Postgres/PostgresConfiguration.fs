@@ -2,29 +2,32 @@ namespace Circus.Persistence.Postgres
 
 open Npgsql
 
-/// Configuration for connecting to PostgreSQL.
+/// Host-supplied PostgreSQL settings.  The connection string is never
+/// constructed from defaults and is never logged by this library.
 type PostgresConfiguration =
     { ConnectionString: string
       MaximumRetries: int
-      SerializationRetryLimit: int }
+      RetryDelayMilliseconds: int }
 
 module PostgresConfiguration =
-    /// Default configuration using a connection string.
     let defaultConfiguration (connectionString: string) : PostgresConfiguration =
         { ConnectionString = connectionString
           MaximumRetries = 3
-          SerializationRetryLimit = 3 }
+          RetryDelayMilliseconds = 25 }
 
-    /// Create a NpgsqlDataSource from the configuration.
-    /// The data source owns connection pooling and is safe to share across requests.
     let createDataSource (config: PostgresConfiguration) : NpgsqlDataSource =
-        let builder = NpgsqlDataSourceBuilder config.ConnectionString
+        if System.String.IsNullOrWhiteSpace config.ConnectionString then
+            invalidArg "connectionString" "CIRCUS_DATABASE_URL must not be empty"
+
+        let builder = NpgsqlDataSourceBuilder(config.ConnectionString)
         builder.Build()
 
-/// SQLSTATE codes used for classification.
 module SqlStates =
     [<Literal>]
     let SerializationFailure = "40001"
+
+    [<Literal>]
+    let DeadlockDetected = "40P01"
 
     [<Literal>]
     let UniqueViolation = "23505"

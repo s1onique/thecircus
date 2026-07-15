@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="PostgresFixture.fs" />
+    <Compile Include="Support.fs" />
     <Compile Include="MigrationTests.fs" />
     <Compile Include="JournalRepositoryTests.fs" />
     <Compile Include="ConcurrencyTests.fs" />

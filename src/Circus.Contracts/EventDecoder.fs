@@ -53,6 +53,32 @@ module EventDecoder =
             | Error e -> Error e
             | Ok event -> Ok(EnvelopeFields.toValidated fields event)
 
+    /// Find a duplicate property at any object depth. System.Text.Json's
+    /// TryGetProperty follows last-property-wins semantics, which is not safe
+    /// for an authority-bearing event. The walk therefore happens before any
+    /// field lookup and includes objects nested in arrays and extension data.
+    let private findDuplicateProperty (root: JsonElement) : string option =
+        let rec walk (element: JsonElement) : string option =
+            match element.ValueKind with
+            | JsonValueKind.Object ->
+                let seen = System.Collections.Generic.HashSet<string>(StringComparer.Ordinal)
+                let mutable duplicate = None
+                let children = ResizeArray<JsonElement>()
+
+                for property in element.EnumerateObject() do
+                    children.Add(property.Value)
+
+                    if duplicate.IsNone && not (seen.Add property.Name) then
+                        duplicate <- Some property.Name
+
+                match duplicate with
+                | Some name -> Some name
+                | None -> children |> Seq.tryPick walk
+            | JsonValueKind.Array -> element.EnumerateArray() |> Seq.tryPick walk
+            | _ -> None
+
+        walk root
+
     /// Decode a Circus-bound Leamas execution event from raw bytes. The
     /// decoder is pure and deterministic; expected malformed input yields a
     /// typed `NonEmptyList<ContractViolation>` rather than throwing. The
@@ -76,7 +102,10 @@ module EventDecoder =
         else
             try
                 use doc = JsonDocument.Parse(payload, JsonDocumentOptions())
-                decodeFromRoot doc.RootElement
+
+                match findDuplicateProperty doc.RootElement with
+                | Some name -> Error(NonEmptyList.singleton (DuplicateField name))
+                | None -> decodeFromRoot doc.RootElement
             with
             | :? JsonException as ex ->
                 Error(

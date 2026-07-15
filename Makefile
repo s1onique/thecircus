@@ -74,12 +74,16 @@ test-contracts: build-backend
 test-application: build-backend
 	$(DOTNET) run --project tests/Circus.Application.Tests -c Release --no-build --no-restore
 
-# PostgreSQL tests require Docker/Podman for Testcontainers
+# PostgreSQL tests require a running Docker-compatible daemon for Testcontainers
 .PHONY: test-postgres
 test-postgres: build-backend
-	@if ! command -v docker &> /dev/null && ! command -v podman &> /dev/null; then \
-		echo "ERROR: Neither docker nor podman is available. PostgreSQL tests require a container runtime."; \
-		echo "Please install Docker or Podman, or skip this test with 'make test-backend'."; \
+	@if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
+		:; \
+	elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1 && test -n "$$DOCKER_HOST"; then \
+		:; \
+	else \
+		echo "ERROR: PostgreSQL integration evidence requires a running Docker-compatible daemon."; \
+		echo "Start Docker Desktop or Podman with a Docker-compatible socket, then rerun 'make test-backend'."; \
 		exit 1; \
 	fi
 	$(DOTNET) run --project tests/Circus.Persistence.Postgres.Tests -c Release --no-build --no-restore
@@ -92,6 +96,8 @@ test-api: build-backend
 test-backend: build-backend
 	$(DOTNET) run --project tests/Circus.Domain.Tests   -c Release --no-build --no-restore
 	$(DOTNET) run --project tests/Circus.Contracts.Tests -c Release --no-build --no-restore
+	$(DOTNET) run --project tests/Circus.Application.Tests -c Release --no-build --no-restore
+	$(MAKE) test-postgres
 	$(DOTNET) run --project tests/Circus.Api.Tests      -c Release --no-build --no-restore
 
 # =============================================================================

@@ -56,7 +56,12 @@ module RunProjection =
     let initialVersion = 1L
 
     /// Create a projection from the first started event.
-    let createFirstStarted (started: ExecutionStarted) (runId: RunId) (observedAt: DateTimeOffset) (position: JournalPosition) : RunProjection =
+    let createFirstStarted
+        (started: ExecutionStarted)
+        (runId: RunId)
+        (observedAt: DateTimeOffset)
+        (position: JournalPosition)
+        : RunProjection =
         { RunId = runId
           State = StartedOnly
           StartedEvent = Some position
@@ -78,7 +83,12 @@ module RunProjection =
           Version = initialVersion }
 
     /// Create a projection from the first finished event (no prior started).
-    let createFirstFinished (finished: ExecutionFinished) (runId: RunId) (observedAt: DateTimeOffset) (position: JournalPosition) : RunProjection =
+    let createFirstFinished
+        (finished: ExecutionFinished)
+        (runId: RunId)
+        (observedAt: DateTimeOffset)
+        (position: JournalPosition)
+        : RunProjection =
         { RunId = runId
           State = FinishedWithoutStart
           StartedEvent = None
@@ -112,7 +122,12 @@ module RunProjection =
     /// Apply an ExecutionStartedEvent to a projection.
     /// Once Conflicted, always Conflicted (monotonic state).
     /// FinishedWithoutStart + first started = Completed.
-    let applyStarted (started: ExecutionStarted) (observedAt: DateTimeOffset) (position: JournalPosition) (current: RunProjection) : RunProjection =
+    let applyStarted
+        (started: ExecutionStarted)
+        (observedAt: DateTimeOffset)
+        (position: JournalPosition)
+        (current: RunProjection)
+        : RunProjection =
         match current.State with
         | Conflicted ->
             // Monotonic: conflict state never reverts
@@ -155,7 +170,12 @@ module RunProjection =
     /// Once Conflicted, always Conflicted (monotonic state).
     /// StartedOnly + first finished = Completed.
     /// FinishedWithoutStart + first finished = FinishedWithoutStart (no started authority).
-    let applyFinished (finished: ExecutionFinished) (observedAt: DateTimeOffset) (position: JournalPosition) (current: RunProjection) : RunProjection =
+    let applyFinished
+        (finished: ExecutionFinished)
+        (observedAt: DateTimeOffset)
+        (position: JournalPosition)
+        (current: RunProjection)
+        : RunProjection =
         match current.State with
         | Conflicted ->
             // Monotonic: conflict state never reverts
@@ -208,15 +228,13 @@ module RunProjection =
                 | None ->
                     // First event is a started - create directly
                     Some(createFirstStarted started runId observedAt journalPosition)
-                | Some proj ->
-                    Some(applyStarted started observedAt journalPosition proj)
+                | Some proj -> Some(applyStarted started observedAt journalPosition proj)
             | ExecutionFinishedEvent finished ->
                 match current with
                 | None ->
                     // First event is a finished - create directly
                     Some(createFirstFinished finished runId observedAt journalPosition)
-                | Some proj ->
-                    Some(applyFinished finished observedAt journalPosition proj)
+                | Some proj -> Some(applyFinished finished observedAt journalPosition proj)
             | UnrecognizedEvent _ ->
                 // Already filtered above
                 current
@@ -229,6 +247,7 @@ module RunProjection =
             let runId = event.RunId
             let current = Map.tryFind runId acc
             let updated = applyEvent current position event
+
             match updated with
             | Some proj -> Map.add runId proj acc
             | None -> acc

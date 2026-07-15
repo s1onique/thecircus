@@ -1,150 +1,166 @@
 module Circus.Persistence.Postgres.Tests.ConcurrencyTests
 
 open System
+open System.Threading
 open System.Threading.Tasks
 open Expecto
 open Circus.Application
 open Circus.Domain
 open Circus.Persistence.Postgres.Tests.PostgresFixture
+open Circus.Persistence.Postgres.Tests.Support
+
+let private waitAll (tasks: Task<IngestEventResult> list) = Task.WhenAll(tasks) |> wait
+
+let private runOverlapping (fixture: PostgresFixture) (requests: IngestEventRequest list) =
+    let gate = new ManualResetEventSlim(false)
+
+    let entered =
+        new TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+    let mutable count = 0
+
+    let tasks =
+        requests
+        |> List.map (fun request ->
+            Task.Run(fun () ->
+                let current = Interlocked.Increment(&count)
+
+                if current = List.length requests then
+                    entered.TrySetResult(()) |> ignore
+
+                gate.Wait()
+                fixture.Ingestion.Ingest request |> wait))
+
+    Expect.isTrue (entered.Task.Wait(5000)) "All operations reached the overlap barrier"
+    gate.Set()
+    let result = waitAll tasks
+    gate.Dispose()
+    result
 
 let tests (fixture: PostgresFixture) =
     testList
-        "Concurrency"
-        [ testTask "20 simultaneous identical requests produce one insert and 19 replays" {
-              fixture.TruncateTables() |> WaitTask |> ignore
+        "Concurrent service ingestion"
+        [ test "twenty overlapping identical events yield one insert and nineteen replays" {
+              fixture.Reset()
+              let event = startedEvent "twenty-identical" (Guid.NewGuid()) (Guid.NewGuid()) 1L
+              let request = requestWithFormatting event false
+              let results = runOverlapping fixture (List.replicate 20 request)
 
-              let epochId = Guid.NewGuid()
+              let inserted =
+                  results
+                  |> Array.filter (function
+                      | Success(Inserted _, _) -> true
+                      | _ -> false)
+                  |> Array.length
+
+              let replayed =
+                  results
+                  |> Array.filter (function
+                      | Success(IdempotentReplay _, _) -> true
+                      | _ -> false)
+                  |> Array.length
+
+              Expect.equal inserted 1 "Exactly one committed insert"
+              Expect.equal replayed 19 "All other calls are semantic replays"
+              Expect.equal (fixture.JournalRepo.Count() |> wait) 1L "One journal authority"
+
+              match fixture.ProjectionRepo.GetByRunId event.RunId |> wait with
+              | Ok(Some projection) -> Expect.equal projection.Version 1L "Replay does not increment version"
+              | other -> failwithf "Expected one projection, got %A" other
+          }
+
+          test "two independent overlapping sequence authorities produce one insert and one typed conflict" {
+              fixture.Reset()
+              let epoch = Guid.NewGuid()
+              let first = startedEvent "sequence-winner-a" (Guid.NewGuid()) epoch 7L
+              let second = startedEvent "sequence-winner-b" (Guid.NewGuid()) epoch 7L
+
+              let results =
+                  runOverlapping fixture [ requestWithFormatting first false; requestWithFormatting second false ]
+
+              let inserts =
+                  results
+                  |> Array.filter (function
+                      | Success(Inserted _, _) -> true
+                      | _ -> false)
+                  |> Array.length
+
+              let conflicts =
+                  results
+                  |> Array.filter (function
+                      | Success(SequenceConflict _, _) -> true
+                      | _ -> false)
+                  |> Array.length
+
+              Expect.equal inserts 1 "One sequence authority commits"
+              Expect.equal conflicts 1 "The loser is a sequence conflict"
+              Expect.equal (fixture.JournalRepo.Count() |> wait) 1L "Only the winner is durable"
+          }
+
+          test "started and finished overlap and converge through the same service reducer" {
+              fixture.Reset()
               let runId = Guid.NewGuid()
-              let source = "urn:leamas:instance:test"
-              let eventId = "concurrent-event-id"
+              let epoch = Guid.NewGuid()
+              let started = startedEvent "overlap-start" runId epoch 1L
+              let finished = finishedEvent "overlap-finish" runId epoch 2L Succeeded
 
-              let candidate =
-                  { Identity = { Source = EventSource source; EventId = EventId eventId }
-                    StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId epochId; Sequence = EventSequence 1L }
-                    RunId = RunId runId
-                    EventType = EventType "io.leamas.execution.started.v1"
-                    Subject = sprintf "run/%O" runId
-                    ObservedAt = DateTimeOffset.UtcNow
-                    RawBody = [||]
-                    EnvelopeJson = "{}" }
+              let results =
+                  runOverlapping fixture [ requestWithFormatting started false; requestWithFormatting finished false ]
 
-              // Run 20 concurrent inserts
-              let tasks =
-                  [ for _ in 1..20 ->
-                        fixture.JournalRepo.tryInsert candidate ]
+              Expect.equal
+                  (results
+                   |> Array.filter (function
+                       | Success(Inserted _, _) -> true
+                       | _ -> false)
+                   |> Array.length)
+                  2
+                  "Both distinct sequence events commit"
 
-              let! results = Task.WhenAll tasks
-
-              let insertedCount = results |> Array.choose id |> Array.length
-              let noneCount = results |> Array.filter Option.isNone |> Array.length
-
-              Expect.equal insertedCount 1 "Exactly one insert should succeed"
-              Expect.equal noneCount 19 "Exactly 19 should return None (conflict)"
+              match fixture.ProjectionRepo.GetByRunId started.RunId |> wait with
+              | Ok(Some projection) ->
+                  Expect.equal projection.State Completed "Completed after overlap"
+                  Expect.equal projection.Version 2L "Two authoritative mutations"
+              | other -> failwithf "Expected completed projection, got %A" other
           }
 
-          testTask "two events racing for one sequence produce one insert and one conflict" {
-              fixture.TruncateTables() |> WaitTask |> ignore
+          test "a projection failure rolls back journal and projection atomically" {
+              fixture.Reset()
 
-              let epochId = Guid.NewGuid()
-              let sequence = 1L
+              fixture.ExecuteAsAdmin(
+                  """
+                  CREATE OR REPLACE FUNCTION circus.test_fail_projection()
+                  RETURNS trigger LANGUAGE plpgsql
+                  SET search_path = pg_catalog, circus
+                  AS $$ BEGIN RAISE EXCEPTION 'test projection failure'; END; $$;
+                  ALTER FUNCTION circus.test_fail_projection() OWNER TO circus_owner;
+                  GRANT EXECUTE ON FUNCTION circus.test_fail_projection() TO circus_app;
+                  DROP TRIGGER IF EXISTS circus_test_fail_projection ON circus.circus_run_projection;
+                  CREATE TRIGGER circus_test_fail_projection
+                    BEFORE INSERT ON circus.circus_run_projection
+                    FOR EACH ROW EXECUTE FUNCTION circus.test_fail_projection();
+                  """
+              )
 
-              let candidate1 =
-                  { Identity = { Source = EventSource "source1"; EventId = EventId "id1" }
-                    StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId epochId; Sequence = EventSequence sequence }
-                    RunId = RunId Guid.NewGuid()
-                    EventType = EventType "io.leamas.execution.started.v1"
-                    Subject = "run/test"
-                    ObservedAt = DateTimeOffset.UtcNow
-                    RawBody = [||]
-                    EnvelopeJson = "{}" }
+              try
+                  let event = startedEvent "rollback" (Guid.NewGuid()) (Guid.NewGuid()) 1L
 
-              let candidate2 =
-                  { Identity = { Source = EventSource "source2"; EventId = EventId "id2" }
-                    StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId epochId; Sequence = EventSequence sequence }
-                    RunId = RunId Guid.NewGuid()
-                    EventType = EventType "io.leamas.execution.started.v1"
-                    Subject = "run/test2"
-                    ObservedAt = DateTimeOffset.UtcNow
-                    RawBody = [||]
-                    EnvelopeJson = "{}" }
+                  match fixture.Ingestion.Ingest(requestWithFormatting event false) |> wait with
+                  | PersistenceFailure _ -> ()
+                  | other -> failwithf "Expected persistence failure, got %A" other
 
-              let! result1 = fixture.JournalRepo.tryInsert candidate1
-              let! result2 = fixture.JournalRepo.tryInsert candidate2
+                  Expect.equal (fixture.JournalRepo.Count() |> wait) 0L "Journal insert rolled back"
 
-              let successCount = [ result1; result2 ] |> List.choose id |> List.length
-              let conflictCount = [ result1; result2 ] |> List.filter Option.isNone |> List.length
+                  match fixture.ProjectionRepo.GetByRunId event.RunId |> wait with
+                  | Ok None -> ()
+                  | other -> failwithf "Projection mutation leaked: %A" other
+              finally
+                  fixture.ExecuteAsAdmin(
+                      "DROP TRIGGER IF EXISTS circus_test_fail_projection ON circus.circus_run_projection; DROP FUNCTION IF EXISTS circus.test_fail_projection();"
+                  )
 
-              Expect.equal successCount 1 "Exactly one should succeed"
-              Expect.equal conflictCount 1 "Exactly one should conflict"
-          }
+              let retryEvent = startedEvent "rollback-retry" (Guid.NewGuid()) (Guid.NewGuid()) 1L
 
-          testTask "two different runs ingest concurrently without blocking" {
-              fixture.TruncateTables() |> WaitTask |> ignore
-
-              let epochId = Guid.NewGuid()
-
-              let candidate1 =
-                  { Identity = { Source = EventSource "source1"; EventId = EventId "id1" }
-                    StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId epochId; Sequence = EventSequence 1L }
-                    RunId = RunId Guid.NewGuid()
-                    EventType = EventType "io.leamas.execution.started.v1"
-                    Subject = "run/test1"
-                    ObservedAt = DateTimeOffset.UtcNow
-                    RawBody = [||]
-                    EnvelopeJson = "{}" }
-
-              let candidate2 =
-                  { Identity = { Source = EventSource "source2"; EventId = EventId "id2" }
-                    StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId epochId; Sequence = EventSequence 2L }
-                    RunId = RunId Guid.NewGuid()
-                    EventType = EventType "io.leamas.execution.started.v1"
-                    Subject = "run/test2"
-                    ObservedAt = DateTimeOffset.UtcNow
-                    RawBody = [||]
-                    EnvelopeJson = "{}" }
-
-              let! result1 = fixture.JournalRepo.tryInsert candidate1
-              let! result2 = fixture.JournalRepo.tryInsert candidate2
-
-              Expect.isSome result1 "First run should succeed"
-              Expect.isSome result2 "Second run should succeed"
-          }
-
-          testTask "serialization failures are retried" {
-              // This test verifies the retry logic exists
-              // Actual serialization failure testing requires specific race conditions
-              fixture.TruncateTables() |> WaitTask |> ignore
-
-              let candidate =
-                  { Identity = { Source = EventSource "source1"; EventId = EventId "id1" }
-                    StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId Guid.NewGuid(); Sequence = EventSequence 1L }
-                    RunId = RunId Guid.NewGuid()
-                    EventType = EventType "io.leamas.execution.started.v1"
-                    Subject = "run/test"
-                    ObservedAt = DateTimeOffset.UtcNow
-                    RawBody = [||]
-                    EnvelopeJson = "{}" }
-
-              let! result = fixture.JournalRepo.tryInsert candidate
-              Expect.isSome result "Insert should succeed after retry mechanism"
-          }
-
-          testTask "concurrent test can be run repeatedly" {
-              fixture.TruncateTables() |> WaitTask |> ignore
-
-              // Run the concurrent test twice
-              for run in 1..2 do
-                  let epochId = Guid.NewGuid()
-                  let candidate =
-                      { Identity = { Source = EventSource "source1"; EventId = EventId (sprintf "id-%d" run) }
-                        StreamPosition = { InstanceId = InstanceId "inst1"; EpochId = EpochId epochId; Sequence = EventSequence 1L }
-                        RunId = RunId Guid.NewGuid()
-                        EventType = EventType "io.leamas.execution.started.v1"
-                        Subject = "run/test"
-                        ObservedAt = DateTimeOffset.UtcNow
-                        RawBody = [||]
-                        EnvelopeJson = "{}" }
-
-                  let! result = fixture.JournalRepo.tryInsert candidate
-                  Expect.isSome result (sprintf "Run %d should succeed" run)
+              match fixture.Ingestion.Ingest(requestWithFormatting retryEvent false) |> wait with
+              | Success(Inserted _, Some _) -> ()
+              | other -> failwithf "Clean retry did not succeed: %A" other
           } ]

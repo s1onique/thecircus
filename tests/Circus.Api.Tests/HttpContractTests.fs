@@ -1,159 +1,362 @@
 module Circus.Api.Tests.HttpContractTests
 
+open System
 open System.Net
 open System.Net.Http
+open System.Net
+open System.Text
 open System.Text.Json
+open System.Threading.Tasks
 open Expecto
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Hosting
 open Microsoft.AspNetCore.TestHost
 open Microsoft.Extensions.DependencyInjection
-open Microsoft.Extensions.Hosting
 open Giraffe
+open Circus.Api.IngestionHandlers
 open Circus.Api.Program
-open Circus.Api.Http
+open Circus.Application
+open Circus.Domain
 
-// The WebHostBuilder/UseTestServer pair is the documented test path for
-// non-MVC Giraffe applications; the newer WebApplicationFactory cannot be
-// used here because our application is built through ConfigureWebHostDefaults
-// rather than WebApplication.CreateBuilder. The deprecation is therefore
-// unavoidable for this ACT and is restricted to this test module.
 #nowarn "0044"
 
-/// Configure services for the in-process test host.
-let configureTestServices (services: IServiceCollection) : unit = services.AddGiraffe() |> ignore
+/// Deterministic fake ports used by every API decision-table test.
+type FakeState =
+    { mutable Authorization: Result<ProducerPrincipal, IngestionAuthorizationFailure>
+      mutable Ingestion: IngestEventResult
+      mutable AuthorizationCalls: int
+      mutable IngestionCalls: int }
 
-/// Configure the test pipeline. Only Giraffe routing is wired; static files
-/// are skipped because the Elm artefact is not built during the test run.
-let configureTestApp (app: IApplicationBuilder) : unit = app.UseGiraffe webApp |> ignore
+let newState () =
+    { Authorization =
+        Ok
+            { ProducerId = "test-producer"
+              AllowedInstance = None }
+      Ingestion = Success(Inserted(JournalPosition 1L), None)
+      AuthorizationCalls = 0
+      IngestionCalls = 0 }
 
-/// Build an in-process TestServer that requires no listening TCP port.
-let createServer () : TestServer =
+let private createServer (state: FakeState) : TestServer =
+    let authorize: AuthorizationPort =
+        fun _ ->
+            state.AuthorizationCalls <- state.AuthorizationCalls + 1
+            Task.FromResult state.Authorization
+
+    let ingest: IngestionPort =
+        fun _ ->
+            state.IngestionCalls <- state.IngestionCalls + 1
+            Task.FromResult state.Ingestion
+
+    let configureServices (services: IServiceCollection) = services.AddGiraffe() |> ignore
+
+    let configureApp (app: IApplicationBuilder) =
+        app.UseGiraffe(webApp authorize ingest) |> ignore
+
     let builder =
-        WebHostBuilder().UseTestServer().ConfigureServices(configureTestServices).Configure(configureTestApp)
+        WebHostBuilder().UseTestServer().ConfigureServices(configureServices).Configure(configureApp)
 
     new TestServer(builder)
 
-/// Acquire a TestServer and an HttpClient from it, returning disposable
-/// wrappers so callers can write `use _ = withClient f`.
-let withClient (f: HttpClient -> 'a) : 'a =
-    let server = createServer ()
-    let client = server.CreateClient()
+let private withClient (state: FakeState) (f: HttpClient -> 'a) : 'a =
+    use server = createServer state
+    use client = server.CreateClient()
+    f client
 
-    try
-        f client
-    finally
-        client.Dispose()
-        (server :> System.IDisposable).Dispose()
+let private validBody (eventId: string) (source: string) (runId: Guid) =
+    sprintf
+        """{"specversion":"1.0","id":"%s","source":"%s","type":"io.leamas.execution.started.v1","subject":"run/%O","time":"2026-07-15T12:00:00Z","datacontenttype":"application/json","circusinstance":"builder-01","circusepoch":"%O","circusseq":1,"runid":"%O","data":{"repository_ref":"repo","leamas_version":"1.0.0"}}"""
+        eventId
+        source
+        runId
+        (Guid.NewGuid())
+        runId
 
-let readJsonPropertyNames (json: string) : Set<string> =
-    let doc = JsonDocument.Parse(json)
-    doc.RootElement.EnumerateObject() |> Seq.map (fun p -> p.Name) |> Set.ofSeq
-
-let get (client: HttpClient) (path: string) =
+let private sendPost (client: HttpClient) (body: string) (mediaType: string option) =
     async {
-        let req = new HttpRequestMessage(HttpMethod.Get, path)
-        let! response = client.SendAsync(req) |> Async.AwaitTask
-        let! body = response.Content.ReadAsStringAsync() |> Async.AwaitTask
-        return response, body
+        use request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/events")
+        use content = new StringContent(body, Encoding.UTF8)
+        content.Headers.Remove("Content-Type") |> ignore
+
+        match mediaType with
+        | Some value -> content.Headers.TryAddWithoutValidation("Content-Type", value) |> ignore
+        | None -> ()
+
+        request.Content <- content
+        let! response = client.SendAsync(request) |> Async.AwaitTask
+        let! responseBody = response.Content.ReadAsStringAsync() |> Async.AwaitTask
+        return response, responseBody
     }
     |> Async.RunSynchronously
+
+type private ChunkedContent(bytes: byte[]) =
+    inherit HttpContent()
+
+    override _.TryComputeLength(length: byref<int64>) =
+        length <- 0L
+        false
+
+    override _.SerializeToStreamAsync(stream: IO.Stream, _context: TransportContext) =
+        stream.WriteAsync(bytes, 0, bytes.Length)
+
+let private sendChunkedPost (client: HttpClient) (body: string) =
+    async {
+        use request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/events")
+        use content = new ChunkedContent(Encoding.UTF8.GetBytes body)
+        content.Headers.ContentType <- new System.Net.Http.Headers.MediaTypeHeaderValue("application/json")
+        request.Content <- content
+        let! response = client.SendAsync(request) |> Async.AwaitTask
+        let! responseBody = response.Content.ReadAsStringAsync() |> Async.AwaitTask
+        return response, responseBody
+    }
+    |> Async.RunSynchronously
+
+let private jsonCode (body: string) =
+    JsonDocument.Parse(body).RootElement.GetProperty("code").GetString()
 
 let tests =
     testList
         "HTTP Contracts"
         [ test "/health/live returns 200" {
-              withClient (fun client ->
-                  let response, _ = get client "/health/live"
+              let state = newState ()
+
+              withClient state (fun client ->
+                  let response =
+                      client.GetAsync("/health/live") |> Async.AwaitTask |> Async.RunSynchronously
+
                   Expect.equal response.StatusCode HttpStatusCode.OK "Should return 200")
           }
 
-          test "/health/live content type is JSON" {
-              withClient (fun client ->
-                  let response, _ = get client "/health/live"
-                  let contentType = response.Content.Headers.ContentType.MediaType
-                  Expect.equal contentType "application/json" "Content type should be JSON")
-          }
+          test "/api/v1/about remains a stable public response" {
+              let state = newState ()
 
-          test "/health/live body has exactly { status }" {
-              withClient (fun client ->
-                  let _, body = get client "/health/live"
+              withClient state (fun client ->
+                  let response =
+                      client.GetAsync("/api/v1/about") |> Async.AwaitTask |> Async.RunSynchronously
 
-                  Expect.equal
-                      (readJsonPropertyNames body)
-                      (Set.singleton "status")
-                      "Liveness body should have exactly one 'status' field")
-          }
+                  let body =
+                      response.Content.ReadAsStringAsync()
+                      |> Async.AwaitTask
+                      |> Async.RunSynchronously
 
-          test "/health/live status field is 'live'" {
-              withClient (fun client ->
-                  let _, body = get client "/health/live"
                   let doc = JsonDocument.Parse(body)
-                  let status = doc.RootElement.GetProperty("status").GetString()
-                  Expect.equal status "live" "Status should be 'live'")
+                  Expect.equal response.StatusCode HttpStatusCode.OK "Should return 200"
+                  Expect.equal (doc.RootElement.GetProperty("name").GetString()) "The Circus" "Domain name")
           }
 
-          test "/api/v1/about returns 200" {
-              withClient (fun client ->
-                  let response, _ = get client "/api/v1/about"
-                  Expect.equal response.StatusCode HttpStatusCode.OK "Should return 200")
+          test "authorization denial is 403 and short-circuits body and ingestion" {
+              let state = newState ()
+              state.Authorization <- Error MissingCredentials
+
+              withClient state (fun client ->
+                  let response, _ =
+                      sendPost client "not JSON and deliberately not parsed" (Some "application/json")
+
+                  Expect.equal response.StatusCode HttpStatusCode.Forbidden "Denied requests are forbidden"
+                  Expect.equal state.IngestionCalls 0 "Ingestion must not be called")
           }
 
-          test "/api/v1/about contains domain values" {
-              withClient (fun client ->
-                  let _, body = get client "/api/v1/about"
-                  let doc = JsonDocument.Parse(body)
+          test "authorization adapter failures are also 403" {
+              let state = newState ()
+              state.Authorization <- Error InvalidCredentials
 
-                  Expect.equal
-                      (doc.RootElement.GetProperty("name").GetString())
-                      "The Circus"
-                      "Name should match domain"
+              withClient state (fun client ->
+                  let response, body =
+                      sendPost client (validBody "id-1" "urn:test" (Guid.NewGuid())) (Some "application/json")
 
-                  Expect.equal
-                      (doc.RootElement.GetProperty("tagline").GetString())
-                      "Team-scale Leamas"
-                      "Tagline should match domain"
-
-                  Expect.equal
-                      (doc.RootElement.GetProperty("description").GetString())
-                      "The team-scale coordination, evidence, and governance platform for Leamas."
-                      "Description should match domain")
+                  Expect.equal response.StatusCode HttpStatusCode.Forbidden "Authorization failures are generic"
+                  Expect.equal (jsonCode body) "authorization_denied" "Stable code"
+                  Expect.equal state.IngestionCalls 0 "Ingestion must not be called")
           }
 
-          test "/api/v1/about has exactly the documented fields" {
-              withClient (fun client ->
-                  let _, body = get client "/api/v1/about"
+          test "missing content type is 415" {
+              let state = newState ()
 
-                  Expect.equal
-                      (readJsonPropertyNames body)
-                      (Set.ofList [ "name"; "tagline"; "description" ])
-                      "About body should have exactly name, tagline, description")
+              withClient state (fun client ->
+                  let response, _ =
+                      sendPost client (validBody "id-2" "urn:test" (Guid.NewGuid())) None
+
+                  Expect.equal response.StatusCode HttpStatusCode.UnsupportedMediaType "Missing type is rejected"
+                  Expect.equal state.IngestionCalls 0 "Ingestion must not be called")
           }
 
-          test "unknown /api/v1/* route returns 404" {
-              withClient (fun client ->
-                  let response, _ = get client "/api/v1/unknown"
-                  Expect.equal response.StatusCode HttpStatusCode.NotFound "Should return 404")
+          test "malformed content type is 415" {
+              let state = newState ()
+
+              withClient state (fun client ->
+                  let response, _ =
+                      sendPost client (validBody "id-3" "urn:test" (Guid.NewGuid())) (Some "application/json; =bad")
+
+                  Expect.equal response.StatusCode HttpStatusCode.UnsupportedMediaType "Malformed type is rejected"
+                  Expect.equal state.IngestionCalls 0 "Ingestion must not be called")
           }
 
-          test "unknown API response is JSON with error field" {
-              withClient (fun client ->
-                  let response, body = get client "/api/v1/unknown"
-                  let contentType = response.Content.Headers.ContentType.MediaType
-                  Expect.equal contentType "application/json" "Unknown API response should be JSON"
-                  let doc = JsonDocument.Parse(body)
+          test "application/json with parameters is accepted" {
+              let state = newState ()
+              let runId = Guid.NewGuid()
 
-                  Expect.equal
-                      (doc.RootElement.GetProperty("error").GetString())
-                      "not_found"
-                      "Error field should be 'not_found'")
+              withClient state (fun client ->
+                  let response, _ =
+                      sendPost client (validBody "id-4" "urn:test" runId) (Some "Application/JSON; charset=utf-8")
+
+                  Expect.equal response.StatusCode HttpStatusCode.Created "JSON is accepted"
+                  Expect.equal state.IngestionCalls 1 "Ingestion called once")
           }
 
-          test "no development exception details appear in unknown response" {
-              withClient (fun client ->
-                  let _, body = get client "/api/v1/unknown"
+          test "application vendor plus json is accepted" {
+              let state = newState ()
+
+              withClient state (fun client ->
+                  let response, _ =
+                      sendPost
+                          client
+                          (validBody "id-5" "urn:test" (Guid.NewGuid()))
+                          (Some "application/cloudevents+json")
+
+                  Expect.equal response.StatusCode HttpStatusCode.Created "Vendor JSON is accepted")
+          }
+
+          test "malformed JSON is 400 and does not ingest" {
+              let state = newState ()
+
+              withClient state (fun client ->
+                  let response, body = sendPost client "{" (Some "application/json")
+                  Expect.equal response.StatusCode HttpStatusCode.BadRequest "Malformed JSON is bad request"
+                  Expect.equal (jsonCode body) "malformed_json" "Stable malformed code"
+                  Expect.equal state.IngestionCalls 0 "No ingestion")
+          }
+
+          test "duplicate top-level JSON property is 400" {
+              let state = newState ()
+              let runId = Guid.NewGuid()
+              let body = validBody "id-6" "urn:test" runId + "\n"
+              let duplicate = body.Replace("}\n", ",\"id\":\"second\"}\n")
+
+              withClient state (fun client ->
+                  let response, _ = sendPost client duplicate (Some "application/json")
+                  Expect.equal response.StatusCode HttpStatusCode.BadRequest "Duplicate top-level property"
+                  Expect.equal state.IngestionCalls 0 "No ingestion")
+          }
+
+          test "duplicate nested JSON property is 400" {
+              let state = newState ()
+              let runId = Guid.NewGuid()
+              let body = validBody "id-7" "urn:test" runId
+
+              let duplicate =
+                  body.Replace(
+                      "\"leamas_version\":\"1.0.0\"",
+                      "\"leamas_version\":\"1.0.0\",\"leamas_version\":\"2.0.0\""
+                  )
+
+              withClient state (fun client ->
+                  let response, _ = sendPost client duplicate (Some "application/json")
+                  Expect.equal response.StatusCode HttpStatusCode.BadRequest "Duplicate nested property"
+                  Expect.equal state.IngestionCalls 0 "No ingestion")
+          }
+
+          test "valid JSON violating the event contract is 422" {
+              let state = newState ()
+              let runId = Guid.NewGuid()
+
+              let body =
+                  (validBody "id-8" "urn:test" runId).Replace("\"repository_ref\":\"repo\"", "\"repository_ref\":\"\"")
+
+              withClient state (fun client ->
+                  let response, body = sendPost client body (Some "application/json")
+                  Expect.equal response.StatusCode (enum<HttpStatusCode> 422) "Contract violations are 422"
+                  Expect.equal (jsonCode body) "contract_violation" "Stable validation code"
+                  Expect.equal state.IngestionCalls 0 "No ingestion")
+          }
+
+          test "declared oversized body is 413" {
+              let state = newState ()
+              let body = String('x', requestBodyLimit + 1)
+
+              withClient state (fun client ->
+                  let response, _ = sendPost client body (Some "application/json")
+                  Expect.equal response.StatusCode (enum<HttpStatusCode> 413) "Oversized body"
+                  Expect.equal state.IngestionCalls 0 "No ingestion")
+          }
+
+          test "streamed oversized body is bounded and 413" {
+              let state = newState ()
+              let body = String('x', requestBodyLimit + 1)
+
+              withClient state (fun client ->
+                  let response, _ = sendChunkedPost client body
+                  Expect.equal response.StatusCode (enum<HttpStatusCode> 413) "Streamed oversized body"
+                  Expect.equal state.IngestionCalls 0 "No ingestion")
+          }
+
+          test "inserted event is 201 with safe relative Location" {
+              let state = newState ()
+              let runId = Guid.NewGuid()
+
+              withClient state (fun client ->
+                  let response, body =
+                      sendPost
+                          client
+                          (validBody "id/with?unsafe#chars" "urn:source/with?chars" runId)
+                          (Some "application/json")
+
+                  let location = response.Headers.Location.OriginalString
+                  Expect.equal response.StatusCode HttpStatusCode.Created "Inserted"
+                  let result = JsonDocument.Parse(body).RootElement.GetProperty("result").GetString()
+                  Expect.equal result "inserted" "Success code"
+                  Expect.isTrue (location.StartsWith("/api/v1/events/")) "Relative location"
+                  Expect.isTrue (location.Contains("%2F") || location.Contains("%2f")) "Slash is escaped"
+                  Expect.isFalse (location.Contains("?chars")) "Query is not injected"
+                  Expect.isFalse (body.Contains("raw_body")) "No persistence details")
+          }
+
+          test "idempotent replay is 200" {
+              let state = newState ()
+              state.Ingestion <- Success(IdempotentReplay(JournalPosition 1L), None)
+
+              withClient state (fun client ->
+                  let response, _ =
+                      sendPost client (validBody "id-9" "urn:test" (Guid.NewGuid())) (Some "application/json")
+
+                  Expect.equal response.StatusCode HttpStatusCode.OK "Replay status")
+          }
+
+          test "conflict is 409" {
+              let state = newState ()
+              state.Ingestion <- Success(SequenceConflict(JournalPosition 1L), None)
+
+              withClient state (fun client ->
+                  let response, body =
+                      sendPost client (validBody "id-10" "urn:test" (Guid.NewGuid())) (Some "application/json")
+
+                  Expect.equal response.StatusCode HttpStatusCode.Conflict "Conflict status"
+                  Expect.equal (jsonCode body) "event_conflict" "Stable conflict code")
+          }
+
+          test "retry exhaustion is 503 with generic body" {
+              let state = newState ()
+              state.Ingestion <- PersistenceFailure SerializationRetriesExhausted
+
+              withClient state (fun client ->
+                  let response, body =
+                      sendPost client (validBody "id-11" "urn:test" (Guid.NewGuid())) (Some "application/json")
+
+                  Expect.equal response.StatusCode HttpStatusCode.ServiceUnavailable "Unavailable"
+                  Expect.equal (jsonCode body) "service_unavailable" "Generic code"
 
                   Expect.isFalse
-                      (body.Contains("Exception") || body.Contains("at Circus"))
-                      "Response should not contain exception or stack-trace details")
+                      (body.Contains("40001") || body.Contains("circus_event_journal"))
+                      "No persistence details")
+          }
+
+          test "invariant and unexpected persistence failures are generic 500" {
+              let state = newState ()
+              state.Ingestion <- PersistenceFailure ProjectionInvariantFailed
+
+              withClient state (fun client ->
+                  let response, body =
+                      sendPost client (validBody "id-12" "urn:test" (Guid.NewGuid())) (Some "application/json")
+
+                  Expect.equal response.StatusCode HttpStatusCode.InternalServerError "Internal failure"
+                  Expect.equal (jsonCode body) "internal_error" "Generic code"
+                  Expect.isFalse (body.Contains("ProjectionInvariantFailed")) "No union case leak")
           } ]

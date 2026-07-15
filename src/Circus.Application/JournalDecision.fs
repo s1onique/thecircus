@@ -28,8 +28,7 @@ module JournalDecision =
             // Sequence exists but identity doesn't - sequence conflict
             Ok(SequenceConflict sequenceEntry.JournalPosition)
 
-        | Some identityEntry, Some sequenceEntry
-            when identityEntry.JournalPosition <> sequenceEntry.JournalPosition ->
+        | Some identityEntry, Some sequenceEntry when identityEntry.JournalPosition <> sequenceEntry.JournalPosition ->
             // Both exist but different rows - cross-identity conflict
             Ok(CrossIdentityConflict(identityEntry.JournalPosition, sequenceEntry.JournalPosition))
 

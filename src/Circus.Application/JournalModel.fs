@@ -18,7 +18,8 @@ type JournalIdentity =
       EventId: EventId }
 
 module JournalIdentity =
-    let toTuple identity = (EventSource.value identity.Source, EventId.value identity.EventId)
+    let toTuple identity =
+        (EventSource.value identity.Source, EventId.value identity.EventId)
 
 /// Stream position defines the ordering within a specific instance/epoch pair.
 type StreamPosition =
@@ -41,7 +42,9 @@ type JournalCandidate =
       RawBody: byte[]
       EnvelopeJson: string }
 
-/// A row retrieved from the journal during conflict classification.
+/// A row retrieved from the journal during conflict classification or rebuild.
+/// RawBody is never reconstructed from EnvelopeJson; it is the exact accepted
+/// request body retained by the journal.
 type JournalEntry =
     { JournalPosition: JournalPosition
       Source: string
@@ -51,7 +54,8 @@ type JournalEntry =
       Sequence: int64
       RunId: Guid
       EventType: string
-      EnvelopeJson: string }
+      EnvelopeJson: string
+      RawBody: byte[] }
 
 /// Possible outcomes from attempting to append an event to the journal.
 /// These are typed domain outcomes, not exceptions.
@@ -76,7 +80,7 @@ module JournalAppendOutcome =
         | IdempotentReplay pos -> Some pos
         | EventIdentityConflict pos -> Some pos
         | SequenceConflict pos -> Some pos
-        | CrossIdentityConflict (pos1, _) -> Some pos1
+        | CrossIdentityConflict(pos1, _) -> Some pos1
 
 /// Transaction retry attempt counter.
 type TransactionAttempt =

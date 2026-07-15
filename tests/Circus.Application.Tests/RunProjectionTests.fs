@@ -9,6 +9,7 @@ open Circus.Domain
 /// Helper to create a valid started event.
 let createStartedEvent (runId: Guid) (instanceId: string) (epochId: Guid) (sequence: int64) =
     let runIdVal = (RunId.tryCreate runId).Value
+
     let validated: ValidatedEvent =
         { EventId = (EventId.tryCreate "event-id").Value
           Source = (EventSource.tryCreate "urn:leamas:instance:test").Value
@@ -21,18 +22,26 @@ let createStartedEvent (runId: Guid) (instanceId: string) (epochId: Guid) (seque
           RunId = runIdVal
           Extensions = Map.empty
           Event =
-              ExecutionStartedEvent
-                  { RunId = runIdVal
-                    Repository = (RepositoryRef.tryCreate "test-repo").Value
-                    ActId = None
-                    LeamasVersion = (LeamasVersion.tryCreate "1.0.0").Value
-                    GitRevision = None
-                    StartedBy = None } }
+            ExecutionStartedEvent
+                { RunId = runIdVal
+                  Repository = (RepositoryRef.tryCreate "test-repo").Value
+                  ActId = None
+                  LeamasVersion = (LeamasVersion.tryCreate "1.0.0").Value
+                  GitRevision = None
+                  StartedBy = None } }
+
     validated
 
 /// Helper to create a valid finished event.
-let createFinishedEvent (runId: Guid) (instanceId: string) (epochId: Guid) (sequence: int64) (outcome: ExecutionOutcome) =
+let createFinishedEvent
+    (runId: Guid)
+    (instanceId: string)
+    (epochId: Guid)
+    (sequence: int64)
+    (outcome: ExecutionOutcome)
+    =
     let runIdVal = (RunId.tryCreate runId).Value
+
     let validated: ValidatedEvent =
         { EventId = (EventId.tryCreate "event-id").Value
           Source = (EventSource.tryCreate "urn:leamas:instance:test").Value
@@ -45,17 +54,19 @@ let createFinishedEvent (runId: Guid) (instanceId: string) (epochId: Guid) (sequ
           RunId = runIdVal
           Extensions = Map.empty
           Event =
-              ExecutionFinishedEvent
-                  { RunId = runIdVal
-                    Outcome = outcome
-                    DurationMilliseconds = 1000L
-                    Summary = None
-                    Checks = { Passed = 10; Failed = 0; Skipped = 0 } } }
+            ExecutionFinishedEvent
+                { RunId = runIdVal
+                  Outcome = outcome
+                  DurationMilliseconds = 1000L
+                  Summary = None
+                  Checks = { Passed = 10; Failed = 0; Skipped = 0 } } }
+
     validated
 
 /// Helper to create an unknown event.
 let createUnknownEvent (runId: Guid) (instanceId: string) (epochId: Guid) (sequence: int64) =
     let runIdVal = (RunId.tryCreate runId).Value
+
     let validated: ValidatedEvent =
         { EventId = (EventId.tryCreate "event-id").Value
           Source = (EventSource.tryCreate "urn:leamas:instance:test").Value
@@ -68,9 +79,10 @@ let createUnknownEvent (runId: Guid) (instanceId: string) (epochId: Guid) (seque
           RunId = runIdVal
           Extensions = Map.empty
           Event =
-              UnrecognizedEvent
-                  { EventType = "io.leamas.execution.artefact.published.v3"
-                    Data = None } }
+            UnrecognizedEvent
+                { EventType = "io.leamas.execution.artefact.published.v3"
+                  Data = None } }
+
     validated
 
 let tests =
@@ -112,10 +124,14 @@ let tests =
               let epochId = Guid.NewGuid()
 
               let started = createStartedEvent runId "inst1" epochId 1L
-              let finished = createFinishedEvent runId "inst1" epochId 2L ExecutionOutcome.Succeeded
+
+              let finished =
+                  createFinishedEvent runId "inst1" epochId 2L ExecutionOutcome.Succeeded
 
               let afterStarted = RunProjection.applyEvent None (JournalPosition 1L) started
-              let afterFinished = RunProjection.applyEvent afterStarted (JournalPosition 2L) finished
+
+              let afterFinished =
+                  RunProjection.applyEvent afterStarted (JournalPosition 2L) finished
 
               match afterFinished with
               | Some proj ->
@@ -132,7 +148,9 @@ let tests =
               let started = createStartedEvent runId "inst1" epochId 2L
 
               let afterFinished = RunProjection.applyEvent None (JournalPosition 1L) finished
-              let afterStarted = RunProjection.applyEvent afterFinished (JournalPosition 2L) started
+
+              let afterStarted =
+                  RunProjection.applyEvent afterFinished (JournalPosition 2L) started
 
               match afterStarted with
               | Some proj ->
@@ -180,7 +198,9 @@ let tests =
               let unknown = createUnknownEvent runId "inst1" epochId 2L
 
               let afterStarted = RunProjection.applyEvent None (JournalPosition 1L) started
-              let afterUnknown = RunProjection.applyEvent afterStarted (JournalPosition 2L) unknown
+
+              let afterUnknown =
+                  RunProjection.applyEvent afterStarted (JournalPosition 2L) unknown
 
               match afterUnknown with
               | Some proj ->
@@ -219,7 +239,6 @@ let tests =
               let afterFirst = RunProjection.applyEvent None (JournalPosition 1L) started
 
               match afterFirst with
-              | Some proj ->
-                  Expect.equal proj.Version 2L "Version should be 2 after first event"
+              | Some proj -> Expect.equal proj.Version 1L "Version should be 1 after first event"
               | None -> failwith "Expected Some projection"
           } ]
