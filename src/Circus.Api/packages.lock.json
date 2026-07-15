@@ -14,11 +14,6 @@
           "Microsoft.IO.RecyclableMemoryStream": "3.0.1"
         }
       },
-      "FSharp.Core": {
-        "type": "Transitive",
-        "resolved": "6.0.0",
-        "contentHash": "fbv1UwJ2LXVcFCt+GGDPu0sIYA5C6gdDvAupDj3iLQF3clRkua/6J33f+FiGQa8P1tEa+zmz3wrjoTnXZ1UiYg=="
-      },
       "FSharp.SystemTextJson": {
         "type": "Transitive",
         "resolved": "1.3.13",
@@ -41,7 +36,16 @@
         "contentHash": "s/s20YTVY9r9TPfTrN5g8zPF1YhwxyqO6PxUkrYTGI2B+OGPe9AdajWZrLhFqXIvqIW23fnUE4+ztrUWNU1+9g=="
       },
       "circus.domain": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "FSharp.Core": "[7.0.200, )"
+        }
+      },
+      "FSharp.Core": {
+        "type": "CentralTransitive",
+        "requested": "[7.0.200, )",
+        "resolved": "7.0.200",
+        "contentHash": "NmgUnpNH6Zu9B0SPIhojyo38gnPdkdYFYQfbd6zosEH32kbGY/g/Klk7PfOWe1NAe/O1YOMmK9KhwQ2OWsWEbg=="
       }
     }
   }

@@ -3,11 +3,11 @@
     <RootNamespace>Circus.Contracts.Tests</RootNamespace>
     <OutputType>Exe</OutputType>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="Support/Fixtures.fs" />
-    <Compile Include="AssemblyResolver.fs" />
     <Compile Include="EnvelopeContractTests.fs" />
     <Compile Include="StartedEventContractTests.fs" />
     <Compile Include="FinishedEventContractTests.fs" />
@@ -17,15 +17,21 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
     <PackageReference Include="Expecto" />
-    </ItemGroup>
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Circus.Contracts\Circus.Contracts.fsproj" />
     <ProjectReference Include="..\..\src\Circus.Domain\Circus.Domain.fsproj" />
   </ItemGroup>
 
+  <!-- Copy fixtures to output directory for runtime access -->
   <ItemGroup>
-    <EmbeddedResource Include="..\..\..\fixtures\events\**\*.json" />
+    <Content Include="..\fixtures\events\**\*.json">
+      <Link>fixtures/events/%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
+
 </Project>

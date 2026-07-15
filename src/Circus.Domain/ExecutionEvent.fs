@@ -29,11 +29,9 @@ module ExecutionOutcome =
 
 /// Counts of verification checks performed during an execution.
 type CheckCounts =
-    {
-        Passed: int
-        Failed: int
-        Skipped: int
-    }
+    { Passed: int
+      Failed: int
+      Skipped: int }
 
 module CheckCounts =
     /// Construct a CheckCounts record from raw integers after validating
@@ -53,34 +51,28 @@ module CheckCounts =
 
 /// Payload of an `io.leamas.execution.started.v1` event.
 type ExecutionStarted =
-    {
-        RunId: RunId
-        Repository: RepositoryRef
-        ActId: ActId option
-        LeamasVersion: LeamasVersion
-        GitRevision: string option
-        StartedBy: string option
-    }
+    { RunId: RunId
+      Repository: RepositoryRef
+      ActId: ActId option
+      LeamasVersion: LeamasVersion
+      GitRevision: string option
+      StartedBy: string option }
 
 /// Payload of an `io.leamas.execution.finished.v1` event.
 type ExecutionFinished =
-    {
-        RunId: RunId
-        Outcome: ExecutionOutcome
-        DurationMilliseconds: int64
-        Summary: string option
-        Checks: CheckCounts
-    }
+    { RunId: RunId
+      Outcome: ExecutionOutcome
+      DurationMilliseconds: int64
+      Summary: string option
+      Checks: CheckCounts }
 
 /// A structurally valid envelope whose `type` is not recognised by the
 /// current Circus contract. The original event type and raw `data` payload
 /// are preserved so future contract versions can promote the event without
 /// losing information.
 type UnrecognizedExecutionEvent =
-    {
-        EventType: string
-        Data: RawJson option
-    }
+    { EventType: string
+      Data: RawJson option }
 
 /// The three shape variants the Circus contract can produce from a
 /// validated envelope.

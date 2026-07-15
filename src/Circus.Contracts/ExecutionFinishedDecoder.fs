@@ -10,14 +10,29 @@ module internal FinishedPayload =
     /// Lower-case canonical names and the recognised event-type string for
     /// the `io.leamas.execution.finished.v1` payload.
     module internal FieldNames =
-        let [<Literal>] EventType = "io.leamas.execution.finished.v1"
-        let [<Literal>] Outcome = "outcome"
-        let [<Literal>] DurationMs = "duration_ms"
-        let [<Literal>] Summary = "summary"
-        let [<Literal>] Checks = "checks"
-        let [<Literal>] Passed = "passed"
-        let [<Literal>] Failed = "failed"
-        let [<Literal>] Skipped = "skipped"
+        [<Literal>]
+        let EventType = "io.leamas.execution.finished.v1"
+
+        [<Literal>]
+        let Outcome = "outcome"
+
+        [<Literal>]
+        let DurationMs = "duration_ms"
+
+        [<Literal>]
+        let Summary = "summary"
+
+        [<Literal>]
+        let Checks = "checks"
+
+        [<Literal>]
+        let Passed = "passed"
+
+        [<Literal>]
+        let Failed = "failed"
+
+        [<Literal>]
+        let Skipped = "skipped"
 
     /// Wire-format limits for the finished payload fields.
     module internal Limits =
@@ -29,7 +44,7 @@ module internal FinishedPayload =
         let mutable el = Unchecked.defaultof<JsonElement>
 
         match root.TryGetProperty(FieldNames.Outcome, &el) with
-        | false -> Error(NonEmptyList.singleton(PayloadMissingField FieldNames.Outcome))
+        | false -> Error(NonEmptyList.singleton (PayloadMissingField FieldNames.Outcome))
         | true ->
             match el.ValueKind with
             | JsonValueKind.String ->
@@ -39,14 +54,14 @@ module internal FinishedPayload =
                 | Some v -> Ok v
                 | None ->
                     Error(
-                        NonEmptyList.singleton(
+                        NonEmptyList.singleton (
                             PayloadInvalidFieldValue(
                                 FieldNames.Outcome,
                                 "must be one of: succeeded, failed, cancelled, timed_out"
                             )
                         )
                     )
-            | _ -> Error(NonEmptyList.singleton(PayloadInvalidFieldType(FieldNames.Outcome, "string")))
+            | _ -> Error(NonEmptyList.singleton (PayloadInvalidFieldType(FieldNames.Outcome, "string")))
 
     /// Decode the `duration_ms` field as a 64-bit integer in
     /// `0..Primitives.DurationMaxMilliseconds`.
@@ -54,7 +69,7 @@ module internal FinishedPayload =
         let mutable el = Unchecked.defaultof<JsonElement>
 
         match root.TryGetProperty(FieldNames.DurationMs, &el) with
-        | false -> Error(NonEmptyList.singleton(PayloadMissingField FieldNames.DurationMs))
+        | false -> Error(NonEmptyList.singleton (PayloadMissingField FieldNames.DurationMs))
         | true ->
             match el.ValueKind with
             | JsonValueKind.Number ->
@@ -62,14 +77,10 @@ module internal FinishedPayload =
 
                 if el.TryGetInt64(&value) then
                     if value < 0L then
-                        Error(
-                            NonEmptyList.singleton(
-                                PayloadInvalidFieldValue(FieldNames.DurationMs, "must be >= 0")
-                            )
-                        )
+                        Error(NonEmptyList.singleton (PayloadInvalidFieldValue(FieldNames.DurationMs, "must be >= 0")))
                     elif value > Primitives.DurationMaxMilliseconds then
                         Error(
-                            NonEmptyList.singleton(
+                            NonEmptyList.singleton (
                                 PayloadInvalidFieldValue(
                                     FieldNames.DurationMs,
                                     sprintf "must not exceed %d (one week in ms)" Primitives.DurationMaxMilliseconds
@@ -79,15 +90,8 @@ module internal FinishedPayload =
                     else
                         Ok value
                 else
-                    Error(
-                        NonEmptyList.singleton(
-                            PayloadInvalidFieldValue(FieldNames.DurationMs, "must fit in Int64")
-                        )
-                    )
-            | _ ->
-                Error(
-                    NonEmptyList.singleton(PayloadInvalidFieldType(FieldNames.DurationMs, "integer"))
-                )
+                    Error(NonEmptyList.singleton (PayloadInvalidFieldValue(FieldNames.DurationMs, "must fit in Int64")))
+            | _ -> Error(NonEmptyList.singleton (PayloadInvalidFieldType(FieldNames.DurationMs, "integer")))
 
     /// Decode the optional `summary` string field. Empty strings, null,
     /// and over-length values are validated as typed violations.
@@ -104,7 +108,7 @@ module internal FinishedPayload =
 
                 if text.Length > Primitives.SummaryMaxLength then
                     Error(
-                        NonEmptyList.singleton(
+                        NonEmptyList.singleton (
                             PayloadInvalidFieldValue(
                                 FieldNames.Summary,
                                 sprintf "must not exceed %d characters" Primitives.SummaryMaxLength
@@ -113,7 +117,7 @@ module internal FinishedPayload =
                     )
                 else
                     Ok(Some text)
-            | _ -> Error(NonEmptyList.singleton(PayloadInvalidFieldType(FieldNames.Summary, "string or null")))
+            | _ -> Error(NonEmptyList.singleton (PayloadInvalidFieldType(FieldNames.Summary, "string or null")))
 
     /// Decode one `checks.{passed,failed,skipped}` counter.
     let private readCheckCount (label: string) (el: JsonElement) : PayloadResult<int> =
@@ -124,15 +128,15 @@ module internal FinishedPayload =
             if el.TryGetInt32(&value) then
                 if value < 0 || value > Limits.ChecksMaxCount then
                     Error(
-                        NonEmptyList.singleton(
+                        NonEmptyList.singleton (
                             PayloadInvalidFieldValue(label, sprintf "must be 0..%d" Limits.ChecksMaxCount)
                         )
                     )
                 else
                     Ok value
             else
-                Error(NonEmptyList.singleton(PayloadInvalidFieldValue(label, "must fit in Int32")))
-        | _ -> Error(NonEmptyList.singleton(PayloadInvalidFieldType(label, "integer")))
+                Error(NonEmptyList.singleton (PayloadInvalidFieldValue(label, "must fit in Int32")))
+        | _ -> Error(NonEmptyList.singleton (PayloadInvalidFieldType(label, "integer")))
 
     /// Decode the `checks` object independently for each counter:
     /// `passed`, `failed`, `skipped`. Missing counters yield
@@ -143,7 +147,7 @@ module internal FinishedPayload =
         let mutable el = Unchecked.defaultof<JsonElement>
 
         match root.TryGetProperty(FieldNames.Checks, &el) with
-        | false -> Error(NonEmptyList.singleton(PayloadMissingField FieldNames.Checks))
+        | false -> Error(NonEmptyList.singleton (PayloadMissingField FieldNames.Checks))
         | true ->
             match el.ValueKind with
             | JsonValueKind.Object ->
@@ -156,14 +160,12 @@ module internal FinishedPayload =
                 let hasSkipped = el.TryGetProperty(FieldNames.Skipped, &sEl)
 
                 let missingViolations =
-                    [
-                        if not hasPassed then
-                            yield PayloadMissingField FieldNames.Passed
-                        if not hasFailed then
-                            yield PayloadMissingField FieldNames.Failed
-                        if not hasSkipped then
-                            yield PayloadMissingField FieldNames.Skipped
-                    ]
+                    [ if not hasPassed then
+                          yield PayloadMissingField FieldNames.Passed
+                      if not hasFailed then
+                          yield PayloadMissingField FieldNames.Failed
+                      if not hasSkipped then
+                          yield PayloadMissingField FieldNames.Skipped ]
 
                 let validateCounter (label: string) (countEl: JsonElement) : PayloadViolation list =
                     match readCheckCount label countEl with
@@ -192,10 +194,7 @@ module internal FinishedPayload =
                         { Passed = getCount FieldNames.Passed pEl
                           Failed = getCount FieldNames.Failed fEl
                           Skipped = getCount FieldNames.Skipped sEl }
-            | _ ->
-                Error(
-                    NonEmptyList.singleton(PayloadInvalidFieldType(FieldNames.Checks, "object"))
-                )
+            | _ -> Error(NonEmptyList.singleton (PayloadInvalidFieldType(FieldNames.Checks, "object")))
 
     /// Decode an `ExecutionFinished` payload. Independent validation
     /// failures are accumulated.
@@ -205,7 +204,7 @@ module internal FinishedPayload =
         let summaryRes = readSummary data
         let checksRes = readChecks data
 
-        let mutable errors : PayloadViolation list = []
+        let mutable errors: PayloadViolation list = []
 
         let collect (r: PayloadResult<'v>) =
             match r with
@@ -219,11 +218,7 @@ module internal FinishedPayload =
 
         match errors with
         | first :: rest ->
-            Error(
-                NonEmptyList.singleton(
-                    InvalidKnownPayload(FieldNames.EventType, NonEmptyList.cons first rest)
-                )
-            )
+            Error(NonEmptyList.singleton (InvalidKnownPayload(FieldNames.EventType, NonEmptyList.cons first rest)))
         | [] ->
             let unwrap (label: string) (r: PayloadResult<'v>) : 'v =
                 match r with

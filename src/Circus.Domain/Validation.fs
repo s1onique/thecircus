@@ -10,9 +10,7 @@ type NonEmptyList<'value> =
 
 module NonEmptyList =
     /// Construct a non-empty list from a single value.
-    let singleton (value: 'value) : NonEmptyList<'value> =
-        { Head = value
-          Tail = [] }
+    let singleton (value: 'value) : NonEmptyList<'value> = { Head = value; Tail = [] }
 
     /// Lift an optional value into a non-empty list, returning None when
     /// there is no value.
@@ -26,9 +24,7 @@ module NonEmptyList =
 
     /// Construct a non-empty list from a head element and a tail list.
     /// The tail list may be empty; the resulting structure is always non-empty.
-    let cons (head: 'value) (tail: 'value list) : NonEmptyList<'value> =
-        { Head = head
-          Tail = tail }
+    let cons (head: 'value) (tail: 'value list) : NonEmptyList<'value> = { Head = head; Tail = tail }
 
     /// Concatenate two non-empty lists, preserving all values.
     let concat (a: NonEmptyList<'value>) (b: NonEmptyList<'value>) : NonEmptyList<'value> =
@@ -38,10 +34,7 @@ module NonEmptyList =
     /// Combine two optional non-empty lists. Concatenates when both are
     /// present; returns whichever side is present when only one is. Used
     /// when accumulating independent validation failures.
-    let combine
-        (a: NonEmptyList<'value> option)
-        (b: NonEmptyList<'value> option)
-        : NonEmptyList<'value> option =
+    let combine (a: NonEmptyList<'value> option) (b: NonEmptyList<'value> option) : NonEmptyList<'value> option =
         match a, b with
         | Some a', Some b' -> Some(concat a' b')
         | Some a', None -> Some a'

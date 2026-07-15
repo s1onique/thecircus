@@ -13,7 +13,6 @@ let private maxBytes = EventDecoder.DefaultMaximumBytes
 
 /// Local wrapper that anchors `test` to a single function value,
 /// avoiding the FS0003 cascade on F#'s `test` overload set.
-
 /// 1. The invalid-fixture corpus does not throw for any committed file.
 let testInvalidFixturesDoNotThrow () =
     let invalidPaths =
@@ -25,15 +24,16 @@ let testInvalidFixturesDoNotThrow () =
 
     let results =
         invalidPaths
-        |> List.map (fun path ->
-            let fileName = System.IO.Path.GetFileName path
+        |> List.map (fun relativePath ->
             try
-                let bytes = Fixtures.bytes fileName
+                let bytes = Fixtures.bytes relativePath
                 let outcome = EventDecoder.decode maxBytes bytes
+
                 match outcome with
-                | Ok _ -> sprintf "%s: returned Ok for invalid fixture" fileName
-                | Error _ -> sprintf "%s: rejected as expected" fileName
-            with ex -> sprintf "%s: THREW %s" fileName ex.Message)
+                | Ok _ -> sprintf "%s: returned Ok for invalid fixture" (System.IO.Path.GetFileName relativePath)
+                | Error _ -> sprintf "%s: rejected as expected" (System.IO.Path.GetFileName relativePath)
+            with ex ->
+                sprintf "%s: THREW %s" (System.IO.Path.GetFileName relativePath) ex.Message)
 
     let unexpected =
         results
@@ -49,9 +49,12 @@ let testDiagnosticsDoNotEchoBody () =
     let hugeText = oversized + String.init 4096 (fun _ -> "a")
     let hugeBytes = Encoding.UTF8.GetBytes hugeText
     let result = EventDecoder.decode 64 hugeBytes
+
     match result with
     | Error errs ->
-        let text = errs |> NonEmptyList.toList |> List.map (sprintf "%A") |> String.concat "; "
+        let text =
+            errs |> NonEmptyList.toList |> List.map (sprintf "%A") |> String.concat "; "
+
         Expect.isFalse (text.Contains("repository_ref")) "no field values leaked into the diagnostic"
         Expect.isFalse (text.Contains("k9b")) "no body literal leaked"
     | Ok _ -> failtest "expected BodyTooLarge"
@@ -61,22 +64,35 @@ let testMalformedDiagnosticsBounded () =
     let malicious = "{ this is not json " + String.init 4000 (fun _ -> "AAA")
     let bytes = Encoding.UTF8.GetBytes malicious
     let result = EventDecoder.decode 262144 bytes
+
     match result with
     | Error errs ->
-        let violation = NonEmptyList.toList errs |> List.tryPick (function
-            | MalformedJson m -> Some m
-            | _ -> None)
+        let violation =
+            NonEmptyList.toList errs
+            |> List.tryPick (function
+                | MalformedJson m -> Some m
+                | _ -> None)
+
         match violation with
         | Some msg ->
-            Expect.isLessThanOrEqual msg.Length Limits.MalformedJsonMessageLimit "diagnostic bounded by the documented limit"
+            Expect.isLessThanOrEqual
+                msg.Length
+                Limits.MalformedJsonMessageLimit
+                "diagnostic bounded by the documented limit"
         | None -> failtest "expected MalformedJson"
     | Ok _ -> failtest "malformed JSON must reject"
 
 /// 4. The decoder does not retain borrowed references to disposed `JsonDocument`s.
 let testDecoderDoesNotRetainDisposedDocuments () =
-    let firstDecode = EventDecoder.decode maxBytes (Fixtures.bytes "valid/unknown-event.json")
-    let secondDecode = EventDecoder.decode maxBytes (Fixtures.bytes "valid/unknown-extension.json")
-    let thirdDecode = EventDecoder.decode maxBytes (Fixtures.bytes "valid/properties-reordered.json")
+    let firstDecode =
+        EventDecoder.decode maxBytes (Fixtures.bytes "valid/unknown-event.json")
+
+    let secondDecode =
+        EventDecoder.decode maxBytes (Fixtures.bytes "valid/unknown-extension.json")
+
+    let thirdDecode =
+        EventDecoder.decode maxBytes (Fixtures.bytes "valid/properties-reordered.json")
+
     Expect.isTrue
         (match firstDecode, secondDecode, thirdDecode with
          | Ok a, Ok b, Ok c ->
@@ -85,6 +101,7 @@ let testDecoderDoesNotRetainDisposedDocuments () =
              && (EventId.value c.EventId).Length > 0
          | _ -> false)
         "decoded values remain valid through subsequent decodes"
+
     Expect.isTrue
         (match firstDecode, secondDecode, thirdDecode with
          | Ok a, Ok b, Ok c -> a.Subject <> b.Subject && b.Subject <> c.Subject
@@ -92,9 +109,9 @@ let testDecoderDoesNotRetainDisposedDocuments () =
         "subjects isolated across decodes"
 
 let bundle =
-    testList "Safety" [
-        testCase "invalid fixture corpus does not throw" testInvalidFixturesDoNotThrow
-        testCase "diagnostics do not echo full body" testDiagnosticsDoNotEchoBody
-        testCase "malformed diagnostics are bounded" testMalformedDiagnosticsBounded
-        testCase "decoder does not retain disposed documents" testDecoderDoesNotRetainDisposedDocuments
-    ]
+    testList
+        "Safety"
+        [ testCase "invalid fixture corpus does not throw" testInvalidFixturesDoNotThrow
+          testCase "diagnostics do not echo full body" testDiagnosticsDoNotEchoBody
+          testCase "malformed diagnostics are bounded" testMalformedDiagnosticsBounded
+          testCase "decoder does not retain disposed documents" testDecoderDoesNotRetainDisposedDocuments ]

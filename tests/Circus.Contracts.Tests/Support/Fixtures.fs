@@ -5,29 +5,17 @@ open System.IO
 open System.Text
 open Circus.Domain
 
-/// Embedded-resource helpers for loading the human-reviewed JSON fixtures
-/// committed to `tests/fixtures/events/`.
+/// Helpers for loading human-reviewed JSON fixtures copied beside the test executable.
 module Fixtures =
-    /// Resolve the absolute filesystem path of `tests/fixtures/events/`
-    /// by walking up from the test assembly's directory until the repo
-    /// root is identified. The resolver is purely filesystem-based so the
-    /// suite never depends on the developer's machine-specific layout.
-    let eventsDirectory () : string =
-        let candidates =
-            [
-                Path.Combine(AppContext.BaseDirectory, "fixtures", "events")
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "fixtures", "events")
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "fixtures", "events")
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "fixtures", "events")
-            ]
+    /// Resolve the fixtures directory relative to the assembly output path.
+    /// Uses Path.GetFullPath to normalize the path across platforms.
+    let private fixturesRoot () : string =
+        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "fixtures", "events"))
 
-        candidates
-        |> List.tryFind (fun p -> Directory.Exists p)
-        |> Option.defaultValue (List.head candidates)
-
-    /// Load `relativePath` (relative to `eventsDirectory`) as UTF-8 text.
+    /// Load `relativePath` (relative to `fixturesRoot`) as UTF-8 text.
+    /// All consumers pass paths relative to the `fixtures/events/` directory.
     let readFixture (relativePath: string) : string =
-        let full = Path.Combine(eventsDirectory (), relativePath)
+        let full = Path.Combine(fixturesRoot (), relativePath)
         File.ReadAllText(full, Encoding.UTF8)
 
     /// Wrap the UTF-8 bytes of a fixture as a `ReadOnlyMemory<byte>`
@@ -42,26 +30,32 @@ module Fixtures =
     let inlineBytes (text: string) : ReadOnlyMemory<byte> =
         ReadOnlyMemory(Encoding.UTF8.GetBytes text)
 
-    /// List of all committed fixture paths grouped by category.
-    let allValid () =
-        Directory.GetFiles(Path.Combine(eventsDirectory (), "valid"), "*.json")
-        |> Array.toList
+    /// List all files under the given subdirectory relative to fixturesRoot.
+    let private listUnder (relativeDir: string) : string list =
+        let root = fixturesRoot ()
+        let dir = Path.Combine(root, relativeDir)
 
-    let allInvalidEnvelope () =
-        Directory.GetFiles(Path.Combine(eventsDirectory (), "invalid-envelope"), "*.json")
-        |> Array.toList
+        if Directory.Exists dir then
+            Directory.GetFiles(dir, "*.json")
+            |> Array.map (fun fullPath -> Path.GetRelativePath(root, fullPath))
+            |> Array.toList
+        else
+            []
 
-    let allInvalidStarted () =
-        Directory.GetFiles(Path.Combine(eventsDirectory (), "invalid-started"), "*.json")
-        |> Array.toList
+    /// List of all valid fixture filenames (relative to fixturesRoot).
+    let allValid () = listUnder "valid"
 
-    let allInvalidFinished () =
-        Directory.GetFiles(Path.Combine(eventsDirectory (), "invalid-finished"), "*.json")
-        |> Array.toList
+    /// List of all invalid-envelope fixture filenames (relative to fixturesRoot).
+    let allInvalidEnvelope () = listUnder "invalid-envelope"
 
-    let allUnknown () =
-        Directory.GetFiles(Path.Combine(eventsDirectory (), "unknown"), "*.json")
-        |> Array.toList
+    /// List of all invalid-started fixture filenames (relative to fixturesRoot).
+    let allInvalidStarted () = listUnder "invalid-started"
+
+    /// List of all invalid-finished fixture filenames (relative to fixturesRoot).
+    let allInvalidFinished () = listUnder "invalid-finished"
+
+    /// List of all unknown-event fixture filenames (relative to fixturesRoot).
+    let allUnknown () = listUnder "unknown"
 
 /// Helpers for asserting against the contract violation union without
 /// scattering match expressions across the test modules.
@@ -79,7 +73,7 @@ module Assertions =
     let payloadViolations (violations: ContractViolation list) : PayloadViolation list =
         violations
         |> List.choose (function
-            | InvalidKnownPayload (_, n) -> Some(NonEmptyList.toList n)
+            | InvalidKnownPayload(_, n) -> Some(NonEmptyList.toList n)
             | _ -> None)
         |> List.concat
 

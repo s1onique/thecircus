@@ -10,12 +10,23 @@ module internal StartedPayload =
     /// Lower-case canonical names and the recognised event-type string for
     /// the `io.leamas.execution.started.v1` payload.
     module internal FieldNames =
-        let [<Literal>] EventType = "io.leamas.execution.started.v1"
-        let [<Literal>] RepositoryRef = "repository_ref"
-        let [<Literal>] ActId = "act_id"
-        let [<Literal>] LeamasVersion = "leamas_version"
-        let [<Literal>] GitRevision = "git_revision"
-        let [<Literal>] StartedBy = "started_by"
+        [<Literal>]
+        let EventType = "io.leamas.execution.started.v1"
+
+        [<Literal>]
+        let RepositoryRef = "repository_ref"
+
+        [<Literal>]
+        let ActId = "act_id"
+
+        [<Literal>]
+        let LeamasVersion = "leamas_version"
+
+        [<Literal>]
+        let GitRevision = "git_revision"
+
+        [<Literal>]
+        let StartedBy = "started_by"
 
     /// Wire-format limits for the optional payload fields.
     module internal Limits =
@@ -25,11 +36,7 @@ module internal StartedPayload =
     /// Read an optional string payload field. Returns `Ok None` when the
     /// field is absent or explicitly null; returns an `Error` containing
     /// `PayloadViolation`s when the field is present but empty or too long.
-    let private readOptionalText
-        (name: string)
-        (maxLength: int)
-        (root: JsonElement)
-        : PayloadResult<string option> =
+    let private readOptionalText (name: string) (maxLength: int) (root: JsonElement) : PayloadResult<string option> =
         let mutable el = Unchecked.defaultof<JsonElement>
 
         match root.TryGetProperty(name, &el) with
@@ -41,16 +48,16 @@ module internal StartedPayload =
                 let text = el.GetString()
 
                 if String.IsNullOrEmpty text then
-                    Error(NonEmptyList.singleton(PayloadInvalidFieldValue(name, "must not be empty when present")))
+                    Error(NonEmptyList.singleton (PayloadInvalidFieldValue(name, "must not be empty when present")))
                 elif text.Length > maxLength then
                     Error(
-                        NonEmptyList.singleton(
+                        NonEmptyList.singleton (
                             PayloadInvalidFieldValue(name, sprintf "must not exceed %d characters" maxLength)
                         )
                     )
                 else
                     Ok(Some text)
-            | _ -> Error(NonEmptyList.singleton(PayloadInvalidFieldType(name, "string or null")))
+            | _ -> Error(NonEmptyList.singleton (PayloadInvalidFieldType(name, "string or null")))
 
     /// Read a required string payload field within the documented length
     /// bounds. Empty or missing values yield `PayloadMissingField` /
@@ -64,26 +71,23 @@ module internal StartedPayload =
         let mutable el = Unchecked.defaultof<JsonElement>
 
         match root.TryGetProperty(name, &el) with
-        | false -> Error(NonEmptyList.singleton(PayloadMissingField name))
+        | false -> Error(NonEmptyList.singleton (PayloadMissingField name))
         | true ->
             match el.ValueKind with
             | JsonValueKind.String ->
                 let text = el.GetString()
 
                 if String.IsNullOrEmpty text then
-                    Error(NonEmptyList.singleton(PayloadInvalidFieldValue(name, "must not be empty")))
+                    Error(NonEmptyList.singleton (PayloadInvalidFieldValue(name, "must not be empty")))
                 elif text.Length < minLength || text.Length > maxLength then
                     Error(
-                        NonEmptyList.singleton(
-                            PayloadInvalidFieldValue(
-                                name,
-                                sprintf "length must be %d..%d" minLength maxLength
-                            )
+                        NonEmptyList.singleton (
+                            PayloadInvalidFieldValue(name, sprintf "length must be %d..%d" minLength maxLength)
                         )
                     )
                 else
                     Ok text
-            | _ -> Error(NonEmptyList.singleton(PayloadInvalidFieldType(name, "string")))
+            | _ -> Error(NonEmptyList.singleton (PayloadInvalidFieldType(name, "string")))
 
     /// Decode an `ExecutionStarted` payload from the envelope's `data`
     /// object. All five fields are read independently; any
@@ -93,16 +97,17 @@ module internal StartedPayload =
         let repoRes =
             readRequiredText FieldNames.RepositoryRef RepositoryRef.minLength RepositoryRef.maxLength data
 
-        let actIdRes =
-            readOptionalText FieldNames.ActId ActId.maxLength data
+        let actIdRes = readOptionalText FieldNames.ActId ActId.maxLength data
 
         let leamasRes =
             readRequiredText FieldNames.LeamasVersion LeamasVersion.minLength LeamasVersion.maxLength data
 
-        let gitRes = readOptionalText FieldNames.GitRevision Limits.GitRevisionMaxLength data
+        let gitRes =
+            readOptionalText FieldNames.GitRevision Limits.GitRevisionMaxLength data
+
         let byRes = readOptionalText FieldNames.StartedBy Limits.StartedByMaxLength data
 
-        let mutable errors : PayloadViolation list = []
+        let mutable errors: PayloadViolation list = []
 
         let collect (r: PayloadResult<'v>) =
             match r with
@@ -117,11 +122,7 @@ module internal StartedPayload =
 
         match errors with
         | first :: rest ->
-            Error(
-                NonEmptyList.singleton(
-                    InvalidKnownPayload(FieldNames.EventType, NonEmptyList.cons first rest)
-                )
-            )
+            Error(NonEmptyList.singleton (InvalidKnownPayload(FieldNames.EventType, NonEmptyList.cons first rest)))
         | [] ->
             let unwrap (label: string) (r: PayloadResult<'v>) : 'v =
                 match r with
@@ -131,14 +132,12 @@ module internal StartedPayload =
             let make =
                 { RunId = runId
                   Repository =
-                    match RepositoryRef.tryCreate(unwrap FieldNames.RepositoryRef repoRes) with
+                    match RepositoryRef.tryCreate (unwrap FieldNames.RepositoryRef repoRes) with
                     | Some v -> v
                     | None -> failwithf "invariant: repository_ref validated"
-                  ActId =
-                    unwrap FieldNames.ActId actIdRes
-                    |> Option.bind ActId.tryCreate
+                  ActId = unwrap FieldNames.ActId actIdRes |> Option.bind ActId.tryCreate
                   LeamasVersion =
-                    match LeamasVersion.tryCreate(unwrap FieldNames.LeamasVersion leamasRes) with
+                    match LeamasVersion.tryCreate (unwrap FieldNames.LeamasVersion leamasRes) with
                     | Some v -> v
                     | None -> failwithf "invariant: leamas_version validated"
                   GitRevision = unwrap FieldNames.GitRevision gitRes

@@ -17,7 +17,9 @@ let private decodeOk relativePath : ExecutionFinished =
         | ExecutionFinishedEvent finished -> finished
         | other -> failwithf "expected ExecutionFinishedEvent, got %A" other
     | Error errs ->
-        let msg = errs |> NonEmptyList.toList |> List.map (sprintf "%A") |> String.concat "; "
+        let msg =
+            errs |> NonEmptyList.toList |> List.map (sprintf "%A") |> String.concat "; "
+
         failwithf "expected Ok finished event, got errors: %s" msg
 
 /// 1. Each recognised outcome decodes with the canonical wire form preserved.
@@ -41,14 +43,15 @@ let testCancelledAndTimedOutOutcomes () =
 
     let bytesFor (s: string) = System.Text.Encoding.UTF8.GetBytes s
 
-    let cancelledEnv = buildEnvelope "019b0437-1ef2-7abc-a38d-23472513f520" "cancelled" 0
-    let timedOutEnv = buildEnvelope "019b0437-1ef2-7abc-a38d-23472513f521" "timed_out" 604800000
+    let cancelledEnv =
+        buildEnvelope "019b0437-1ef2-7abc-a38d-23472513f520" "cancelled" 0
 
-    let cancelled =
-        EventDecoder.decode maxBytes (bytesFor cancelledEnv)
+    let timedOutEnv =
+        buildEnvelope "019b0437-1ef2-7abc-a38d-23472513f521" "timed_out" 604800000
 
-    let timedOut =
-        EventDecoder.decode maxBytes (bytesFor timedOutEnv)
+    let cancelled = EventDecoder.decode maxBytes (bytesFor cancelledEnv)
+
+    let timedOut = EventDecoder.decode maxBytes (bytesFor timedOutEnv)
 
     let extractOutcome (r: ValidationResult<ValidatedEvent>) =
         match r with
@@ -63,14 +66,20 @@ let testCancelledAndTimedOutOutcomes () =
 
 /// 3. Unknown outcome strings are rejected.
 let testUnknownOutcomeRejected () =
-    let result = EventDecoder.decode maxBytes (Fixtures.bytes "invalid-finished/finished-unknown-outcome.json")
+    let result =
+        EventDecoder.decode maxBytes (Fixtures.bytes "invalid-finished/finished-unknown-outcome.json")
+
     let violations = Assertions.contractViolations result
     Expect.isTrue (Assertions.hasInvalidKnownPayload violations) "InvalidKnownPayload present"
     let payloadErrs = Assertions.payloadViolations violations
-    Expect.equal (payloadErrs
+
+    Expect.equal
+        (payloadErrs
          |> List.exists (function
-             | PayloadInvalidFieldValue (n, _) when n = "outcome" -> true
-             | _ -> false)) true "PayloadInvalidFieldValue on outcome"
+             | PayloadInvalidFieldValue(n, _) when n = "outcome" -> true
+             | _ -> false))
+        true
+        "PayloadInvalidFieldValue on outcome"
 
 /// 4. Zero duration is valid.
 let testZeroDurationValid () =
@@ -84,34 +93,57 @@ let testMaximumDurationValid () =
 
 /// 6. Excessive duration is rejected.
 let testExcessiveDurationRejected () =
-    let bogus = """{"specversion":"1.0","id":"019b0437-2766-7a20-9225-4ab1645ba141","source":"urn:leamas:instance:builder-07","type":"io.leamas.execution.finished.v1","subject":"run/019b0437-1ef2-7abc-a38d-23472513f521","time":"2026-07-12T20:00:00Z","datacontenttype":"application/json","circusinstance":"builder-07","circusepoch":"019b0400-2f61-720d-94a5-c84e928eae19","circusseq":556,"runid":"019b0437-1ef2-7abc-a38d-23472513f521","data":{"outcome":"succeeded","duration_ms":604800001,"checks":{"passed":0,"failed":0,"skipped":0}}}"""
+    let bogus =
+        """{"specversion":"1.0","id":"019b0437-2766-7a20-9225-4ab1645ba141","source":"urn:leamas:instance:builder-07","type":"io.leamas.execution.finished.v1","subject":"run/019b0437-1ef2-7abc-a38d-23472513f521","time":"2026-07-12T20:00:00Z","datacontenttype":"application/json","circusinstance":"builder-07","circusepoch":"019b0400-2f61-720d-94a5-c84e928eae19","circusseq":556,"runid":"019b0437-1ef2-7abc-a38d-23472513f521","data":{"outcome":"succeeded","duration_ms":604800001,"checks":{"passed":0,"failed":0,"skipped":0}}}"""
+
     let bytes = System.Text.Encoding.UTF8.GetBytes bogus
     let result = EventDecoder.decode maxBytes bytes
-    let payloadErrs = Assertions.payloadViolations (Assertions.contractViolations result)
-    Expect.equal (payloadErrs
+
+    let payloadErrs =
+        Assertions.payloadViolations (Assertions.contractViolations result)
+
+    Expect.equal
+        (payloadErrs
          |> List.exists (function
-             | PayloadInvalidFieldValue (n, _) when n = "duration_ms" -> true
-             | _ -> false)) true "excessive duration rejected"
+             | PayloadInvalidFieldValue(n, _) when n = "duration_ms" -> true
+             | _ -> false))
+        true
+        "excessive duration rejected"
 
 /// 7. Negative counts are rejected.
 let testNegativeCountsRejected () =
-    let bogus = """{"specversion":"1.0","id":"019b0437-2766-7a20-9225-4ab1645ba142","source":"urn:leamas:instance:builder-07","type":"io.leamas.execution.finished.v1","subject":"run/019b0437-1ef2-7abc-a38d-23472513f522","time":"2026-07-12T20:00:00Z","datacontenttype":"application/json","circusinstance":"builder-07","circusepoch":"019b0400-2f61-720d-94a5-c84e928eae19","circusseq":557,"runid":"019b0437-1ef2-7abc-a38d-23472513f522","data":{"outcome":"succeeded","duration_ms":1000,"checks":{"passed":-1,"failed":0,"skipped":0}}}"""
+    let bogus =
+        """{"specversion":"1.0","id":"019b0437-2766-7a20-9225-4ab1645ba142","source":"urn:leamas:instance:builder-07","type":"io.leamas.execution.finished.v1","subject":"run/019b0437-1ef2-7abc-a38d-23472513f522","time":"2026-07-12T20:00:00Z","datacontenttype":"application/json","circusinstance":"builder-07","circusepoch":"019b0400-2f61-720d-94a5-c84e928eae19","circusseq":557,"runid":"019b0437-1ef2-7abc-a38d-23472513f522","data":{"outcome":"succeeded","duration_ms":1000,"checks":{"passed":-1,"failed":0,"skipped":0}}}"""
+
     let bytes = System.Text.Encoding.UTF8.GetBytes bogus
     let result = EventDecoder.decode maxBytes bytes
-    let payloadErrs = Assertions.payloadViolations (Assertions.contractViolations result)
-    Expect.equal (payloadErrs
+
+    let payloadErrs =
+        Assertions.payloadViolations (Assertions.contractViolations result)
+
+    Expect.equal
+        (payloadErrs
          |> List.exists (function
-             | PayloadInvalidFieldValue (n, _) when n = "passed" -> true
-             | _ -> false)) true "negative count rejected"
+             | PayloadInvalidFieldValue(n, _) when n = "passed" -> true
+             | _ -> false))
+        true
+        "negative count rejected"
 
 /// 8. Excessive counts (>1_000_000) are rejected.
 let testExcessiveCountsRejected () =
-    let result = EventDecoder.decode maxBytes (Fixtures.bytes "invalid-finished/finished-invalid-check-counts.json")
-    let payloadErrs = Assertions.payloadViolations (Assertions.contractViolations result)
-    Expect.equal (payloadErrs
+    let result =
+        EventDecoder.decode maxBytes (Fixtures.bytes "invalid-finished/finished-invalid-check-counts.json")
+
+    let payloadErrs =
+        Assertions.payloadViolations (Assertions.contractViolations result)
+
+    Expect.equal
+        (payloadErrs
          |> List.exists (function
-             | PayloadInvalidFieldValue (n, _) when n = "passed" -> true
-             | _ -> false)) true "excessive count rejected"
+             | PayloadInvalidFieldValue(n, _) when n = "passed" -> true
+             | _ -> false))
+        true
+        "excessive count rejected"
 
 /// 9. Optional `summary` is preserved when present.
 let testOptionalSummaryPreserved () =
@@ -119,14 +151,14 @@ let testOptionalSummaryPreserved () =
     Expect.equal finished.Summary (Some "Two checks failed: outcome decoding, payload validation") "summary preserved"
 
 let bundle =
-    testList "Finished Event Contract" [
-        testCase "every execution outcome decodes" testEveryOutcomeDecodes
-        testCase "cancelled and timed_out outcomes decode" testCancelledAndTimedOutOutcomes
-        testCase "unknown outcome is rejected" testUnknownOutcomeRejected
-        testCase "zero duration is valid" testZeroDurationValid
-        testCase "maximum duration is valid" testMaximumDurationValid
-        testCase "excessive duration is rejected" testExcessiveDurationRejected
-        testCase "negative counts are rejected" testNegativeCountsRejected
-        testCase "excessive counts are rejected" testExcessiveCountsRejected
-        testCase "optional summary is preserved" testOptionalSummaryPreserved
-    ]
+    testList
+        "Finished Event Contract"
+        [ testCase "every execution outcome decodes" testEveryOutcomeDecodes
+          testCase "cancelled and timed_out outcomes decode" testCancelledAndTimedOutOutcomes
+          testCase "unknown outcome is rejected" testUnknownOutcomeRejected
+          testCase "zero duration is valid" testZeroDurationValid
+          testCase "maximum duration is valid" testMaximumDurationValid
+          testCase "excessive duration is rejected" testExcessiveDurationRejected
+          testCase "negative counts are rejected" testNegativeCountsRejected
+          testCase "excessive counts are rejected" testExcessiveCountsRejected
+          testCase "optional summary is preserved" testOptionalSummaryPreserved ]

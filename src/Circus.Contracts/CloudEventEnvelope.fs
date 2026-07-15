@@ -50,25 +50,23 @@ module Limits =
     let ChecksMaxCount = 1_000_000
 
 /// Result type returned by the contract decoder.
-type ValidationResult<'value> =
-    Result<'value, NonEmptyList<ContractViolation>>
+type ValidationResult<'value> = Result<'value, NonEmptyList<ContractViolation>>
 
 /// Result type for an in-flight payload-field read. The error channel
 /// carries only `PayloadViolation`s; the top-level decoder wraps the
 /// collected errors in `ContractViolation.InvalidKnownPayload`.
-type PayloadResult<'value> =
-    Result<'value, NonEmptyList<PayloadViolation>>
+type PayloadResult<'value> = Result<'value, NonEmptyList<PayloadViolation>>
 
 module ValidationResult =
     /// Combine a list of independent `ValidationResult<unit>` values. If
     /// every element is `Ok ()` the result is `Ok ()`; otherwise the
     /// errors are concatenated into a single non-empty list.
     let sequenceUnits (results: ValidationResult<unit> list) : ValidationResult<unit> =
-        let mutable errorList : ContractViolation list = []
+        let mutable errorList: ContractViolation list = []
 
         for r in results do
             match r with
-            | Ok () -> ()
+            | Ok() -> ()
             | Error e -> errorList <- NonEmptyList.toList e @ errorList
 
         match errorList with
@@ -85,18 +83,41 @@ module ValidationResult =
 /// contract understands. Extension preservation compares property names
 /// against this set.
 module EnvelopeFieldNames =
-    let [<Literal>] SpecVersion = "specversion"
-    let [<Literal>] Id = "id"
-    let [<Literal>] Source = "source"
-    let [<Literal>] Type = "type"
-    let [<Literal>] Subject = "subject"
-    let [<Literal>] Time = "time"
-    let [<Literal>] DataContentType = "datacontenttype"
-    let [<Literal>] Data = "data"
-    let [<Literal>] CircusInstance = "circusinstance"
-    let [<Literal>] CircusEpoch = "circusepoch"
-    let [<Literal>] CircusSeq = "circusseq"
-    let [<Literal>] RunId = "runid"
+    [<Literal>]
+    let SpecVersion = "specversion"
+
+    [<Literal>]
+    let Id = "id"
+
+    [<Literal>]
+    let Source = "source"
+
+    [<Literal>]
+    let Type = "type"
+
+    [<Literal>]
+    let Subject = "subject"
+
+    [<Literal>]
+    let Time = "time"
+
+    [<Literal>]
+    let DataContentType = "datacontenttype"
+
+    [<Literal>]
+    let Data = "data"
+
+    [<Literal>]
+    let CircusInstance = "circusinstance"
+
+    [<Literal>]
+    let CircusEpoch = "circusepoch"
+
+    [<Literal>]
+    let CircusSeq = "circusseq"
+
+    [<Literal>]
+    let RunId = "runid"
 
     let Reserved =
         set
@@ -115,19 +136,17 @@ module EnvelopeFieldNames =
 
 /// A validated CloudEvents envelope decoded by the Circus contract.
 type ValidatedEvent =
-    {
-        EventId: EventId
-        Source: EventSource
-        EventType: EventType
-        Subject: string
-        ObservedAt: DateTimeOffset
-        InstanceId: InstanceId
-        EpochId: EpochId
-        Sequence: EventSequence
-        RunId: RunId
-        Extensions: Map<string, RawJson>
-        Event: ExecutionEvent
-    }
+    { EventId: EventId
+      Source: EventSource
+      EventType: EventType
+      Subject: string
+      ObservedAt: DateTimeOffset
+      InstanceId: InstanceId
+      EpochId: EpochId
+      Sequence: EventSequence
+      RunId: RunId
+      Extensions: Map<string, RawJson>
+      Event: ExecutionEvent }
 
 module ValidatedEvent =
     /// Subject prefix that all Circus envelopes must use. The remainder of
@@ -148,9 +167,9 @@ module internal AttributeDecode =
     let toResult (name: string) (value: AttributeDecode<'value>) : ValidationResult<'value> =
         match value with
         | AttributeOk v -> Ok v
-        | AttributeMissing -> Error(NonEmptyList.singleton(MissingField name))
-        | AttributeWrongType expected -> Error(NonEmptyList.singleton(InvalidFieldType(name, expected)))
-        | AttributeInvalid reason -> Error(NonEmptyList.singleton(InvalidFieldValue(name, reason)))
+        | AttributeMissing -> Error(NonEmptyList.singleton (MissingField name))
+        | AttributeWrongType expected -> Error(NonEmptyList.singleton (InvalidFieldType(name, expected)))
+        | AttributeInvalid reason -> Error(NonEmptyList.singleton (InvalidFieldValue(name, reason)))
 
     /// Convert a per-attribute decode outcome into a `ValidationResult<unit>`
     /// for use with `ValidationResult.sequenceUnits`.
@@ -175,12 +194,9 @@ module internal Primitives =
     /// Truncate `text` to at most `limit` characters, returning the original
     /// value when it is already short enough.
     let bounded (limit: int) (text: string) : string =
-        if String.IsNullOrEmpty text then
-            text
-        elif text.Length <= limit then
-            text
-        else
-            text.Substring(0, limit)
+        if String.IsNullOrEmpty text then text
+        elif text.Length <= limit then text
+        else text.Substring(0, limit)
 
     /// Read a UTF-8 string property, rejecting unexpected JSON kinds.
     let readString (element: JsonElement) : AttributeDecode<string> =
@@ -253,7 +269,11 @@ module internal Primitives =
 
     /// Look up a JSON property by name. Returns `AttributeMissing` when the
     /// property is not present.
-    let readAttribute (name: string) (reader: JsonElement -> AttributeDecode<'value>) (root: JsonElement) : AttributeDecode<'value> =
+    let readAttribute
+        (name: string)
+        (reader: JsonElement -> AttributeDecode<'value>)
+        (root: JsonElement)
+        : AttributeDecode<'value> =
         let mutable element = Unchecked.defaultof<JsonElement>
 
         if root.TryGetProperty(name, &element) then
@@ -287,19 +307,17 @@ module internal Primitives =
 /// dispatch can match on the wire form while the typed envelope records
 /// the canonical domain value.
 type internal EnvelopeFields =
-    {
-        EventId: EventId
-        Source: EventSource
-        EventTypeText: string
-        EventType: EventType
-        Subject: string
-        ObservedAt: DateTimeOffset
-        InstanceId: InstanceId
-        EpochId: EpochId
-        Sequence: EventSequence
-        RunId: RunId
-        Extensions: Map<string, RawJson>
-    }
+    { EventId: EventId
+      Source: EventSource
+      EventTypeText: string
+      EventType: EventType
+      Subject: string
+      ObservedAt: DateTimeOffset
+      InstanceId: InstanceId
+      EpochId: EpochId
+      Sequence: EventSequence
+      RunId: RunId
+      Extensions: Map<string, RawJson> }
 
 module internal EnvelopeDecoder =
     open Primitives
@@ -328,24 +346,24 @@ module internal EnvelopeDecoder =
     /// properties in document order while rejecting duplicate or
     /// ill-formed entries.
     let collectExtensions (root: JsonElement) : ValidationResult<Map<string, RawJson>> =
-        let mutable entries : (string * RawJson) list = []
-        let mutable errorList : ContractViolation list = []
+        let mutable entries: (string * RawJson) list = []
+        let mutable errorList: ContractViolation list = []
 
         let recordError err = errorList <- err :: errorList
 
         for prop in root.EnumerateObject() do
             if not (EnvelopeFieldNames.Reserved.Contains prop.Name) then
                 if not (Primitives.isValidExtensionName prop.Name) then
-                    recordError(InvalidExtensionName prop.Name)
+                    recordError (InvalidExtensionName prop.Name)
 
                 match entries |> List.tryFind (fun (n, _) -> n = prop.Name) with
-                | Some _ -> recordError(DuplicateField prop.Name)
+                | Some _ -> recordError (DuplicateField prop.Name)
                 | None ->
                     match readExtensionValue prop.Value with
                     | AttributeOk raw -> entries <- (prop.Name, raw) :: entries
-                    | AttributeInvalid reason -> recordError(InvalidFieldValue(prop.Name, reason))
-                    | AttributeWrongType expected -> recordError(InvalidFieldType(prop.Name, expected))
-                    | AttributeMissing -> recordError(MissingField prop.Name)
+                    | AttributeInvalid reason -> recordError (InvalidFieldValue(prop.Name, reason))
+                    | AttributeWrongType expected -> recordError (InvalidFieldType(prop.Name, expected))
+                    | AttributeMissing -> recordError (MissingField prop.Name)
 
         match errorList with
         | first :: rest -> Error(NonEmptyList.cons first rest)
@@ -397,36 +415,34 @@ module internal EnvelopeDecoder =
     let decodeEnvelope (root: JsonElement) : ValidationResult<EnvelopeFields> =
         let extensionsResult = collectExtensions root
 
-        let unitResults : ValidationResult<unit> list =
-            [
-                extensionsResult |> Result.map ignore
-                Primitives.readAttribute EnvelopeFieldNames.SpecVersion Primitives.readString root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.SpecVersion
-                Primitives.readAttribute EnvelopeFieldNames.Id Primitives.readString root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.Id
-                Primitives.readAttribute EnvelopeFieldNames.Source Primitives.readString root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.Source
-                Primitives.readAttribute EnvelopeFieldNames.Type Primitives.readString root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.Type
-                Primitives.readAttribute EnvelopeFieldNames.Subject Primitives.readString root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.Subject
-                Primitives.readAttribute EnvelopeFieldNames.Time Primitives.readTimestamp root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.Time
-                Primitives.readAttribute EnvelopeFieldNames.DataContentType Primitives.readString root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.DataContentType
-                Primitives.readAttribute EnvelopeFieldNames.CircusInstance Primitives.readString root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.CircusInstance
-                Primitives.readAttribute EnvelopeFieldNames.CircusEpoch Primitives.readGuid root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.CircusEpoch
-                Primitives.readAttribute EnvelopeFieldNames.CircusSeq Primitives.readInt64 root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.CircusSeq
-                Primitives.readAttribute EnvelopeFieldNames.RunId Primitives.readGuid root
-                |> AttributeDecode.toUnitResult EnvelopeFieldNames.RunId
-            ]
+        let unitResults: ValidationResult<unit> list =
+            [ extensionsResult |> Result.map ignore
+              Primitives.readAttribute EnvelopeFieldNames.SpecVersion Primitives.readString root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.SpecVersion
+              Primitives.readAttribute EnvelopeFieldNames.Id Primitives.readString root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.Id
+              Primitives.readAttribute EnvelopeFieldNames.Source Primitives.readString root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.Source
+              Primitives.readAttribute EnvelopeFieldNames.Type Primitives.readString root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.Type
+              Primitives.readAttribute EnvelopeFieldNames.Subject Primitives.readString root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.Subject
+              Primitives.readAttribute EnvelopeFieldNames.Time Primitives.readTimestamp root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.Time
+              Primitives.readAttribute EnvelopeFieldNames.DataContentType Primitives.readString root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.DataContentType
+              Primitives.readAttribute EnvelopeFieldNames.CircusInstance Primitives.readString root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.CircusInstance
+              Primitives.readAttribute EnvelopeFieldNames.CircusEpoch Primitives.readGuid root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.CircusEpoch
+              Primitives.readAttribute EnvelopeFieldNames.CircusSeq Primitives.readInt64 root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.CircusSeq
+              Primitives.readAttribute EnvelopeFieldNames.RunId Primitives.readGuid root
+              |> AttributeDecode.toUnitResult EnvelopeFieldNames.RunId ]
 
         match ValidationResult.sequenceUnits unitResults with
         | Error e -> Error e
-        | Ok () ->
+        | Ok() ->
             // All attributes are present and well-typed; project to typed domain values.
             let specVersionText =
                 match Primitives.readAttribute EnvelopeFieldNames.SpecVersion Primitives.readString root with
@@ -484,10 +500,10 @@ module internal EnvelopeDecoder =
                 | _ -> failwith "invariant violation: runid decoded"
 
             if specVersionText <> CloudEventSpec.Version then
-                Error(NonEmptyList.singleton(UnsupportedSpecVersion specVersionText))
+                Error(NonEmptyList.singleton (UnsupportedSpecVersion specVersionText))
             elif dataContentTypeText <> CloudEventSpec.DataContentType then
                 Error(
-                    NonEmptyList.singleton(
+                    NonEmptyList.singleton (
                         InvalidFieldValue(
                             EnvelopeFieldNames.DataContentType,
                             sprintf "must be '%s'" CloudEventSpec.DataContentType
@@ -495,7 +511,7 @@ module internal EnvelopeDecoder =
                     )
                 )
             else
-                let mutable domainErrors : ContractViolation list = []
+                let mutable domainErrors: ContractViolation list = []
 
                 let eventIdOpt =
                     tryProjectTyped
@@ -570,32 +586,28 @@ module internal EnvelopeDecoder =
                             | Error _ -> Map.empty
 
                         Ok
-                            {
-                                EventId = Option.get eventIdOpt
-                                Source = Option.get sourceOpt
-                                EventTypeText = typeText
-                                EventType = Option.get typeOpt
-                                Subject = subject
-                                ObservedAt = timeValue
-                                InstanceId = Option.get instanceOpt
-                                EpochId = Option.get epochOpt
-                                Sequence = Option.get seqOpt
-                                RunId = runId
-                                Extensions = extensions
-                            }
+                            { EventId = Option.get eventIdOpt
+                              Source = Option.get sourceOpt
+                              EventTypeText = typeText
+                              EventType = Option.get typeOpt
+                              Subject = subject
+                              ObservedAt = timeValue
+                              InstanceId = Option.get instanceOpt
+                              EpochId = Option.get epochOpt
+                              Sequence = Option.get seqOpt
+                              RunId = runId
+                              Extensions = extensions }
 
 module internal EnvelopeFields =
     let toValidated (fields: EnvelopeFields) (event: ExecutionEvent) : ValidatedEvent =
-        {
-            EventId = fields.EventId
-            Source = fields.Source
-            EventType = fields.EventType
-            Subject = fields.Subject
-            ObservedAt = fields.ObservedAt
-            InstanceId = fields.InstanceId
-            EpochId = fields.EpochId
-            Sequence = fields.Sequence
-            RunId = fields.RunId
-            Extensions = fields.Extensions
-            Event = event
-        }
+        { EventId = fields.EventId
+          Source = fields.Source
+          EventType = fields.EventType
+          Subject = fields.Subject
+          ObservedAt = fields.ObservedAt
+          InstanceId = fields.InstanceId
+          EpochId = fields.EpochId
+          Sequence = fields.Sequence
+          RunId = fields.RunId
+          Extensions = fields.Extensions
+          Event = event }

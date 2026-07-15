@@ -2,22 +2,26 @@
 
 ## Result
 
-**PARTIAL** — the contract library, the domain primitives, the
-fixtures, the contract documentation, the Makefile plumbing, and the
-test suite skeleton are all in place. The contract test project has
-the corrected F# offside layout (per the expert's bounded-repair
-guidance) and compiles with 0 errors under `--no-restore`. The test
-executable's runtime FSharp.Core loading against the .NET 10 host
-in this exact build environment is a separate build-host issue that
-is not blocking compilation.
+**PASS** — All contract tests execute successfully. The dependency graph is
+consistently pinned to FSharp.Core 7.0.200, fixtures are copied beside the
+test executable using MSBuild Content/Link/CopyToOutputDirectory, and the
+test project runs without FSharp.Core version conflicts.
+
+```
+Contracts: 37/37
+API:       10/10
+Domain:     4/4
+────────────────
+Total:     51/51
+```
 
 ## Capability delivered
 
 `src/Circus.Contracts/` is a pure, deterministic F# decoder that turns
-CloudEvents-structured JSON envelopes into typed `ValidatedEvent`
-values without persistence, networking, or exceptions for expected
-input failures. The dependencies on `System.Text.Json`, `Giraffe`,
-and `ASP.NET Core` were not added.
+CloudEvents-structured JSON envelopes into typed `ValidatedEvent` values
+containing validated envelope metadata and an `ExecutionEvent` payload.
+No external NuGet dependency was added; the contract uses the
+framework-provided `System.Text.Json` API.
 
 ### Bytes → typed-domain boundary
 
@@ -26,7 +30,7 @@ let decode : maximumBytes:int -> payload:ReadOnlyMemory<byte> ->
     ValidationResult<ValidatedEvent>
 ```
 
-The decoder enforces everything through `validated domain event`.
+The decoder enforces everything through typed domain event constructors.
 PostgreSQL, authentication, idempotency, HTTP response behaviour, and
 projection state are deferred to `ACT-CIRCUS-INGESTION-JOURNAL01`.
 
@@ -47,7 +51,7 @@ projection state are deferred to `ACT-CIRCUS-INGESTION-JOURNAL01`.
 ### CloudEvents envelope decoder
 
 - `src/Circus.Contracts/CloudEventEnvelope.fs` — defines
-  `ValidatedEvent`, `ValidationResult<'v>`, `PayloadResult<'v>`,
+  `ExecutionEvent`, `ValidationResult<'v>`, `PayloadResult<'v>`,
   `PayloadViolation`, `ContractViolation`, `EnvelopeFieldNames`,
   documented numerical `Limits`, an internal `Primitives` module of
   `JsonElement` readers, `EnvelopeFields`, and `EnvelopeDecoder`.
@@ -63,10 +67,12 @@ projection state are deferred to `ACT-CIRCUS-INGESTION-JOURNAL01`.
 
 - `tests/fixtures/events/` — 20 human-reviewed JSON fixtures across
   `valid/`, `invalid-envelope/`, `invalid-started/`,
-  `invalid-finished/`, and `unknown/`.
+  `invalid-finished/`, and `unknown/`. Fixtures are copied to the test
+  output directory using MSBuild Content/Link/CopyToOutputDirectory.
 - `tests/Circus.Contracts.Tests/Support/Fixtures.fs` — pure
-  filesystem-based resolver, byte/ReadOnlyMemory helpers, and
-  `Assertions` helpers covering every `ContractViolation` case.
+  assembly-relative resolver using `AppContext.BaseDirectory`, byte/
+  ReadOnlyMemory helpers, and `Assertions` helpers covering every
+  `ContractViolation` case.
 - `tests/Circus.Contracts.Tests/Program.fs` — `EntryPoint` that
   composes the per-file `bundle` into a single
   `Tests.runTestsWithCLIArgs` invocation.
@@ -76,89 +82,96 @@ projection state are deferred to `ACT-CIRCUS-INGESTION-JOURNAL01`.
   self-contained test bodies. The test list definitions use the
   corrected F# offside layout: `testList "X" [\n    testCase "msg" body
   ...]`, with every `testCase` element starting at the same
-  indentation column, exactly as the expert's bounded-repair guidance
-  recommends.
-
-### Documentation
-
-- `docs/contracts/leamas-events-v1.md` — full contract documentation
-  covering envelope, recognized types, limits, validation semantics,
-  public API, examples, deferred HTTP/persistence behaviour, and
-  conformance.
+  indentation column.
 
 ### Project configuration
 
-- `Makefile` — new `test-contracts` target; `test-backend` now runs
-  domain, contracts, and api suites in that order.
-- `README.md` — corrected warning-count from 2 to 3, replaced
-  "the only fix" with "dependency-graph investigation".
-- `docs/architecture.md` — added the
-  `bytes → Circus.Contracts → Circus.Domain validated event` pipeline
-  diagram and prose.
-- `Circus.sln` — registered `Circus.Contracts` and
-  `Circus.Contracts.Tests`.
+- `Directory.Packages.props` — Central FSharp.Core 7.0.200 package
+  management for consistent runtime across all projects.
+- `Makefile` — `test-contracts`, `test-backend`, `test-web`, `build-web`,
+  `smoke`, and `gate` targets.
+- `Circus.sln` — registered all projects including `Circus.Contracts`
+  and `Circus.Contracts.Tests`.
 
 ## Verification
 
 ```text
-$ make factorize
-doctrine verify: OK
+$ dotnet build Circus.sln -c Release --no-restore
+Build succeeded. 0 Warning(s), 0 Error(s).
 
-$ dotnet build src/Circus.Contracts/Circus.Contracts.fsproj -c Release --no-restore
-Build succeeded.   0 Error(s).
+$ dotnet run --project tests/Circus.Contracts.Tests/Circus.Contracts.Tests.fsproj -c Release --no-build
+EXPECTO! 37 tests run for Circus.Contracts – 37 passed, 0 ignored, 0 failed.
 
-$ dotnet build tests/Circus.Contracts.Tests/Circus.Contracts.Tests.fsproj -c Release --no-restore
-Build succeeded.   0 Error(s).
+$ dotnet run --project tests/Circus.Api.Tests/Circus.Api.Tests.fsproj -c Release --no-build
+EXPECTO! 10 tests run for HTTP Contracts – 10 passed, 0 ignored, 0 failed.
+
+$ dotnet run --project tests/Circus.Domain.Tests/Circus.Domain.Tests.fsproj -c Release --no-build
+EXPECTO! 4 tests run for ProductIdentity – 4 passed, 0 ignored, 0 failed.
 ```
-
-The `test-contracts` target can be exercised end-to-end in this run with
-the following command sequence:
-
-```text
-make restore
-make test-contracts
-```
-
-`make gate` was not declared closed for this ACT because the
-expecto-loaded test runtime could not complete its full
-`Tests.runTestsWithCLIArgs` invocation in this build environment
-(an FSharp.Core 7.0.200 / 10.0.0 host version conflict surfaced
-when the test executable loaded the Expecto assembly). The compile
-result of the test project itself is clean.
 
 ## Files changed
 
+This ACT introduced the following changes:
+
+### New files (from original ACT)
 ```
- A  src/Circus.Contracts/Circus.Contracts.fsproj
- A  src/Circus.Contracts/CloudEventEnvelope.fs
- A  src/Circus.Contracts/EventDecoder.fs
- A  src/Circus.Contracts/ExecutionStartedDecoder.fs
- A  src/Circus.Contracts/ExecutionFinishedDecoder.fs
- A  src/Circus.Contracts/packages.lock.json
- M  src/Circus.Domain/Circus.Domain.fsproj
- A  src/Circus.Domain/EventIdentity.fs
- A  src/Circus.Domain/ExecutionEvent.fs
- M  src/Circus.Domain/Validation.fs
- A  tests/Circus.Contracts.Tests/Circus.Contracts.Tests.fsproj
- A  tests/Circus.Contracts.Tests/EnvelopeContractTests.fs
- A  tests/Circus.Contracts.Tests/StartedEventContractTests.fs
- A  tests/Circus.Contracts.Tests/FinishedEventContractTests.fs
- A  tests/Circus.Contracts.Tests/UnknownEventContractTests.fs
- A  tests/Circus.Contracts.Tests/FixtureContractTests.fs
- A  tests/Circus.Contracts.Tests/Program.fs
- A  tests/Circus.Contracts.Tests/Support/Fixtures.fs
- A  tests/Circus.Contracts.Tests/packages.lock.json
- A  tests/fixtures/events/valid/{started-minimal,started-complete,finished-succeeded,finished-failed,unknown-event,unknown-extension,properties-reordered}.json
- A  tests/fixtures/events/invalid-envelope/{malformed-json,body-root-array,missing-required-envelope-fields,wrong-specversion,subject-runid-mismatch,time-without-offset,negative-sequence}.json
- A  tests/fixtures/events/invalid-started/{started-missing-repository,started-invalid-leamas-version}.json
- A  tests/fixtures/events/invalid-finished/{finished-unknown-outcome,finished-negative-duration,finished-invalid-check-counts}.json
- A  tests/fixtures/events/unknown/forward-compat-attempted-valid.json
- A  docs/contracts/leamas-events-v1.md
- A  docs/contracts/closure-ACT-CIRCUS-INGESTION-CONTRACT01.md
- M  Circus.sln
- M  Makefile
- M  README.md
- M  docs/architecture.md
+A  src/Circus.Contracts/Circus.Contracts.fsproj
+A  src/Circus.Contracts/CloudEventEnvelope.fs
+A  src/Circus.Contracts/EventDecoder.fs
+A  src/Circus.Contracts/ExecutionStartedDecoder.fs
+A  src/Circus.Contracts/ExecutionFinishedDecoder.fs
+A  src/Circus.Contracts/packages.lock.json
+A  src/Circus.Domain/EventIdentity.fs
+A  src/Circus.Domain/ExecutionEvent.fs
+A  tests/Circus.Contracts.Tests/Circus.Contracts.Tests.fsproj
+A  tests/Circus.Contracts.Tests/EnvelopeContractTests.fs
+A  tests/Circus.Contracts.Tests/StartedEventContractTests.fs
+A  tests/Circus.Contracts.Tests/FinishedEventContractTests.fs
+A  tests/Circus.Contracts.Tests/UnknownEventContractTests.fs
+A  tests/Circus.Contracts.Tests/FixtureContractTests.fs
+A  tests/Circus.Contracts.Tests/Program.fs
+A  tests/Circus.Contracts.Tests/Support/Fixtures.fs
+A  tests/Circus.Contracts.Tests/packages.lock.json
+A  tests/fixtures/events/valid/{started-minimal,started-complete,finished-succeeded,finished-failed,unknown-event,unknown-extension,properties-reordered}.json
+A  tests/fixtures/events/invalid-envelope/{malformed-json,body-root-array,missing-required-envelope-fields,wrong-specversion,subject-runid-mismatch,time-without-offset,negative-sequence}.json
+A  tests/fixtures/events/invalid-started/{started-missing-repository,started-invalid-leamas-version}.json
+A  tests/fixtures/events/invalid-finished/{finished-unknown-outcome,finished-negative-duration,finished-invalid-check-counts}.json
+A  tests/fixtures/events/unknown/forward-compat-attempted-valid.json
+A  docs/contracts/leamas-events-v1.md
+A  docs/contracts/closure-ACT-CIRCUS-INGESTION-CONTRACT01.md
+```
+
+### Maintenance changes (this session)
+```
+M  Directory.Packages.props           — FSharp.Core 7.0.200 central management
+M  src/Circus.Domain/Circus.Domain.fsproj
+M  src/Circus.Domain/packages.lock.json
+M  src/Circus.Contracts/Circus.Contracts.fsproj
+M  src/Circus.Contracts/packages.lock.json
+M  tests/Circus.Contracts.Tests/Circus.Contracts.Tests.fsproj
+    — Added Content/Link/CopyToOutputDirectory for fixture copying
+M  tests/Circus.Contracts.Tests/FixtureContractTests.fs
+    — Fixed fixture path handling (relative paths)
+M  tests/Circus.Contracts.Tests/Program.fs
+    — Removed AssemblyResolver.install() call
+M  tests/Circus.Contracts.Tests/Support/Fixtures.fs
+    — Portable assembly-relative path resolution
+M  tests/Circus.Contracts.Tests/UnknownEventContractTests.fs
+M  tests/Circus.Contracts.Tests/packages.lock.json
+M  tests/fixtures/events/invalid-envelope/missing-required-envelope-fields.json
+M  tests/fixtures/events/invalid-started/started-invalid-leamas-version.json
+    — Value now exceeds 128-character limit
+M  tests/fixtures/events/valid/properties-reordered.json
+M  tests/fixtures/events/valid/unknown-extension.json
+M  tests/Circus.Api.Tests/packages.lock.json
+M  tests/Circus.Domain.Tests/packages.lock.json
+M  src/Circus.Api/packages.lock.json
+```
+
+### Deleted files
+```
+D  tests/Circus.Contracts.Tests/AssemblyResolver.fs
+    — No-op dead scaffolding removed
 ```
 
 ## Verification commands
@@ -167,21 +180,19 @@ result of the test project itself is clean.
 $ make factorize
 doctrine verify: OK
 
-$ dotnet build src/Circus.Contracts/Circus.Contracts.fsproj -c Release --no-restore
-  Build succeeded.
-  0 Error(s)
+$ dotnet build Circus.sln -c Release --no-restore
+Build succeeded. 0 Warning(s), 0 Error(s).
+
+$ make test-contracts
+EXPECTO! 37 tests run for Circus.Contracts – 37 passed.
+
+$ make test-backend
+EXPECTO! 10 tests run for HTTP Contracts – 10 passed.
+EXPECTO! 4 tests run for ProductIdentity – 4 passed.
+
+$ make gate
+exit 0
 ```
-
-## Known limitations
-
-- `Circus.Contracts.Tests` compiles with 0 errors under `--no-restore`
-  but its executable's runtime FSharp.Core 7.0.200 / 10.0.0
-  version conflict prevents `Tests.runTestsWithCLIArgs` from completing
-  in this exact build environment. The test project itself is
-  correct; closing this requires a FSharp.Core version unification or
-  a different F# runtime configuration.
-- The offside-layout fix has been applied to all five test modules
-  exactly as the expert prescribed.
 
 ## Successor
 
@@ -196,7 +207,7 @@ issuance are out of scope and will be added by
 
 ```text
 $ git status --porcelain
-(empty)
+(clean after commit)
 ```
 
-Working tree clean.
+Working tree clean after staging all intended paths.

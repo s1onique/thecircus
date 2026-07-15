@@ -4,14 +4,11 @@ open Expecto
 
 [<EntryPoint>]
 let main (args: string[]) =
-    AssemblyResolver.install ()
     let suites =
-        [
-            EnvelopeContractTests.bundle
-            StartedEventContractTests.bundle
-            FinishedEventContractTests.bundle
-            UnknownEventContractTests.bundle
-            FixtureContractTests.bundle
-        ]
+        [ EnvelopeContractTests.bundle
+          StartedEventContractTests.bundle
+          FinishedEventContractTests.bundle
+          UnknownEventContractTests.bundle
+          FixtureContractTests.bundle ]
 
     Tests.runTestsWithCLIArgs [||] args (testList "Circus.Contracts" suites)

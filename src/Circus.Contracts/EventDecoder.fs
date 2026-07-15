@@ -27,39 +27,28 @@ module EventDecoder =
             | Error e -> Error e
             | Ok fields ->
                 match Primitives.readDataObject root with
-                | AttributeMissing ->
-                    Error(NonEmptyList.singleton(MissingField EnvelopeFieldNames.Data))
-                | AttributeInvalid r ->
-                    Error(NonEmptyList.singleton(InvalidFieldValue(EnvelopeFieldNames.Data, r)))
+                | AttributeMissing -> Error(NonEmptyList.singleton (MissingField EnvelopeFieldNames.Data))
+                | AttributeInvalid r -> Error(NonEmptyList.singleton (InvalidFieldValue(EnvelopeFieldNames.Data, r)))
                 | AttributeWrongType _ ->
-                    Error(NonEmptyList.singleton(InvalidFieldType(EnvelopeFieldNames.Data, "object")))
+                    Error(NonEmptyList.singleton (InvalidFieldType(EnvelopeFieldNames.Data, "object")))
                 | AttributeOk data -> dispatchAndValidate fields data
 
     /// Internal dispatch onto payload decoders. Unknown event types are
     /// preserved via `UnrecognizedEvent` rather than being rejected.
-    and internal dispatchAndValidate
-        (fields: EnvelopeFields)
-        (data: JsonElement)
-        : ValidationResult<ValidatedEvent> =
+    and internal dispatchAndValidate (fields: EnvelopeFields) (data: JsonElement) : ValidationResult<ValidatedEvent> =
         match fields.EventTypeText with
         | StartedPayload.FieldNames.EventType ->
-            StartedPayload.decode data fields.RunId
-            |> Result.map ExecutionStartedEvent
+            StartedPayload.decode data fields.RunId |> Result.map ExecutionStartedEvent
         | FinishedPayload.FieldNames.EventType ->
-            FinishedPayload.decode data fields.RunId
-            |> Result.map ExecutionFinishedEvent
+            FinishedPayload.decode data fields.RunId |> Result.map ExecutionFinishedEvent
         | other ->
             let rawDataOpt =
                 if data.ValueKind = JsonValueKind.Null then
                     None
                 else
-                    Some(RawJson.unsafeOfString(data.GetRawText()))
+                    Some(RawJson.unsafeOfString (data.GetRawText()))
 
-            Ok(
-                UnrecognizedEvent
-                    { EventType = other
-                      Data = rawDataOpt }
-            )
+            Ok(UnrecognizedEvent { EventType = other; Data = rawDataOpt })
         |> function
             | Error e -> Error e
             | Ok event -> Ok(EnvelopeFields.toValidated fields event)
@@ -83,13 +72,21 @@ module EventDecoder =
         if maximumBytes < 0 then
             invalidArg "maximumBytes" "must be non-negative"
         elif payload.Length > maximumBytes then
-            Error(NonEmptyList.singleton(BodyTooLarge(maximumBytes, payload.Length)))
+            Error(NonEmptyList.singleton (BodyTooLarge(maximumBytes, payload.Length)))
         else
             try
                 use doc = JsonDocument.Parse(payload, JsonDocumentOptions())
                 decodeFromRoot doc.RootElement
             with
             | :? JsonException as ex ->
-                Error(NonEmptyList.singleton(MalformedJson(Primitives.bounded Primitives.MalformedJsonMessageLimit ex.Message)))
+                Error(
+                    NonEmptyList.singleton (
+                        MalformedJson(Primitives.bounded Primitives.MalformedJsonMessageLimit ex.Message)
+                    )
+                )
             | :? ArgumentException as ex ->
-                Error(NonEmptyList.singleton(MalformedJson(Primitives.bounded Primitives.MalformedJsonMessageLimit ex.Message)))
+                Error(
+                    NonEmptyList.singleton (
+                        MalformedJson(Primitives.bounded Primitives.MalformedJsonMessageLimit ex.Message)
+                    )
+                )

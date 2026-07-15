@@ -17,20 +17,23 @@ let private decodeOk relativePath : ValidatedEvent =
     match EventDecoder.decode maxBytes (Fixtures.bytes relativePath) with
     | Ok validated -> validated
     | Error errs ->
-        let msg = errs |> NonEmptyList.toList |> List.map (sprintf "%A") |> String.concat "; "
+        let msg =
+            errs |> NonEmptyList.toList |> List.map (sprintf "%A") |> String.concat "; "
+
         failwithf "expected Ok, got errors: %s" msg
 
 /// 1. An unknown `type` is accepted as `UnrecognizedEvent`.
 let testUnknownTypeAccepted () =
     let validated = decodeOk "valid/unknown-event.json"
+
     match validated.Event with
-    | UnrecognizedEvent u ->
-        Expect.equal u.EventType "io.leamas.execution.artefact.published.v3" "event type preserved"
+    | UnrecognizedEvent u -> Expect.equal u.EventType "io.leamas.execution.artefact.published.v3" "event type preserved"
     | other -> failtestf "expected UnrecognizedEvent but got %A" other
 
 /// 2. The unknown `data` payload is preserved as raw JSON.
 let testUnknownDataPreserved () =
     let validated = decodeOk "valid/unknown-event.json"
+
     match validated.Event with
     | UnrecognizedEvent u ->
         match u.Data with
@@ -51,9 +54,10 @@ let testCommonMetadataPreserved () =
 /// 4. Valid unknown extensions are preserved on unrecognized events.
 let testExtensionsPreservedForUnknownEvents () =
     let validated = decodeOk "valid/unknown-extension.json"
+
     match validated.Event with
     | UnrecognizedEvent u ->
-        Expect.equal u.EventType "io.leamas.execution.started.v1" "started type recorded"
+        Expect.equal u.EventType "io.leamas.execution.artefact.published.v3" "artefact type recorded"
         Expect.isTrue (validated.Extensions.ContainsKey "tenant") "tenant extension preserved"
         Expect.isTrue (validated.Extensions.ContainsKey "trace_id") "trace_id extension preserved"
     | other -> failtestf "expected UnrecognizedEvent, got %A" other
@@ -62,24 +66,27 @@ let testExtensionsPreservedForUnknownEvents () =
 let testRepeatedDecodingIsStable () =
     let first = decodeOk "valid/unknown-event.json"
     let second = decodeOk "valid/unknown-event.json"
+
     let firstType, firstData =
         match first.Event with
         | UnrecognizedEvent u -> u.EventType, u.Data
         | _ -> failwith "expected UnrecognizedEvent"
+
     let secondType, secondData =
         match second.Event with
         | UnrecognizedEvent u -> u.EventType, u.Data
         | _ -> failwith "expected UnrecognizedEvent"
+
     Expect.equal firstType secondType "stable event type"
     let firstText = firstData |> Option.map RawJson.value
     let secondText = secondData |> Option.map RawJson.value
     Expect.equal firstText secondText "stable data"
 
 let bundle =
-    testList "Unknown Event Behaviour" [
-        testCase "unknown type is accepted" testUnknownTypeAccepted
-        testCase "unknown data is preserved" testUnknownDataPreserved
-        testCase "common metadata is preserved" testCommonMetadataPreserved
-        testCase "extensions are preserved on unknown events" testExtensionsPreservedForUnknownEvents
-        testCase "repeated decoding is stable" testRepeatedDecodingIsStable
-    ]
+    testList
+        "Unknown Event Behaviour"
+        [ testCase "unknown type is accepted" testUnknownTypeAccepted
+          testCase "unknown data is preserved" testUnknownDataPreserved
+          testCase "common metadata is preserved" testCommonMetadataPreserved
+          testCase "extensions are preserved on unknown events" testExtensionsPreservedForUnknownEvents
+          testCase "repeated decoding is stable" testRepeatedDecodingIsStable ]

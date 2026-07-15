@@ -33,12 +33,9 @@ module EventId =
 
     /// Attempt to construct an EventId from a candidate string.
     let tryCreate (text: string) : EventId option =
-        if String.IsNullOrEmpty text then
-            None
-        elif text.Length > maxLength then
-            None
-        else
-            Some(EventId text)
+        if String.IsNullOrEmpty text then None
+        elif text.Length > maxLength then None
+        else Some(EventId text)
 
 /// CloudEvents source - a URI reference identifying the producer.
 type EventSource = private EventSource of string
@@ -54,12 +51,9 @@ module EventSource =
     /// `urn:leamas:instance:builder-07`, but the contract accepts any
     /// non-empty URI reference.
     let tryCreate (text: string) : EventSource option =
-        if String.IsNullOrEmpty text then
-            None
-        elif text.Length > maxLength then
-            None
-        else
-            Some(EventSource text)
+        if String.IsNullOrEmpty text then None
+        elif text.Length > maxLength then None
+        else Some(EventSource text)
 
 /// CloudEvents type identifier (e.g. `io.leamas.execution.started.v1`).
 type EventType = private EventType of string
@@ -71,12 +65,9 @@ module EventType =
     let maxLength = 255
 
     let tryCreate (text: string) : EventType option =
-        if String.IsNullOrEmpty text then
-            None
-        elif text.Length > maxLength then
-            None
-        else
-            Some(EventType text)
+        if String.IsNullOrEmpty text then None
+        elif text.Length > maxLength then None
+        else Some(EventType text)
 
 /// Circus instance identifier - the local Leamas agent name.
 type InstanceId = private InstanceId of string
@@ -88,12 +79,9 @@ module InstanceId =
     let maxLength = 128
 
     let tryCreate (text: string) : InstanceId option =
-        if String.IsNullOrEmpty text then
-            None
-        elif text.Length > maxLength then
-            None
-        else
-            Some(InstanceId text)
+        if String.IsNullOrEmpty text then None
+        elif text.Length > maxLength then None
+        else Some(InstanceId text)
 
 /// Circus epoch identifier. UUIDs identify the time window during which a
 /// given Leamas instance is producing a contiguous event sequence.
@@ -105,8 +93,7 @@ module EpochId =
     /// Construct an EpochId from a UUID value, treating `Guid.Empty` as
     /// invalid because it carries no information.
     let tryCreate (value: Guid) : EpochId option =
-        if value = Guid.Empty then None
-        else Some(EpochId value)
+        if value = Guid.Empty then None else Some(EpochId value)
 
 /// Circus sequence number for an instance within an epoch. Zero or greater
 /// but bounded by `Int64.MaxValue` for forward compatibility with future
@@ -117,8 +104,7 @@ module EventSequence =
     let value (EventSequence v) = v
 
     let tryCreate (value: int64) : EventSequence option =
-        if value < 0L then None
-        else Some(EventSequence value)
+        if value < 0L then None else Some(EventSequence value)
 
 /// Run identifier (UUID). Identifies a single Leamas execution attempt.
 type RunId = private RunId of Guid
@@ -127,8 +113,7 @@ module RunId =
     let value (RunId v) = v
 
     let tryCreate (value: Guid) : RunId option =
-        if value = Guid.Empty then None
-        else Some(RunId value)
+        if value = Guid.Empty then None else Some(RunId value)
 
 /// Repository reference string identifying the repository that was the
 /// subject of an execution.
@@ -144,14 +129,10 @@ module RepositoryRef =
     let maxLength = 256
 
     let tryCreate (text: string) : RepositoryRef option =
-        if String.IsNullOrEmpty text then
-            None
-        elif text.Length < minLength then
-            None
-        elif text.Length > maxLength then
-            None
-        else
-            Some(RepositoryRef text)
+        if String.IsNullOrEmpty text then None
+        elif text.Length < minLength then None
+        elif text.Length > maxLength then None
+        else Some(RepositoryRef text)
 
 /// Optional Act identifier. When present, the value is between 1 and 256
 /// characters inclusive.
@@ -167,14 +148,10 @@ module ActId =
     let maxLength = 256
 
     let tryCreate (text: string) : ActId option =
-        if String.IsNullOrEmpty text then
-            None
-        elif text.Length < minLength then
-            None
-        elif text.Length > maxLength then
-            None
-        else
-            Some(ActId text)
+        if String.IsNullOrEmpty text then None
+        elif text.Length < minLength then None
+        elif text.Length > maxLength then None
+        else Some(ActId text)
 
 /// Leamas version string identifying the producing agent version.
 type LeamasVersion = private LeamasVersion of string
@@ -189,11 +166,7 @@ module LeamasVersion =
     let maxLength = 128
 
     let tryCreate (text: string) : LeamasVersion option =
-        if String.IsNullOrEmpty text then
-            None
-        elif text.Length < minLength then
-            None
-        elif text.Length > maxLength then
-            None
-        else
-            Some(LeamasVersion text)
+        if String.IsNullOrEmpty text then None
+        elif text.Length < minLength then None
+        elif text.Length > maxLength then None
+        else Some(LeamasVersion text)
