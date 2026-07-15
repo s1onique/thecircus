@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Circus.Application</RootNamespace>
+    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="JournalModel.fs" />
+    <Compile Include="JournalDecision.fs" />
+    <Compile Include="RunProjection.fs" />
+    <Compile Include="IngestionAuthorization.fs" />
+    <Compile Include="IngestEvent.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Circus.Domain\Circus.Domain.fsproj" />
+    <ProjectReference Include="..\Circus.Contracts\Circus.Contracts.fsproj" />
+  </ItemGroup>
+</Project>

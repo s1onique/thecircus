@@ -11,41 +11,54 @@ design decisions.
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        Browser                               │
-│                    (Elm Application)                          │
+│                    (Elm Application)                         │
 └────────────────────────┬────────────────────────────────────┘
                          │ HTTP/JSON
 ┌────────────────────────▼────────────────────────────────────┐
-│                     F# HTTP API                              │
-│                   (Giraffe + Kestrel)                        │
+│                     F# HTTP API                             │
+│                   (Giraffe + Kestrel)                      │
 └────────────────────────┬────────────────────────────────────┘
                          │
 ┌────────────────────────▼────────────────────────────────────┐
-│                 F# Domain Core                               │
-│              (Circus.Domain)                                │
-└─────────────────────────────────────────────────────────────┘
+│                  Application Layer                           │
+│              (Circus.Application)                           │
+│  • Ingestion orchestration                                  │
+│  • Journal decision logic                                   │
+│  • Run projection                                          │
+│  • Authorization seam                                       │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+┌────────────────────────▼────────────────────────────────────┐
+│                Persistence Layer                            │
+│           (Circus.Persistence.Postgres)                    │
+│  • Journal repository                                       │
+│  • Projection repository                                    │
+│  • Transaction management                                   │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+┌────────────────────────▼────────────────────────────────────┐
+│              F# Domain Core                                 │
+│               (Circus.Domain)                              │
+└────────────────────────┬────────────────────────────────────┘
                          ▲
 ┌────────────────────────┴────────────────────────────────────┐
-│             F# Contracts (Leamas events)                     │
-│           (Circus.Contracts — future ingestion)             │
+│              F# Contracts (Leamas events)                    │
+│                (Circus.Contracts)                           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Decoding pipeline (untrusted bytes → typed domain)
-
-The first versioned Leamas → Circus contract sits in front of the
-domain layer. Its job is to convert untrusted bytes into a typed
-`ValidatedEvent` without any persistence, networking, or exceptions.
+### Ingestion pipeline
 
 ```
-bytes
-  → Circus.Contracts (pure F# decoder, validates envelope + payload)
-  → Circus.Domain validated event (ExecutionStarted | Finished | Unrecognized)
+HTTP bytes
+  → authorization seam
+  → Circus.Contracts (validates envelope + payload)
+  → IngestEvent application service
+  → serializable PostgreSQL transaction
+       ├── append-only journal
+       └── run projection
+  → typed HTTP outcome
 ```
-
-This boundary owns everything through `validated domain event`.
-PostgreSQL, authentication, idempotency, and HTTP response behaviour
-are deferred to `ACT-CIRCUS-INGESTION-JOURNAL01` and beyond. Until then
-the decoder is pure: it produces `ValidatedEvent`s without side effects.
 
 ## F# Domain Core (Circus.Domain)
 
@@ -57,28 +70,59 @@ web frameworks, databases, or infrastructure.
 1. **No HTTP dependencies**: The domain module cannot reference `System.Net.Http`
    or any web framework.
 
-2. **Type safety**: Uses opaque types for domain primitives to prevent
+2. **No persistence dependencies**: The domain module cannot reference Npgsql,
+   Entity Framework, or any database infrastructure.
+
+3. **Type safety**: Uses opaque types for domain primitives to prevent
    invalid value construction at the boundaries.
 
-3. **Canonical values**: Product identity is defined once in the domain
+4. **Canonical values**: Product identity is defined once in the domain
    and projected to DTOs at the HTTP boundary.
 
-### ProductIdentity Module
+## Application Layer (Circus.Application)
 
-```fsharp
-type ProductName = private ProductName of string
-type ProductTagline = private ProductTagline of string
-type ProductDescription = private ProductDescription of string
+The application layer orchestrates ingestion without knowing about HTTP or
+database specifics.
 
-type ProductIdentity =
-    {
-        Name: ProductName
-        Tagline: ProductTagline
-        Description: ProductDescription
-    }
+### Components
+
+- **JournalModel**: Core types for journal identity, stream position, and append outcomes
+- **JournalDecision**: Pure classification logic for collision outcomes
+- **RunProjection**: Deterministic fold over journal events to derive run state
+- **IngestionAuthorization**: Authorization seam (production: deny-all; tests: explicit)
+- **IngestEvent**: Application service for event ingestion
+
+### Dependency Direction
+
+```
+Circus.Domain
+      ↑
+Circus.Contracts
+      ↑
+Circus.Application
 ```
 
-## Giraffe HTTP Boundary (Circus.Api)
+## Persistence Layer (Circus.Persistence.Postgres)
+
+Raw Npgsql commands are used directly. No EF Core, Dapper, or generic repository.
+
+### Components
+
+- **PostgresConfiguration**: Connection string and retry configuration
+- **JournalSql**: Parameterized SQL statements
+- **JournalRepository**: Append-only journal operations
+- **ProjectionRepository**: Run projection upsert and query
+- **IngestionTransaction**: SERIALIZABLE transaction with retry logic
+
+### Dependency Direction
+
+```
+Circus.Application
+      ↑
+Circus.Persistence.Postgres
+```
+
+## HTTP Boundary (Circus.Api)
 
 The API layer uses Giraffe on ASP.NET Core to expose HTTP endpoints.
 
@@ -93,19 +137,31 @@ The API layer uses Giraffe on ASP.NET Core to expose HTTP endpoints.
 3. **Projection from domain**: API responses are projected from domain types
    at the boundary, not duplicated inline.
 
+4. **Authorization before body**: Credentials are validated before reading the request body.
+
+5. **Diagnostic safety**: Raw payloads, SQL, and exception details are never echoed.
+
 ### Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health/live` | GET | Liveness probe |
 | `/api/v1/about` | GET | Product information |
+| `POST /api/v1/events` | POST | Event ingestion |
 | `/` | GET | Static HTML (Elm app) |
 | `/*` | GET | Static assets |
 
-### JSON Serialization
+### Event Ingestion
 
-Uses `System.Text.Json` with camelCase naming policy. Domain types are
-projected to DTOs before serialization to avoid exposing internal types.
+`POST /api/v1/events` accepts CloudEvents JSON and:
+
+1. Authorizes the request (production: deny-all)
+2. Validates Content-Type is `application/cloudevents+json`
+3. Reads bounded body (max 256 KiB)
+4. Decodes via Circus.Contracts
+5. Normalizes JSON for storage
+6. Executes SERIALIZABLE transaction
+7. Returns typed HTTP outcome
 
 ## Elm Frontend Boundary
 
@@ -122,46 +178,35 @@ The frontend is a pure Elm 0.19.2 application following The Elm Architecture (TE
 3. **Closed remote state**: Uses a closed `RemoteData` type with exactly
    four states: `NotAsked`, `Loading`, `Failure`, `Success`.
 
-### Required UI States
-
-| State | Display |
-|-------|---------|
-| Loading | "Loading product information..." |
-| Success | Product name, tagline, description |
-| Failure | Error message with retry button |
-
-### Accessibility
-
-- Single `<main>` landmark
-- Single level-one heading for product name
-- Keyboard-accessible retry button
-- Meaningful document title
-- Error state communicated via text, not color alone
-
-## Generated Static Asset Boundary
-
-The compiled Elm application is served from `web/dist/` as static files:
+## Dependency Direction Summary
 
 ```
-web/dist/
-├── index.html   (copied from web/)
-├── styles.css   (copied from web/)
-└── app.js       (compiled by elm make)
-```
-
-The backend serves these files at the root path (`GET /`) and the same
-directory (`GET /app.js`, `GET /styles.css`).
-
-## Dependency Direction
-
-```
-Circus.Domain (pure library)
+Circus.Domain
       ↑
-Circus.Api (web layer depends on domain)
+Circus.Contracts
+      ↑
+Circus.Application
+      ↑
+Circus.Persistence.Postgres
+      ↑
+Circus.Api
 ```
 
-The domain layer has no knowledge of the API. This is enforced by the
-project reference: `Circus.Api` references `Circus.Domain`, but not vice versa.
+Forbidden dependencies:
+- `Circus.Domain` → PostgreSQL, Npgsql, Giraffe, JSON infrastructure
+- `Circus.Persistence.Postgres` → HTTP types
+- `Circus.Api` → Business logic in handlers
+
+## PostgreSQL Integration
+
+The journal is append-only with database-enforced constraints:
+
+- `(source, event_id)` uniqueness
+- `(instance_id, epoch_id, sequence)` uniqueness
+- Triggers prevent UPDATE and DELETE
+- Application role has SELECT and INSERT only
+
+Serialization failures are retried up to 3 times.
 
 ## Why PostgreSQL Is Deferred
 
@@ -174,7 +219,7 @@ because:
 2. **No speculative infrastructure**: We prefer to add database integration
    after the API contract is stable.
 
-3. **Eventual CloudEvents**: Event ingestion will follow a different pattern
+3. **Eventual CloudEvents**: Event ingestion follows a different pattern
    than traditional CRUD, so we defer schema design until the event model
    is clearer.
 

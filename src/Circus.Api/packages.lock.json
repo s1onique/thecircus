@@ -35,10 +35,35 @@
         "resolved": "3.0.1",
         "contentHash": "s/s20YTVY9r9TPfTrN5g8zPF1YhwxyqO6PxUkrYTGI2B+OGPe9AdajWZrLhFqXIvqIW23fnUE4+ztrUWNU1+9g=="
       },
+      "circus.application": {
+        "type": "Project",
+        "dependencies": {
+          "Circus.Contracts": "[1.0.0, )",
+          "Circus.Domain": "[1.0.0, )",
+          "FSharp.Core": "[7.0.200, )"
+        }
+      },
+      "circus.contracts": {
+        "type": "Project",
+        "dependencies": {
+          "Circus.Domain": "[1.0.0, )",
+          "FSharp.Core": "[7.0.200, )"
+        }
+      },
       "circus.domain": {
         "type": "Project",
         "dependencies": {
           "FSharp.Core": "[7.0.200, )"
+        }
+      },
+      "circus.persistence.postgres": {
+        "type": "Project",
+        "dependencies": {
+          "Circus.Application": "[1.0.0, )",
+          "Circus.Contracts": "[1.0.0, )",
+          "Circus.Domain": "[1.0.0, )",
+          "FSharp.Core": "[7.0.200, )",
+          "Npgsql": "[10.0.3, )"
         }
       },
       "FSharp.Core": {
@@ -46,6 +71,12 @@
         "requested": "[7.0.200, )",
         "resolved": "7.0.200",
         "contentHash": "NmgUnpNH6Zu9B0SPIhojyo38gnPdkdYFYQfbd6zosEH32kbGY/g/Klk7PfOWe1NAe/O1YOMmK9KhwQ2OWsWEbg=="
+      },
+      "Npgsql": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.3, )",
+        "resolved": "10.0.3",
+        "contentHash": "7nb5YzXuvWWJxB0J8DiyL3we+X4FOctZrt0fIBnucOIaIevFEEwGQVZKtiu9olXdlNAK1eNgqSral6r/jlhI4w=="
       }
     }
   }

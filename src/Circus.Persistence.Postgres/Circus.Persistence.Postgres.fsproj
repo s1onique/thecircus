@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Circus.Persistence.Postgres</RootNamespace>
+    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="PostgresConfiguration.fs" />
+    <Compile Include="JournalSql.fs" />
+    <Compile Include="JournalRepository.fs" />
+    <Compile Include="ProjectionRepository.fs" />
+    <Compile Include="IngestionTransaction.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Circus.Application\Circus.Application.fsproj" />
+    <ProjectReference Include="..\Circus.Domain\Circus.Domain.fsproj" />
+    <ProjectReference Include="..\Circus.Contracts\Circus.Contracts.fsproj" />
+  </ItemGroup>
+</Project>

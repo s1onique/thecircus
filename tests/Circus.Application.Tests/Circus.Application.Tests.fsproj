@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Circus.Application.Tests</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="JournalDecisionTests.fs" />
+    <Compile Include="RunProjectionTests.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Expecto" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Circus.Application\Circus.Application.fsproj" />
+    <ProjectReference Include="..\..\src\Circus.Domain\Circus.Domain.fsproj" />
+    <ProjectReference Include="..\..\src\Circus.Contracts\Circus.Contracts.fsproj" />
+  </ItemGroup>
+</Project>
