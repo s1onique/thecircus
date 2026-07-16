@@ -1,50 +1,124 @@
 module Circus.Persistence.Postgres.Tests.ConcurrencyTests
 
 open System
+open System.Collections.Generic
 open System.Threading
 open System.Threading.Tasks
 open Expecto
+open Npgsql
 open Circus.Application
+open Circus.Contracts
 open Circus.Domain
+open Circus.Persistence.Postgres
 open Circus.Persistence.Postgres.Tests.PostgresFixture
 open Circus.Persistence.Postgres.Tests.Support
 
-let private waitAll (tasks: Task<IngestEventResult> list) = Task.WhenAll(tasks) |> wait
+let private noDelay (_: int) : Task<unit> = Task.FromResult(())
 
-let private runOverlapping (fixture: PostgresFixture) (requests: IngestEventRequest list) =
-    let gate = new ManualResetEventSlim(false)
+let private waitAll (tasks: Task<IngestEventResult> list) =
+    Task.WhenAll(tasks) |> fun t -> t.GetAwaiter().GetResult()
 
+/// Run the supplied requests through a fresh ingestion service composed
+/// with the supplied observer.  The observer's `TransactionBegun` hook
+/// is the real database attempt boundary: the test blocks every attempt
+/// there until the configured snapshot count has arrived, then records
+/// the snapshot and releases the gate.  Any retries that arrive after
+/// the gate releases are recorded separately so the test does not assert
+/// a precise cardinal of attempts beyond the snapshot.
+let private runOverlappingWithSnapshot
+    (fixture: PostgresFixture)
+    (requests: IngestEventRequest list)
+    (snapshotCount: int)
+    =
     let entered =
         new TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
 
-    let mutable count = 0
+    let gate = new ManualResetEventSlim(false)
+    let snapshotConnections = new List<NpgsqlConnection>()
+    let snapshotTransactions = new List<NpgsqlTransaction>()
+    let snapshotPids = new List<int>()
+    let postSnapshotTransactions = new List<NpgsqlTransaction>()
+    let postSnapshotPids = new List<int>()
+    let lockObj = obj ()
+    let mutable atSnapshotCount = 0
+
+    let observer =
+        { ConnectionOpened = fun _ -> ()
+          TransactionBegun =
+            fun _ tx ->
+                let pid = tx.Connection.ProcessID
+                let current = Interlocked.Increment(&atSnapshotCount)
+
+                lock lockObj (fun () ->
+                    if current <= snapshotCount then
+                        snapshotConnections.Add(tx.Connection)
+                        snapshotTransactions.Add(tx)
+                        snapshotPids.Add(pid)
+                    else
+                        postSnapshotTransactions.Add(tx)
+                        postSnapshotPids.Add(pid))
+
+                if current = snapshotCount then
+                    entered.TrySetResult(()) |> ignore
+
+                if not (gate.Wait(15000)) then
+                    failwith "TransactionBegun gate wait timed out"
+          BeforeContestedMutation = fun _ _ -> () }
+
+    let service =
+        IngestEventService.createWithPolicy fixture.DataSource observer noDelay
 
     let tasks =
         requests
-        |> List.map (fun request ->
-            Task.Run(fun () ->
-                let current = Interlocked.Increment(&count)
+        |> List.map (fun request -> Task.Run(fun () -> service.Ingest request |> (fun t -> t.GetAwaiter().GetResult())))
 
-                if current = List.length requests then
-                    entered.TrySetResult(()) |> ignore
+    let enteredOk = entered.Task.Wait(15000)
 
-                gate.Wait()
-                fixture.Ingestion.Ingest request |> wait))
-
-    Expect.isTrue (entered.Task.Wait(5000)) "All operations reached the overlap barrier"
+    Expect.isTrue enteredOk "All snapshot attempts reached the database attempt boundary"
     gate.Set()
-    let result = waitAll tasks
+    let results = waitAll tasks
     gate.Dispose()
-    result
+    results, snapshotConnections, snapshotTransactions, snapshotPids, postSnapshotTransactions, postSnapshotPids
 
 let tests (fixture: PostgresFixture) =
     testList
         "Concurrent service ingestion"
-        [ test "twenty overlapping identical events yield one insert and nineteen replays" {
+        [ test
+              "twenty overlapping identical events reach the database attempt boundary and yield one insert and nineteen replays" {
               fixture.Reset()
               let event = startedEvent "twenty-identical" (Guid.NewGuid()) (Guid.NewGuid()) 1L
-              let request = requestWithFormatting event false
-              let results = runOverlapping fixture (List.replicate 20 request)
+              let request = compactRequest event
+
+              let (results,
+                   snapshotConnections,
+                   snapshotTransactions,
+                   snapshotPids,
+                   postSnapshotTransactions,
+                   postSnapshotPids) =
+                  runOverlappingWithSnapshot fixture (List.replicate 20 request) 20
+
+              // Snapshot identity assertions: every attempt in the first
+              // wave opens its own NpgsqlConnection and its own
+              // NpgsqlTransaction.  Backend PID cardinality is recorded
+              // for diagnostic context only; Npgsql pools physical
+              // PostgreSQL connections and a sequential retry may reuse
+              // the same backend PID.
+              Expect.equal snapshotConnections.Count 20 "Twenty NpgsqlConnection references in the snapshot"
+              Expect.equal snapshotTransactions.Count 20 "Twenty NpgsqlTransaction references in the snapshot"
+              Expect.equal snapshotPids.Count 20 "Twenty backend PIDs recorded in the snapshot"
+
+              let distinctSnapshotConnections =
+                  snapshotConnections
+                  |> Seq.distinctBy (fun (c: NpgsqlConnection) -> c :> obj)
+                  |> Seq.length
+
+              let distinctSnapshotTransactions =
+                  snapshotTransactions
+                  |> Seq.distinctBy (fun (t: NpgsqlTransaction) -> t :> obj)
+                  |> Seq.length
+
+              Expect.equal distinctSnapshotConnections 20 "Twenty distinct NpgsqlConnection references"
+              Expect.equal distinctSnapshotTransactions 20 "Twenty distinct NpgsqlTransaction references"
 
               let inserted =
                   results
@@ -69,14 +143,32 @@ let tests (fixture: PostgresFixture) =
               | other -> failwithf "Expected one projection, got %A" other
           }
 
-          test "two independent overlapping sequence authorities produce one insert and one typed conflict" {
+          test
+              "two independent overlapping sequence authorities observe two connection identities, two transactions, one insert and one typed conflict" {
               fixture.Reset()
               let epoch = Guid.NewGuid()
               let first = startedEvent "sequence-winner-a" (Guid.NewGuid()) epoch 7L
               let second = startedEvent "sequence-winner-b" (Guid.NewGuid()) epoch 7L
 
-              let results =
-                  runOverlapping fixture [ requestWithFormatting first false; requestWithFormatting second false ]
+              let results, snapshotConnections, snapshotTransactions, backendPids, _, _ =
+                  runOverlappingWithSnapshot fixture [ compactRequest first; compactRequest second ] 2
+
+              Expect.equal snapshotConnections.Count 2 "Two connection identities"
+              Expect.equal snapshotTransactions.Count 2 "Two transactions"
+
+              let distinctSnapshotConnections =
+                  snapshotConnections
+                  |> Seq.distinctBy (fun (c: NpgsqlConnection) -> c :> obj)
+                  |> Seq.length
+
+              let distinctSnapshotTransactions =
+                  snapshotTransactions
+                  |> Seq.distinctBy (fun (t: NpgsqlTransaction) -> t :> obj)
+                  |> Seq.length
+
+              Expect.equal distinctSnapshotConnections 2 "Two distinct NpgsqlConnection references"
+              Expect.equal distinctSnapshotTransactions 2 "Two distinct NpgsqlTransaction references"
+              Expect.equal backendPids.Count 2 "Two backend PIDs recorded"
 
               let inserts =
                   results
@@ -102,10 +194,12 @@ let tests (fixture: PostgresFixture) =
               let runId = Guid.NewGuid()
               let epoch = Guid.NewGuid()
               let started = startedEvent "overlap-start" runId epoch 1L
-              let finished = finishedEvent "overlap-finish" runId epoch 2L Succeeded
 
-              let results =
-                  runOverlapping fixture [ requestWithFormatting started false; requestWithFormatting finished false ]
+              let finished =
+                  finishedEvent "overlap-finish" runId epoch 2L ExecutionOutcome.Succeeded
+
+              let results, _, _, _, _, _ =
+                  runOverlappingWithSnapshot fixture [ compactRequest started; compactRequest finished ] 2
 
               Expect.equal
                   (results
@@ -144,7 +238,7 @@ let tests (fixture: PostgresFixture) =
               try
                   let event = startedEvent "rollback" (Guid.NewGuid()) (Guid.NewGuid()) 1L
 
-                  match fixture.Ingestion.Ingest(requestWithFormatting event false) |> wait with
+                  match fixture.Ingestion.Ingest(compactRequest event) |> wait with
                   | PersistenceFailure _ -> ()
                   | other -> failwithf "Expected persistence failure, got %A" other
 
@@ -160,7 +254,7 @@ let tests (fixture: PostgresFixture) =
 
               let retryEvent = startedEvent "rollback-retry" (Guid.NewGuid()) (Guid.NewGuid()) 1L
 
-              match fixture.Ingestion.Ingest(requestWithFormatting retryEvent false) |> wait with
+              match fixture.Ingestion.Ingest(compactRequest retryEvent) |> wait with
               | Success(Inserted _, Some _) -> ()
               | other -> failwithf "Clean retry did not succeed: %A" other
           } ]

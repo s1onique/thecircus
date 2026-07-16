@@ -9,13 +9,32 @@ open Circus.Contracts
 open Circus.Domain
 
 /// Result internal to the persistence adapter.  It becomes an
-/// IngestEventResult only after the complete transaction has committed.
+/// `IngestEventResult` only after the complete transaction has committed.
 type IngestionTxResult =
     | AppendSucceeded of JournalAppendOutcome * RunProjection option
     | AppendFailed of PersistenceFailure
 
+/// Narrow observer seam used by tests to observe transaction boundaries
+/// from outside the service.  Production composition uses `AttemptObserver.noop`.
+type AttemptObserver =
+    { ConnectionOpened: NpgsqlConnection -> unit
+      TransactionBegun: NpgsqlConnection -> NpgsqlTransaction -> unit
+      BeforeContestedMutation: NpgsqlConnection -> NpgsqlTransaction -> unit }
+
+module AttemptObserver =
+    let noop =
+        { ConnectionOpened = fun _ -> ()
+          TransactionBegun = fun _ _ -> ()
+          BeforeContestedMutation = fun _ _ -> () }
+
 type IngestionTransaction =
-    { Execute: NpgsqlConnection -> NpgsqlTransaction -> JournalCandidate -> ValidatedEvent -> Task<IngestionTxResult> }
+    { Execute:
+        AttemptObserver
+            -> NpgsqlConnection
+            -> NpgsqlTransaction
+            -> JournalCandidate
+            -> ValidatedEvent
+            -> Task<IngestionTxResult> }
 
 module IngestionTransaction =
     let private loadProjection
@@ -40,6 +59,7 @@ module IngestionTransaction =
         }
 
     let private updateProjection
+        (observer: AttemptObserver)
         (conn: NpgsqlConnection)
         (tx: NpgsqlTransaction)
         (candidate: JournalCandidate)
@@ -50,6 +70,7 @@ module IngestionTransaction =
             if not (JournalDecision.isKnownEventType (EventType.value candidate.EventType)) then
                 return Ok None
             else
+                observer.BeforeContestedMutation conn tx
                 let! existing = loadProjection conn tx candidate.RunId
 
                 match existing with
@@ -104,17 +125,19 @@ module IngestionTransaction =
         }
 
     let execute
+        (observer: AttemptObserver)
         (conn: NpgsqlConnection)
         (tx: NpgsqlTransaction)
         (candidate: JournalCandidate)
         (event: ValidatedEvent)
         : Task<IngestionTxResult> =
         task {
+            observer.BeforeContestedMutation conn tx
             let! position = JournalSqlExec.tryInsert conn tx candidate
 
             match position with
             | Some value ->
-                let! projection = updateProjection conn tx candidate (JournalPosition value) event
+                let! projection = updateProjection observer conn tx candidate (JournalPosition value) event
 
                 match projection with
                 | Ok projection -> return AppendSucceeded(Inserted(JournalPosition value), projection)
@@ -133,6 +156,9 @@ module IngestionTransaction =
 /// injected delay makes retry tests deterministic without changing the
 /// production transaction algorithm.
 module IngestEventService =
+    let private maximumAttempts = 3
+    let private baseDelayMilliseconds = 25
+
     let private isRetryable (ex: NpgsqlException) =
         ex.SqlState = SqlStates.SerializationFailure
         || ex.SqlState = SqlStates.DeadlockDetected
@@ -150,80 +176,112 @@ module IngestEventService =
                 ()
         }
 
-    let createWithPolicy
+    /// One attempt of the full transaction.  Opens a fresh connection,
+    /// begins a serialisable transaction, runs the ingestion transaction,
+    /// commits only on authoritative success, and rolls back otherwise.
+    /// The returned `RetryOperationResult` is the sole authority for
+    /// whether the policy retries.  Every NpgsqlException raised from
+    /// the observer, the open, the begin, the work, or the commit is
+    /// classified by this single try/catch so the policy always sees a
+    /// consistent result.
+    let private runOneAttempt
+        (observer: AttemptObserver)
         (dataSource: NpgsqlDataSource)
-        (maximumAttempts: int)
-        (delay: int -> Task<unit>)
-        : Circus.Application.IngestEventService =
-        if maximumAttempts < 1 then
-            invalidArg "maximumAttempts" "must be at least one"
+        (candidate: JournalCandidate)
+        (event: ValidatedEvent)
+        : Task<RetryOperationResult<JournalAppendOutcome * RunProjection option>> =
+        task {
+            try
+                use conn = dataSource.CreateConnection()
 
-        let rec executeAttempt
-            (attempt: int)
-            (candidate: JournalCandidate)
-            (event: ValidatedEvent)
-            : Task<IngestEventResult> =
-            task {
                 try
-                    use conn = dataSource.CreateConnection()
                     do! conn.OpenAsync() |> Async.AwaitTask
+                    observer.ConnectionOpened conn
                     use tx = conn.BeginTransaction(System.Data.IsolationLevel.Serializable)
 
                     try
-                        let! txResult = IngestionTransaction.execute conn tx candidate event
-                        do! tx.CommitAsync() |> Async.AwaitTask
+                        observer.TransactionBegun conn tx
 
-                        return
-                            match txResult with
-                            | AppendSucceeded(outcome, projection) -> Success(outcome, projection)
-                            | AppendFailed failure -> PersistenceFailure failure
+                        let! txResult = IngestionTransaction.execute observer conn tx candidate event
+
+                        match txResult with
+                        | AppendSucceeded(outcome, projection) ->
+                            do! tx.CommitAsync() |> Async.AwaitTask
+                            return RetrySucceeded(outcome, projection)
+                        | AppendFailed failure ->
+                            do! safeRollback tx
+                            return PermanentFailure failure
                     with
                     | :? OperationCanceledException as cancellation ->
                         do! safeRollback tx
                         return raise cancellation
                     | :? NpgsqlException as ex when isRetryable ex ->
                         do! safeRollback tx
-
-                        if attempt < maximumAttempts then
-                            do! delay attempt
-                            return! executeAttempt (attempt + 1) candidate event
-                        else
-                            return PersistenceFailure SerializationRetriesExhausted
+                        return RetryableFailure
                     | :? NpgsqlException as ex when isUnavailable ex ->
                         do! safeRollback tx
-                        return PersistenceFailure DatabaseUnavailable
+                        return PermanentFailure DatabaseUnavailable
                     | :? NpgsqlException as ex ->
                         do! safeRollback tx
 
                         return
-                            PersistenceFailure(
+                            PermanentFailure(
                                 UnexpectedDatabaseFailure(
                                     ex.SqlState |> Option.ofObj |> Option.defaultValue "database_error"
                                 )
                             )
                 with
                 | :? OperationCanceledException as cancellation -> return raise cancellation
-                | :? NpgsqlException as ex when isUnavailable ex -> return PersistenceFailure DatabaseUnavailable
+                | :? NpgsqlException as ex when isRetryable ex -> return RetryableFailure
+                | :? NpgsqlException as ex when isUnavailable ex -> return PermanentFailure DatabaseUnavailable
                 | :? NpgsqlException as ex ->
                     return
-                        PersistenceFailure(
+                        PermanentFailure(
                             UnexpectedDatabaseFailure(
                                 ex.SqlState |> Option.ofObj |> Option.defaultValue "database_error"
                             )
                         )
-            }
+            with
+            | :? OperationCanceledException as cancellation -> return raise cancellation
+            | :? NpgsqlException as ex when isUnavailable ex -> return PermanentFailure DatabaseUnavailable
+            | :? NpgsqlException as ex ->
+                return
+                    PermanentFailure(
+                        UnexpectedDatabaseFailure(ex.SqlState |> Option.ofObj |> Option.defaultValue "database_error")
+                    )
+        }
+
+    let private productionDelay (attempt: int) : Task<unit> =
+        let work: Async<unit> =
+            async { do! Async.AwaitTask(Task.Delay(baseDelayMilliseconds * attempt)) }
+
+        Async.StartAsTask work
+
+    /// Build a service that uses the production retry authority.  Tests pass
+    /// the optional delay to make retry behaviour deterministic; the observer
+    /// seam lets concurrency tests observe the real transaction boundary.
+    let createWithPolicy
+        (dataSource: NpgsqlDataSource)
+        (observer: AttemptObserver)
+        (delay: int -> Task<unit>)
+        : Circus.Application.IngestEventService =
+        let ingestion = RetryPolicy.execute maximumAttempts delay
 
         { Ingest =
             fun request ->
-                let candidate = IngestEvent.buildCandidate request
-                executeAttempt 1 candidate request.Event }
+                task {
+                    let candidate = IngestEvent.buildCandidate request
 
-    let private productionDelay (attempt: int) : Task<unit> =
-        let work: Async<unit> = async { do! Async.AwaitTask(Task.Delay(25 * attempt)) }
-        Async.StartAsTask work
+                    let! result = ingestion (fun _attempt -> runOneAttempt observer dataSource candidate request.Event)
+
+                    return
+                        match result with
+                        | Ok(outcome, projection) -> Success(outcome, projection)
+                        | Error failure -> PersistenceFailure failure
+                } }
 
     let create (dataSource: NpgsqlDataSource) =
-        createWithPolicy dataSource 3 productionDelay
+        createWithPolicy dataSource AttemptObserver.noop productionDelay
 
 /// Rebuild reads only durable raw authority, decodes it through the contract
 /// decoder, and folds it through the same RunProjection.applyEvent reducer as

@@ -2,19 +2,17 @@ namespace Circus.Persistence.Postgres
 
 open Npgsql
 
-/// Host-supplied PostgreSQL settings.  The connection string is never
-/// constructed from defaults and is never logged by this library.
-type PostgresConfiguration =
-    { ConnectionString: string
-      MaximumRetries: int
-      RetryDelayMilliseconds: int }
+/// Host-supplied PostgreSQL settings.  Only the connection string is honoured
+/// in production; the retry count and back-off are owned by the single retry
+/// authority inside `IngestEventService`.
+type PostgresConfiguration = { ConnectionString: string }
 
 module PostgresConfiguration =
     let defaultConfiguration (connectionString: string) : PostgresConfiguration =
-        { ConnectionString = connectionString
-          MaximumRetries = 3
-          RetryDelayMilliseconds = 25 }
+        { ConnectionString = connectionString }
 
+    /// Build exactly one NpgsqlDataSource.  The caller must own and dispose
+    /// it; nothing here starts a connection.
     let createDataSource (config: PostgresConfiguration) : NpgsqlDataSource =
         if System.String.IsNullOrWhiteSpace config.ConnectionString then
             invalidArg "connectionString" "CIRCUS_DATABASE_URL must not be empty"

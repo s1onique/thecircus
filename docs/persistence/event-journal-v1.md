@@ -2,10 +2,15 @@
 
 This document is the durable continuation of
 `ACT-CIRCUS-INGESTION-JOURNAL01` and is the authoritative spec closed by
-`ACT-CIRCUS-INGESTION-JOURNAL01-CLOSURE01`.  It replaces the partial
-specification that the parent ACT left in place.  Every statement in this
-file is supported by the executable evidence catalogued in the closure
-report.
+`ACT-CIRCUS-INGESTION-JOURNAL01-CLOSURE01` and corrected by
+`ACT-CIRCUS-INGESTION-JOURNAL01-CLOSURE01-CORRECTION01`.  It replaces the
+partial specification that the parent ACT left in place.  Statements
+in this file describe the implemented code; tested claims are listed
+in `closure-ACT-CIRCUS-INGESTION-JOURNAL01-CORRECTION01.md` as
+encoded assertions in Expecto tests.  The PostgreSQL live run,
+`make test-backend`, and `make gate` were not exercised in this
+ACT; the encoded assertions describe the expected behaviour but do
+not certify it as produced evidence.
 
 ## Overview
 
@@ -111,18 +116,36 @@ The journal is protected at three layers:
   journal; `UPDATE`, `DELETE`, and `TRUNCATE` all fail with a
   permission error when executed through the real service credentials.
 
-The migration is idempotent and adds `raw_body_sha256` for pre-closure
-environments that predate the column.
+The migration set is ledger-aware and self-sufficient at
+`000003_runtime_grant_hardening`: the runner discovers already-applied
+versions, skips them, and `000003` independently upgrades any
+released environment (parent-ACT public.* state, released-parent
+circus.* state with `circus_owner` absent, or the canonical
+fresh-database state) to the canonical circus.* schema with the
+authoritative raw-digest invariant, complete role ownership, narrow
+runtime grants, default privilege policy, and a fail-closed
+extension schema.  `000001_event_journal` is the initial
+schema; `000002_namespace_alignment` is the immutable released
+namespace alignment; `000003_runtime_grant_hardening` is the
+post-release hardening migration.  See
+`closure-ACT-CIRCUS-INGESTION-JOURNAL01-CORRECTION01.md` for the
+encoded test assertions (fresh, legacy, released-parent, repeated
+no-op, ambiguous rejection).  The PostgreSQL live run, `make
+test-backend`, and `make gate` were not exercised in this ACT.
 
 ## Transaction Isolation
 
 Journal insertion and projection mutation occur in a single
-`SERIALIZABLE` PostgreSQL transaction.  `40001` (serialization failure) and
-`40P01` (deadlock detected) are the only SQLSTATEs that trigger a retry;
-every other `NpgsqlException` is converted to a typed `PersistenceFailure`
-that the API layer maps to a generic `500` or `503` without leaking the
-SQLSTATE.  The exact attempt count and the typed exhaustion result are
-covered by `RetryPolicyTests` in `tests/Circus.Application.Tests`.
+`SERIALIZABLE` PostgreSQL transaction.  The transaction has exactly two
+terminal paths: a successful `AppendSucceeded(outcome, projection)` commits
+and surfaces as `Success`; an `AppendFailed failure` rolls back without
+committing and surfaces as `PersistenceFailure`.  `40001` (serialization
+failure) and `40P01` (deadlock detected) are the only SQLSTATEs that
+trigger a retry; every other `NpgsqlException` is converted to a typed
+`PersistenceFailure` that the API layer maps to a generic `500` or
+`503` without leaking the SQLSTATE.  The exact attempt count, the typed
+exhaustion result, and the production-composition path are covered by
+`tests/Circus.Persistence.Postgres.Tests/RetryCompositionTests.fs`.
 
 ## Run Projection Rules
 
@@ -201,10 +224,15 @@ event, conflict, first-authority preservation).
 the variable is absent, empty, malformed, or missing a host or database.
 There is no fallback username, password, host, or database value.
 
-`NpgsqlDataSource` is constructed by `Program.buildHost` exactly once and
-registered as a singleton.  The data source is disposed by the host
-service provider when the host stops.  No request path or retry path
-constructs a separate connection pool.
+`NpgsqlDataSource` is constructed lazily by the DI factory registered
+in `Program.configureServices` exactly once and the service provider
+owns its lifetime.  The data source is disposed when the host stops.
+No request path or retry path constructs a separate connection pool.
+
+The four pure-validation paths (missing, empty, whitespace, malformed)
+are covered by `tests/Circus.Api.Tests/HostLifecycleTests.fs`.  The two
+testcontainer-based paths (singleton lifetime and host disposal) require
+a reachable Docker daemon.
 
 ## Operational Limitations
 
@@ -221,5 +249,17 @@ This implementation does not include:
 
 ## Schema
 
-See `db/migrations/000001_event_journal.sql` and
-`db/migrations/000002_namespace_alignment.sql` for the complete DDL.
+`000001_event_journal` creates the canonical circus.* tables.
+`000002_namespace_alignment` is the immutable released namespace
+alignment (moves public.* tables into circus.* and adds the
+raw_body_sha256 length-only CHECK).  `000003_runtime_grant_hardening`
+is the self-sufficient corrective migration: it reconciles both
+roles, fails closed on an unexpected extension-schema owner or
+unexpected CREATE grant, drops every legacy digest-related CHECK,
+re-authors the canonical equality CHECK, installs pgcrypto in
+`circus_extensions`, and enforces runtime least privilege.
+
+See `db/migrations/000001_event_journal.sql`,
+`db/migrations/000002_namespace_alignment.sql`, and
+`db/migrations/000003_runtime_grant_hardening.sql` for the complete
+DDL.

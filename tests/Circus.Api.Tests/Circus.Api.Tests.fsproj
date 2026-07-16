@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <Compile Include="HttpContractTests.fs" />
+    <Compile Include="HostLifecycleTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
@@ -14,9 +15,11 @@
     <PackageReference Include="Expecto" />
     <PackageReference Include="Giraffe" />
     <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Circus.Api\Circus.Api.fsproj" />
+    <ProjectReference Include="..\..\src\Circus.Persistence.Postgres\Circus.Persistence.Postgres.fsproj" />
   </ItemGroup>
 </Project>

@@ -8,9 +8,14 @@
     <Compile Include="PostgresFixture.fs" />
     <Compile Include="Support.fs" />
     <Compile Include="MigrationTests.fs" />
+    <Compile Include="UnlockFailureTests.fs" />
     <Compile Include="JournalRepositoryTests.fs" />
     <Compile Include="ConcurrencyTests.fs" />
     <Compile Include="ProjectionIntegrationTests.fs" />
+    <Compile Include="AppendFailedRollbackTests.fs" />
+    <Compile Include="RetryCompositionTests.fs" />
+    <Compile Include="SemanticReplayTests.fs" />
+    <Compile Include="ProjectionInvariantTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
@@ -22,5 +27,9 @@
     <ProjectReference Include="..\..\src\Circus.Application\Circus.Application.fsproj" />
     <ProjectReference Include="..\..\src\Circus.Domain\Circus.Domain.fsproj" />
     <ProjectReference Include="..\..\src\Circus.Contracts\Circus.Contracts.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\tests\fixtures\migrations\000000_pre_closure.sql" />
+    <EmbeddedResource Include="..\..\tests\fixtures\migrations\000001_released_parent.sql" />
   </ItemGroup>
 </Project>

@@ -19,6 +19,7 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\db\migrations\000001_event_journal.sql" />
     <EmbeddedResource Include="..\..\db\migrations\000002_namespace_alignment.sql" />
+    <EmbeddedResource Include="..\..\db\migrations\000003_runtime_grant_hardening.sql" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Circus.Application\Circus.Application.fsproj" />

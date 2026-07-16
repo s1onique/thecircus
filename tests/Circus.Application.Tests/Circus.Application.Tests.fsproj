@@ -7,8 +7,6 @@
   <ItemGroup>
     <Compile Include="JournalDecisionTests.fs" />
     <Compile Include="RunProjectionTests.fs" />
-    <Compile Include="ProjectionDecodingTests.fs" />
-    <Compile Include="RetryPolicyTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
@@ -16,7 +14,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Circus.Application\Circus.Application.fsproj" />
-    <ProjectReference Include="..\..\src\Circus.Persistence.Postgres\Circus.Persistence.Postgres.fsproj" />
     <ProjectReference Include="..\..\src\Circus.Domain\Circus.Domain.fsproj" />
     <ProjectReference Include="..\..\src\Circus.Contracts\Circus.Contracts.fsproj" />
   </ItemGroup>

@@ -270,31 +270,72 @@ module ProjectionRepository =
                 && summary.IsNone
                 && checks.IsNone
 
-            let validPositions =
-                JournalPosition.value firstPosition >= 1L
-                && JournalPosition.value lastPosition >= JournalPosition.value firstPosition
-                && (startedEvent
-                    |> Option.forall (fun p ->
-                        JournalPosition.value p >= 1L
-                        && JournalPosition.value p <= JournalPosition.value lastPosition))
-                && (finishedEvent
-                    |> Option.forall (fun p ->
-                        JournalPosition.value p >= 1L
-                        && JournalPosition.value p <= JournalPosition.value lastPosition))
+            let first = JournalPosition.value firstPosition
+            let last = JournalPosition.value lastPosition
+            let startedPos = startedEvent |> Option.map JournalPosition.value
+            let finishedPos = finishedEvent |> Option.map JournalPosition.value
 
+            // Strict ordering of journal positions: first <= last, every authority
+            // lies inside [first, last], and the two authorities never share a
+            // journal position because every append is a distinct row.
+            let validOrdering =
+                first >= 1L
+                && last >= first
+                && (startedPos |> Option.forall (fun p -> p >= first && p <= last))
+                && (finishedPos |> Option.forall (fun p -> p >= first && p <= last))
+
+            let distinctAuthorities =
+                match startedPos, finishedPos with
+                | Some s, Some f -> s <> f
+                | _ -> true
+
+            // Authority count mirrors the state machine in
+            // `RunProjection.applyEvent`: each authoritative event increments
+            // version exactly once, and each duplicate authority contributes
+            // one conflict.  Unknown events and replays are filtered before
+            // they reach the reducer, so version equals
+            // authorityCount + conflictCount for every accepted state.
+            let authorityCount = (if hasStarted then 1 else 0) + (if hasFinished then 1 else 0)
+
+            let validVersion = version = int64 (authorityCount + conflictCount)
+
+            // State-specific position geometry.  Conflict-producing journal
+            // positions are not retained as started/finished authorities, so
+            // `last` may legitimately exceed `max(authorities)` for a
+            // Conflicted projection that saw one or more duplicate conflicts.
+            let validGeometry =
+                match state, startedPos, finishedPos with
+                | StartedOnly, Some s, None -> first = s && last = s
+                | StartedOnly, _, _ -> false
+                | FinishedWithoutStart, None, Some f -> first = f && last = f
+                | FinishedWithoutStart, _, _ -> false
+                | Completed, Some s, Some f -> first = System.Math.Min(s, f) && last = System.Math.Max(s, f)
+                | Completed, _, _ -> false
+                | Conflicted, Some s, None -> first = s && last > s
+                | Conflicted, None, Some f -> first = f && last > f
+                | Conflicted, Some s, Some f -> first = System.Math.Min(s, f) && last > System.Math.Max(s, f)
+                | _ -> true
+
+            // State machine guards:
+            //   * non-conflict states cannot carry conflicts;
+            //   * conflict states must carry at least one authority kind
+            //     (a duplicate started or duplicate finished event).
             let validState =
                 match state with
-                | StartedOnly -> hasStarted && not hasFinished && conflictCount = 0
-                | FinishedWithoutStart -> not hasStarted && hasFinished && conflictCount = 0
-                | Completed -> hasStarted && hasFinished && conflictCount = 0
-                | Conflicted -> conflictCount > 0 && (hasStarted || hasFinished)
+                | StartedOnly -> hasStarted && not hasFinished && conflictCount = 0 && authorityCount = 1
+                | FinishedWithoutStart -> not hasStarted && hasFinished && conflictCount = 0 && authorityCount = 1
+                | Completed -> hasStarted && hasFinished && conflictCount = 0 && authorityCount = 2
+                | Conflicted -> conflictCount >= 1 && authorityCount >= 1 && version >= 2L
 
             if
                 version < 1L
                 || conflictCount < 0
-                || not validPositions
+                || not validOrdering
+                || not distinctAuthorities
+                || not validVersion
                 || not startedAuthorityComplete && not startedAuthorityAbsent
                 || not finishedAuthorityComplete && not finishedAuthorityAbsent
+                || not validGeometry
                 || not validState
             then
                 invalid ()

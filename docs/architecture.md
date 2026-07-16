@@ -79,9 +79,25 @@ persistence adapter, and the single host-owned `NpgsqlDataSource`.
   `DELETE`, and `TRUNCATE` all fail at execution time through the real
   service credentials.
 * The serializable transaction commits only when both the journal insert
-  and the projection upsert succeed; atomicity is verified by an
-  end-to-end test that forces a projection trigger to fail and proves the
-  journal row is rolled back.
+  and the projection upsert succeed.  A typed `AppendFailed` failure
+  rolls back without committing; a trigger-driven projection exception
+  rolls back without committing.  Both paths are covered by
+  `tests/Circus.Persistence.Postgres.Tests/AppendFailedRollbackTests.fs`
+  and `tests/Circus.Persistence.Postgres.Tests/ConcurrencyTests.fs`.
+* The migration runner is ledger-aware: it discovers already-applied
+  versions, skips them, records each version only after the migration
+  transaction commits, and fails closed when both the legacy
+  `public.circus_schema_migrations` and the canonical
+  `circus.circus_schema_migrations` ledgers exist.
+* `000001_event_journal` is the initial journal and projection
+  schema; `000002_namespace_alignment` is the immutable released
+  namespace alignment; `000003_runtime_grant_hardening` is the
+  post-release corrective migration that carries every role,
+  ownership, digest, trigger, privilege, and index invariant the
+  released tree did not author on its own.  See
+  `docs/persistence/event-journal-v1.md` for the durable spec and
+  `closure-ACT-CIRCUS-INGESTION-JOURNAL01-CORRECTION01.md` for the
+  exact migration paths.
 
 ### Bounded retry
 
@@ -90,7 +106,16 @@ obtains a fresh connection for each attempt, and never reuses a failed
 `NpgsqlTransaction`.  The policy retries on SQLSTATE `40001` and `40P01`
 only.  All other database errors are converted to a typed
 `PersistenceFailure` that the API layer maps to a generic 5xx response
-without leaking internals.
+without leaking internals.  `RetryPolicy.execute` is the sole retry
+authority in production; the recursive loop that previously lived inside
+`IngestionTransaction.fs` is removed.
+
+The transaction has exactly two terminal paths.  The service commits
+only on `AppendSucceeded(outcome, projection)`; every `AppendFailed failure`
+rolls back before the service surfaces `PermanentFailure failure` to the
+retry policy.  The success path is
+`commit -> RetrySucceeded -> Success`; the failure path is
+`safeRollback -> PermanentFailure -> PersistenceFailure`.
 
 ## F# Domain Core (Circus.Domain)
 

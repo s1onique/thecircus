@@ -8,8 +8,6 @@ let main (args: string[]) =
         testList
             "Circus.Application.Tests"
             [ Circus.Application.Tests.JournalDecisionTests.tests
-              Circus.Application.Tests.RunProjectionTests.tests
-              Circus.Application.Tests.ProjectionDecodingTests.tests
-              Circus.Application.Tests.RetryPolicyTests.tests ]
+              Circus.Application.Tests.RunProjectionTests.tests ]
 
     Tests.runTestsWithCLIArgs [||] args allTests
