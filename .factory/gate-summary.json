@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "gate_id": "circus-container-publish01",
+  "doctrine": "ACT-CIRCUS-CONTAINER-HARBOR-PUBLISH01",
+  "generated_at": "2026-07-16T13:09:35.313189+00:00",
+  "generated_by": "leamas-core@c0c2e005cfdf",
+  "source": ".factory/gate-summary.json",
+  "source_status": "present",
+  "overall_status": "green",
+  "checks_total": 3,
+  "checks_passed": 3,
+  "checks_failed": 0,
+  "checks": [
+    {
+      "id": "container-publication-policy",
+      "label": "container-publication-policy",
+      "command": "/opt/homebrew/opt/python@3.14/bin/python3.14 scripts/verify_container_policy.py",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_seconds": 0.055,
+      "started_at": "2026-07-16T13:09:34.032050+00:00",
+      "finished_at": "2026-07-16T13:09:34.086735+00:00",
+      "stdout_tail": "container publication policy checks passed\n",
+      "stderr_tail": ""
+    },
+    {
+      "id": "executable-shell-tests",
+      "label": "executable-shell-tests",
+      "command": "bash tests/ci/test_build_publish_shell.sh",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_seconds": 0.921,
+      "started_at": "2026-07-16T13:09:34.086814+00:00",
+      "finished_at": "2026-07-16T13:09:35.007609+00:00",
+      "stdout_tail": "    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner }}\nall build/publish shell tests passed\n",
+      "stderr_tail": "verify_digest: REVISION is not a full 40-character SHA\n"
+    },
+    {
+      "id": "action-pin-mutation-test",
+      "label": "action-pin-mutation-test",
+      "command": "bash tests/ci/test_action_pin_mutation.sh",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_seconds": 0.305,
+      "started_at": "2026-07-16T13:09:35.007648+00:00",
+      "finished_at": "2026-07-16T13:09:35.313120+00:00",
+      "stdout_tail": "OK: pristine policy check passes\nOK: mutated @v6 policy check failed as expected (rc=1)\nOK: original policy check still passes after the sandbox mutation\naction-pin mutation test passed\n",
+      "stderr_tail": ""
+    }
+  ],
+  "evidence": {
+    "shellcheck_release": {
+      "version": "0.11.0",
+      "asset": "shellcheck-v0.11.0.linux.x86_64.tar.xz",
+      "sha256": "8afc50b302d5feeac9381ea114d563f0150d061520042b254d6eb715797c8223"
+    },
+    "actionlint_release": {
+      "version": "1.7.12",
+      "asset": "actionlint_1.7.12_linux_amd64.tar.gz",
+      "sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+    },
+    "actions_checkout_pins": [
+      "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+    ],
+    "harbor_host": "harbor-pve1.spbnix.local",
+    "harbor_project": "circus",
+    "buildkit_image": "harbor-pve1.spbnix.local/dockerhub-cache/moby/buildkit:buildx-stable-1"
+  },
+  "remediation": {
+    "container_publication_policy": "Update scripts/verify_container_policy.py and the files it inspects (Dockerfile.*, .github/workflows/*.yml, scripts/ci/*.sh).",
+    "executable_shell_tests": "Update tests/ci/test_build_publish_shell.sh and the scripts/ci/*.sh files it exercises.",
+    "action_pin_mutation_test": "Update scripts/verify_container_policy.py's action-pin parser so it rejects unpinned uses: entries."
+  }
+}

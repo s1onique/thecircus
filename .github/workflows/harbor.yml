@@ -1,0 +1,121 @@
+name: Circus Harbor publication
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: circus-harbor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Repository-owned container publication policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact source revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      # actionlint 1.7.12 — release tarball with GitHub-attested SHA-256.
+      # Install to /usr/local/bin (PATH already includes it on the
+      # ubuntu-latest runner) so the bare command name resolves on
+      # subsequent steps.  The 64-character digest is verified against
+      # the actionlint release checksums file.
+      - name: Install actionlint 1.7.12
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          ARCHIVE="/tmp/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSL --fail -o "${ARCHIVE}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "verifying actionlint tarball sha256"
+          echo "${ACTIONLINT_SHA256}  ${ARCHIVE}" | sha256sum --check
+          # sudo cat file | sudo tee new is the recommended pattern when
+          # the source is not a regular file.  See the shellcheck SC2024
+          # wiki entry.
+          sudo bash -c 'tar -xzOf "$1" actionlint | sudo tee /usr/local/bin/actionlint > /dev/null' _ "${ARCHIVE}"
+          sudo chmod 0755 /usr/local/bin/actionlint
+          actionlint --version
+
+
+
+
+      - name: Install shellcheck 0.11.0
+        env:
+          SC_VER: "0.11.0"
+          # Official SHA-256 for shellcheck-v0.11.0.linux.x86_64.tar.xz
+          # from the koalaman/shellcheck 0.11.0 release on GitHub.
+          SC_SHA256: "8afc50b302d5feeac9381ea114d563f0150d061520042b254d6eb715797c8223"
+        run: |
+          set -euo pipefail
+          curl -sSL --fail -o /tmp/sc.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SC_VER}/shellcheck-v${SC_VER}.linux.x86_64.tar.xz"
+          echo "verifying shellcheck tarball sha256"
+          echo "${SC_SHA256}  /tmp/sc.tar.xz" | sha256sum --check
+          mkdir -p /tmp/sc && tar -xJf /tmp/sc.tar.xz -C /tmp/sc
+          sudo mv /tmp/sc/shellcheck-v${SC_VER}/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version
+
+      - name: Validate workflow syntax with actionlint and shellcheck
+        run: |
+          actionlint -shellcheck shellcheck .github/workflows/harbor.yml .github/workflows/harbor-build-image.yml
+
+      - name: Run repository-owned static policy suite
+        run: python3 scripts/verify_container_policy.py
+
+      - name: Run executable shell tests
+        run: bash tests/ci/test_build_publish_shell.sh
+
+      - name: Run action-pin mutation test
+        run: bash tests/ci/test_action_pin_mutation.sh
+
+  backend:
+    name: Build Circus backend image
+    needs: policy
+    uses: ./.github/workflows/harbor-build-image.yml
+    with:
+      image_name: circus-backend
+      dockerfile: Dockerfile.backend
+      context: .
+      cache_name: circus-backend
+      platform: linux/amd64
+      smoke_test_kind: backend
+      push: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) }}
+      runner: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'spbnix-k8s-docker' || 'ubuntu-latest' }}
+    secrets:
+      HARBOR_USERNAME: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && secrets.HARBOR_USERNAME || '' }}
+      HARBOR_PASSWORD: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && secrets.HARBOR_PASSWORD || '' }}
+      SPBNIX_CA_CERT_PEM: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && secrets.SPBNIX_CA_CERT_PEM || '' }}
+
+  frontend:
+    name: Build Circus frontend image
+    needs: policy
+    uses: ./.github/workflows/harbor-build-image.yml
+    with:
+      image_name: circus-frontend
+      dockerfile: Dockerfile.frontend
+      context: .
+      cache_name: circus-frontend
+      platform: linux/amd64
+      smoke_test_kind: frontend
+      push: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) }}
+      runner: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'spbnix-k8s-docker' || 'ubuntu-latest' }}
+    secrets:
+      HARBOR_USERNAME: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && secrets.HARBOR_USERNAME || '' }}
+      HARBOR_PASSWORD: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && secrets.HARBOR_PASSWORD || '' }}
+      SPBNIX_CA_CERT_PEM: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && secrets.SPBNIX_CA_CERT_PEM || '' }}

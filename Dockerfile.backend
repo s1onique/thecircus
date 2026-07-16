@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1.7
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0.202 AS restore
+WORKDIR /src
+
+# Restore inputs are kept ahead of source files so ordinary source changes reuse
+# the locked NuGet restore layer.  The project closure is Circus.Api plus its
+# four production project dependencies; test projects are intentionally absent.
+COPY ["Circus.sln", "./"]
+COPY ["global.json", "./"]
+COPY ["Directory.Build.props", "./"]
+COPY ["Directory.Packages.props", "./"]
+# Circus.Persistence.Postgres embeds these migration inputs during compilation;
+# they are part of the API production dependency closure, not startup work.
+COPY ["db/migrations/000001_event_journal.sql", "db/migrations/"]
+COPY ["db/migrations/000002_namespace_alignment.sql", "db/migrations/"]
+COPY ["db/migrations/000003_runtime_grant_hardening.sql", "db/migrations/"]
+COPY ["src/Circus.Api/Circus.Api.fsproj", "src/Circus.Api/"]
+COPY ["src/Circus.Api/packages.lock.json", "src/Circus.Api/"]
+COPY ["src/Circus.Application/Circus.Application.fsproj", "src/Circus.Application/"]
+COPY ["src/Circus.Application/packages.lock.json", "src/Circus.Application/"]
+COPY ["src/Circus.Contracts/Circus.Contracts.fsproj", "src/Circus.Contracts/"]
+COPY ["src/Circus.Contracts/packages.lock.json", "src/Circus.Contracts/"]
+COPY ["src/Circus.Domain/Circus.Domain.fsproj", "src/Circus.Domain/"]
+COPY ["src/Circus.Domain/packages.lock.json", "src/Circus.Domain/"]
+COPY ["src/Circus.Persistence.Postgres/Circus.Persistence.Postgres.fsproj", "src/Circus.Persistence.Postgres/"]
+COPY ["src/Circus.Persistence.Postgres/packages.lock.json", "src/Circus.Persistence.Postgres/"]
+
+RUN --mount=type=cache,id=circus-backend-nuget,target=/root/.nuget/packages \
+    dotnet restore src/Circus.Api/Circus.Api.fsproj --locked-mode
+
+FROM restore AS publish
+COPY src/Circus.Api src/Circus.Api
+COPY src/Circus.Application src/Circus.Application
+COPY src/Circus.Contracts src/Circus.Contracts
+COPY src/Circus.Domain src/Circus.Domain
+COPY src/Circus.Persistence.Postgres src/Circus.Persistence.Postgres
+
+RUN --mount=type=cache,id=circus-backend-nuget,target=/root/.nuget/packages \
+    dotnet publish src/Circus.Api/Circus.Api.fsproj \
+      --configuration Release \
+      --no-restore \
+      --no-self-contained \
+      -p:UseAppHost=false \
+      --output /out/publish
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.6 AS runtime
+WORKDIR /app
+COPY --from=publish /out/publish/ ./
+
+ARG OCI_TITLE
+ARG OCI_DESCRIPTION
+ARG OCI_SOURCE
+ARG OCI_REVISION
+ARG OCI_VERSION
+ARG OCI_CREATED
+LABEL org.opencontainers.image.title="${OCI_TITLE}" \
+      org.opencontainers.image.description="${OCI_DESCRIPTION}" \
+      org.opencontainers.image.source="${OCI_SOURCE}" \
+      org.opencontainers.image.revision="${OCI_REVISION}" \
+      org.opencontainers.image.version="${OCI_VERSION}" \
+      org.opencontainers.image.created="${OCI_CREATED}"
+
+ENV ASPNETCORE_HTTP_PORTS=8080
+EXPOSE 8080
+USER 65532:65532
+ENTRYPOINT ["dotnet", "Circus.Api.dll"]

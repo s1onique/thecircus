@@ -1,0 +1,42 @@
+# VCS and CI material
+.git
+.github
+.factory
+
+# Build and test output
+**/bin
+**/obj
+**/node_modules
+**/elm-stuff
+**/TestResults
+coverage
+artifacts
+tmp
+web/dist
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.template
+*.user
+*.suo
+.npmrc
+**/.npmrc
+.dockerconfigjson
+**/.dockerconfigjson
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+**/.aws
+**/.kube
+**/*secret*
+
+# Editor and OS noise
+.DS_Store
+.vscode
+.idea
+*.swp
+*.swo
+*~

@@ -8,9 +8,15 @@ include .factory/generated/factory.mk
 # =============================================================================
 DOTNET  ?= dotnet
 NPM     ?= npm
+CONTAINER_CLI ?= docker
+CONTAINER_PLATFORM ?= linux/amd64
 SLN      := Circus.sln
 WEB_DIR  := web
 WEB_DIST := $(WEB_DIR)/dist
+CONTAINER_BACKEND_IMAGE ?= circus-backend:act-local
+CONTAINER_FRONTEND_IMAGE ?= circus-frontend:act-local
+CONTAINER_SOURCE_REVISION := $(shell git rev-parse HEAD 2>/dev/null || printf 'local')
+CONTAINER_CREATED := $(shell git show -s --format=%cI HEAD 2>/dev/null || printf '1970-01-01T00:00:00Z')
 
 # Sources that should trigger an Elm rebuild.
 WEB_SOURCES := \
@@ -131,6 +137,46 @@ test: test-backend test-web
 
 .PHONY: test-ingestion
 test-ingestion: test-application test-postgres test-api
+
+# =============================================================================
+# Container images and runtime smoke tests
+# =============================================================================
+
+.PHONY: verify-container-policy
+verify-container-policy:
+	python3 scripts/verify_container_policy.py
+
+.PHONY: container-build-backend
+container-build-backend:
+	DOCKER_BUILDKIT=1 $(CONTAINER_CLI) build --platform $(CONTAINER_PLATFORM) --file Dockerfile.backend --tag $(CONTAINER_BACKEND_IMAGE) \
+		--build-arg OCI_TITLE="The Circus backend" \
+		--build-arg OCI_DESCRIPTION="The Circus production backend OCI image" \
+		--build-arg OCI_SOURCE="local://thecircus" \
+		--build-arg OCI_REVISION=$(CONTAINER_SOURCE_REVISION) \
+		--build-arg OCI_VERSION=act-local \
+		--build-arg OCI_CREATED=$(CONTAINER_CREATED) .
+
+.PHONY: container-build-frontend
+container-build-frontend:
+	DOCKER_BUILDKIT=1 $(CONTAINER_CLI) build --platform $(CONTAINER_PLATFORM) --file Dockerfile.frontend --tag $(CONTAINER_FRONTEND_IMAGE) \
+		--build-arg OCI_TITLE="The Circus frontend" \
+		--build-arg OCI_DESCRIPTION="The Circus production frontend OCI image" \
+		--build-arg OCI_SOURCE="local://thecircus" \
+		--build-arg OCI_REVISION=$(CONTAINER_SOURCE_REVISION) \
+		--build-arg OCI_VERSION=act-local \
+		--build-arg OCI_CREATED=$(CONTAINER_CREATED) .
+
+.PHONY: container-smoke-backend
+container-smoke-backend: container-build-backend
+	CONTAINER_CLI=$(CONTAINER_CLI) scripts/container-smoke.sh backend $(CONTAINER_BACKEND_IMAGE)
+
+.PHONY: container-smoke-frontend
+container-smoke-frontend: container-build-frontend
+	CONTAINER_CLI=$(CONTAINER_CLI) scripts/container-smoke.sh frontend $(CONTAINER_FRONTEND_IMAGE)
+
+.PHONY: container-smoke
+container-smoke: container-smoke-backend container-smoke-frontend
+	@echo "Container smoke tests passed."
 
 # =============================================================================
 # Run

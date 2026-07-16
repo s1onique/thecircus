@@ -1,0 +1,265 @@
+name: Circus Harbor image (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: Published repository basename
+        required: true
+        type: string
+      dockerfile:
+        description: Dockerfile path relative to the repository root
+        required: true
+        type: string
+      context:
+        description: Docker build context relative to the repository root
+        required: true
+        type: string
+      cache_name:
+        description: Image-specific Harbor cache basename
+        required: true
+        type: string
+      push:
+        description: Request trusted Harbor publication
+        required: true
+        type: boolean
+      platform:
+        description: Single platform for this ACT
+        required: true
+        type: string
+      smoke_test_kind:
+        description: Closed repository-owned smoke contract selector
+        required: true
+        type: string
+      runner:
+        description: Trusted runner label; ignored for pull requests
+        required: true
+        type: string
+    secrets:
+      HARBOR_USERNAME:
+        required: false
+      HARBOR_PASSWORD:
+        required: false
+      SPBNIX_CA_CERT_PEM:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  HARBOR_REGISTRY: harbor-pve1.spbnix.local
+  HARBOR_PROJECT: circus
+  BUILDKIT_IMAGE: harbor-pve1.spbnix.local/dockerhub-cache/moby/buildkit:buildx-stable-1
+
+jobs:
+  build:
+    name: ${{ inputs.image_name }} (${{ inputs.platform }})
+    # A PR is always forced onto a GitHub-hosted runner.  The caller also
+    # passes push=false and empty secrets for PRs; this is a second boundary.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CONTAINER_CLI: docker
+      DOCKER_BUILDKIT: '1'
+      IMAGE_NAME: ${{ inputs.image_name }}
+      DOCKERFILE: ${{ inputs.dockerfile }}
+      BUILD_CONTEXT: ${{ inputs.context }}
+      CACHE_NAME: ${{ inputs.cache_name }}
+      PLATFORM: ${{ inputs.platform }}
+      SMOKE_TEST_KIND: ${{ inputs.smoke_test_kind }}
+      PUSH_REQUESTED: ${{ inputs.push }}
+      IMAGE_REPOSITORY: harbor-pve1.spbnix.local/circus/${{ inputs.image_name }}
+      CACHE_REF: harbor-pve1.spbnix.local/circus/cache/${{ inputs.cache_name }}:buildcache
+
+    steps:
+      - name: Check out exact source revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Validate closed build inputs
+        run: |
+          set -euo pipefail
+          [[ "$PLATFORM" == "linux/amd64" ]] || { echo "only linux/amd64 is supported by this ACT" >&2; exit 1; }
+          case "$SMOKE_TEST_KIND" in
+            backend|frontend) ;;
+            *) echo "unsupported smoke-test kind: $SMOKE_TEST_KIND" >&2; exit 1 ;;
+          esac
+          case "$CACHE_NAME" in
+            circus-backend|circus-frontend) ;;
+            *) echo "cache name is not an approved image-specific cache: $CACHE_NAME" >&2; exit 1 ;;
+          esac
+          [[ -f "$DOCKERFILE" ]] || { echo "Dockerfile not found: $DOCKERFILE" >&2; exit 1; }
+          [[ -d "$BUILD_CONTEXT" ]] || { echo "build context not found: $BUILD_CONTEXT" >&2; exit 1; }
+          [[ "$IMAGE_NAME" == circus-backend || "$IMAGE_NAME" == circus-frontend ]] || {
+            echo "image name is not an approved Circus image: $IMAGE_NAME" >&2
+            exit 1
+          }
+
+      - name: Prepare immutable metadata and tag contract
+        id: metadata
+        env:
+          IMAGE_REPOSITORY: ${{ env.IMAGE_REPOSITORY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          PUBLISH_REQUESTED: ${{ inputs.push }}
+        run: .github/scripts/harbor-metadata.sh
+
+      - name: Install SPbNIX Harbor CA and BuildKit trust
+        id: harbor_ca
+        if: steps.metadata.outputs.publish == 'true'
+        env:
+          SPBNIX_CA_CERT_PEM: ${{ secrets.SPBNIX_CA_CERT_PEM }}
+          HARBOR_HOST: harbor-pve1.spbnix.local
+          # k9b's canonical ARC DinD runner mounts the daemon CA in its sidecar.
+          SKIP_RUNNER_DOCKER_CERTS_D: '1'
+        run: .github/scripts/install-spbnix-harbor-ca.sh
+
+      - name: Authenticate to Harbor
+        if: steps.metadata.outputs.publish == 'true'
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${HARBOR_USERNAME:?HARBOR_USERNAME is required for publication}"
+          : "${HARBOR_PASSWORD:?HARBOR_PASSWORD is required for publication}"
+          printf '%s' "$HARBOR_PASSWORD" | docker login "$HARBOR_REGISTRY" \
+            --username "$HARBOR_USERNAME" \
+            --password-stdin
+
+      - name: Verify Docker daemon Harbor trust
+        id: docker_trust
+        if: steps.metadata.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          docker pull "$HARBOR_REGISTRY/dockerhub-cache/library/busybox:latest"
+          docker image rm "$HARBOR_REGISTRY/dockerhub-cache/library/busybox:latest"
+          echo "Docker daemon successfully verified Harbor TLS trust"
+
+      - name: Create configured BuildKit builder
+        id: builder
+        # The builder must be created for BOTH publish paths; only the
+        # BuildKit image and --buildkitd-config arguments are conditional
+        # on the trusted publication.  Pull-request builds still need a
+        # builder to load the local image for the smoke test.
+        env:
+          PUBLISH: ${{ steps.metadata.outputs.publish }}
+          BUILDER_NAME: circus-${{ github.run_id }}-${{ github.run_attempt }}-${{ env.IMAGE_NAME }}
+          BUILDKIT_IMAGE: ${{ env.BUILDKIT_IMAGE }}
+          BUILDKITD_CONFIG: ${{ steps.harbor_ca.outputs.buildkitd_config }}
+        run: scripts/ci/wire_buildx_builder.sh
+
+      - name: Build testable image with repository cache
+        id: local_build
+        env:
+          PUBLISH: ${{ steps.metadata.outputs.publish }}
+          BUILDER_NAME: ${{ steps.builder.outputs.builder }}
+          LOCAL_TAG: ${{ steps.metadata.outputs.local_tag }}
+          OCI_TITLE: ${{ inputs.smoke_test_kind == 'backend' && 'The Circus backend' || 'The Circus frontend' }}
+          OCI_DESCRIPTION: The Circus production ${{ inputs.smoke_test_kind }} OCI image
+          OCI_SOURCE: ${{ steps.metadata.outputs.source }}
+          OCI_REVISION: ${{ steps.metadata.outputs.revision }}
+          OCI_VERSION: ${{ steps.metadata.outputs.version }}
+          OCI_CREATED: ${{ steps.metadata.outputs.created }}
+          TAGS: ${{ steps.metadata.outputs.tags }}
+          CA_SECRET_PATH: ${{ steps.harbor_ca.outputs.ca_file }}
+        run: scripts/ci/build_image.sh
+
+      - name: Run local runtime smoke test before publication
+        id: local_smoke
+        env:
+          IMAGE: ${{ steps.metadata.outputs.local_tag }}
+        run: |
+          set -euo pipefail
+          case "$SMOKE_TEST_KIND" in
+            backend) scripts/container-smoke.sh backend "$IMAGE" ;;
+            frontend) scripts/container-smoke.sh frontend "$IMAGE" ;;
+            *) echo "unsupported smoke-test kind: $SMOKE_TEST_KIND" >&2; exit 1 ;;
+          esac
+
+      - name: Publish tested revision with provenance and SBOM attempt
+        id: publish
+        if: steps.metadata.outputs.publish == 'true'
+        env:
+          PUBLISH: ${{ steps.metadata.outputs.publish }}
+          BUILDER_NAME: ${{ steps.builder.outputs.builder }}
+          TAGS: ${{ steps.metadata.outputs.tags }}
+          OCI_TITLE: ${{ inputs.smoke_test_kind == 'backend' && 'The Circus backend' || 'The Circus frontend' }}
+          OCI_DESCRIPTION: The Circus production ${{ inputs.smoke_test_kind }} OCI image
+          OCI_SOURCE: ${{ steps.metadata.outputs.source }}
+          OCI_REVISION: ${{ steps.metadata.outputs.revision }}
+          OCI_VERSION: ${{ steps.metadata.outputs.version }}
+          OCI_CREATED: ${{ steps.metadata.outputs.created }}
+          CA_SECRET_PATH: ${{ steps.harbor_ca.outputs.ca_file }}
+        run: scripts/ci/publish_image.sh
+
+      - name: Capture registry digest and verify digest pull
+        id: remote_verify
+        if: steps.metadata.outputs.publish == 'true' && steps.publish.outcome == 'success'
+        env:
+          IMAGE_REPOSITORY: ${{ env.IMAGE_REPOSITORY }}
+          REVISION: ${{ steps.metadata.outputs.revision }}
+          SMOKE_TEST_KIND: ${{ inputs.smoke_test_kind }}
+          CONTAINER_CLI: docker
+          EXPECTED_REVISION: ${{ steps.metadata.outputs.revision }}
+        run: scripts/ci/verify_build_image.sh
+
+      - name: Write Harbor publication summary
+        if: always()
+        env:
+          PUBLISH: ${{ steps.metadata.outputs.publish }}
+          DIGEST: ${{ steps.remote_verify.outputs.digest }}
+          TAGS: ${{ steps.metadata.outputs.tags }}
+          REVISION: ${{ steps.metadata.outputs.revision }}
+          CACHE_REF: ${{ env.CACHE_REF }}
+          BUILDER_NAME: ${{ steps.builder.outputs.builder }}
+          BUILDER_DRIVER: ${{ steps.builder.outputs.driver }}
+          LOCAL_BUILD_OUTCOME: ${{ steps.local_build.outcome }}
+          LOCAL_SMOKE_OUTCOME: ${{ steps.local_smoke.outcome }}
+          PUBLISH_OUTCOME_STEP: ${{ steps.publish.outcome }}
+          REMOTE_VERIFY_OUTCOME: ${{ steps.remote_verify.outcome }}
+          DOCKER_TRUST_OUTCOME: ${{ steps.docker_trust.outcome }}
+          RUNNER_LABELS: ${{ inputs.runner }}
+        run: |
+          {
+            echo "## Circus Harbor image"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Image repository | ${IMAGE_REPOSITORY} |"
+            echo "| Published tags | ${TAGS//$'\n'/<br>} |"
+            echo "| Authoritative digest | ${DIGEST:-not published} |"
+            echo "| Source revision | ${REVISION:-${GITHUB_SHA}} |"
+            echo "| Platform | ${PLATFORM} |"
+            echo "| Cache reference | ${CACHE_REF} |"
+            echo "| Local build outcome | ${LOCAL_BUILD_OUTCOME:-skipped} |"
+            echo "| Local smoke outcome | ${LOCAL_SMOKE_OUTCOME:-skipped} |"
+            echo "| Docker trust outcome | ${DOCKER_TRUST_OUTCOME:-skipped} |"
+            echo "| Publish outcome | ${PUBLISH_OUTCOME_STEP:-skipped} |"
+            echo "| Remote verify outcome | ${REMOTE_VERIFY_OUTCOME:-skipped} |"
+            echo "| Builder name | ${BUILDER_NAME:-not created} |"
+            echo "| Builder driver | ${BUILDER_DRIVER:-not created} |"
+            echo ""
+            echo "Requested runner: ${RUNNER_LABELS}"
+            echo "Actual runner: ${RUNNER_NAME}"
+            echo "Publication enabled: ${PUBLISH}"
+            if [[ -n "${BUILDER_NAME:-}" ]]; then
+              echo "BuildKit driver and image:"
+              docker buildx inspect "$BUILDER_NAME" 2>/dev/null || echo "builder unavailable during summary"
+            fi
+            echo "Docker/buildx versions:"
+            docker version 2>/dev/null || echo "docker version unavailable"
+            docker buildx version 2>/dev/null || echo "buildx version unavailable"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove ephemeral BuildKit builder
+        if: always()
+        env:
+          BUILDER_NAME: ${{ steps.builder.outputs.builder }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${BUILDER_NAME:-}" ]] && docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
+            docker buildx rm "$BUILDER_NAME"
+          fi
