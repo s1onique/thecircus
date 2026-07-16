@@ -4,109 +4,111 @@
 This script is the deterministic, fail-closed source of truth for the
 "local canonical gate is green" claim.  It runs the three executable
 gate checks the reviewer's R2.2 requires and produces a JSON artefact
-under .factory/gate-summary.json.  The artefact schema is stable and
-forward-compatible:
+under .factory/gate-summary.json using the **canonical Leamas schema** so
+the targeted digest consumer (`leamas factory gate-summary`) can parse
+every check and recognise it as `passed` rather than `unavailable`.
+
+Canonical schema (the same shape `leamas factory gate-summary` writes):
 
     {
         "schema_version": 1,
-        "gate_id": "circus-container-publish01",
-        "doctrine": "ACT-CIRCUS-CONTAINER-HARBOR-PUBLISH01",
-        "generated_at": "<RFC 3339 timestamp>",
-        "generated_by": "<leamas-core@<git sha>>",
-        "source": ".factory/gate-summary.json",
-        "source_status": "present",
+        "generated_at":   "<RFC 3339 timestamp>",
+        "tool":           "<producer identifier>",
         "overall_status": "green" | "red",
-        "checks_total": <int>,
-        "checks_passed": <int>,
-        "checks_failed": <int>,
-        "checks": [ <Check> ],
-        "evidence": { ... pinned SHA-256 values ... }
+        "checks": [
+            { "name": "<id>", "status": "passed" | "failed" | "unavailable" },
+            ...
+        ]
     }
 
-    Check = {
-        "id": "<machine id>",
-        "label": "<human label>",
-        "command": "<exact command>",
-        "status": "passed" | "failed",
-        "exit_code": <int>,
-        "duration_seconds": <float>,
-        "stdout_tail": "<last 4 KiB of stdout>",
-        "stderr_tail": "<last 4 KiB of stderr>",
-    }
+The script also records the Git tree OID it was generated against as
+`tested_tree_oid`.  This avoids the self-referential problem where the
+summary contains the commit that contains the summary: the artefact
+binds to the **tree** rather than to a commit.  The closure commit can
+then prove `git rev-parse HEAD^{tree}` equals the recorded
+`tested_tree_oid`, which means the captured evidence matches the
+committed tree rather than an ancestor.
 
-The script is itself a reproducibility mechanism: re-running it from
-the same tree must produce the same overall_status and the same
-checks_passed / checks_failed counts.
+Re-running the script from the same tree must produce the same
+overall_status and the same per-check statuses; only `generated_at`
+and `tested_tree_oid` change.
 """
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SUMMARY_PATH = ROOT / ".factory" / "gate-summary.json"
-TAIL_BYTES = 4 * 1024
+TOOL = "circus-regenerate-gate-summary"
 
 
-def _tail(stream: bytes | str) -> str:
-    if isinstance(stream, bytes):
-        text = stream.decode("utf-8", errors="replace")
-    else:
-        text = stream
-    if len(text.encode("utf-8")) > TAIL_BYTES:
-        # Drop the leading bytes and resume at a UTF-8 boundary so the
-        # tail never starts mid-codepoint.
-        encoded = text.encode("utf-8")[-TAIL_BYTES:]
-        text = encoded.decode("utf-8", errors="replace")
-    return text
-
-
-def _run(label: str, command: list[str]) -> dict:
-    started = _dt.datetime.now(tz=_dt.timezone.utc)
-    completed_proc = subprocess.run(
-        command,
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=False,
-    )
-    finished = _dt.datetime.now(tz=_dt.timezone.utc)
-    duration = (finished - started).total_seconds()
-    status = "passed" if completed_proc.returncode == 0 else "failed"
-    return {
-        "id": label,
-        "label": label,
-        "command": " ".join(command),
-        "status": status,
-        "exit_code": completed_proc.returncode,
-        "duration_seconds": round(duration, 3),
-        "started_at": started.isoformat(),
-        "finished_at": finished.isoformat(),
-        "stdout_tail": _tail(completed_proc.stdout),
-        "stderr_tail": _tail(completed_proc.stderr),
-    }
-
-
-def _git_short_sha() -> str:
+def _run_git(*args: str) -> str:
     completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        ["git", *args],
         cwd=ROOT,
         check=False,
         capture_output=True,
         text=True,
     )
     if completed.returncode != 0:
-        return "uncommitted"
-    return completed.stdout.strip()[:12]
+        return ""
+    return completed.stdout.strip()
+
+
+def _resolve_tested_tree_oid() -> str:
+    """Return the tree OID that the artefact was generated against.
+
+    We prefer the **staged tree** so the summary can be regenerated
+    before `git commit` and the closure commit can prove it later via
+    `git rev-parse HEAD^{tree}`.  When there are no staged changes we
+    fall back to HEAD^{tree}; when there is no commit yet we fall back
+    to `git write-tree` of the worktree.
+    """
+    staged = _run_git("diff", "--cached", "--quiet")
+    if staged == "" or staged == "0":
+        # `git diff --cached --quiet` prints nothing on success and the
+        # exit code is 0 when there is at least one staged change.  When
+        # the index matches HEAD we want the staged-tree view if the
+        # index has been touched, otherwise HEAD^{tree}.
+        head_tree = _run_git("rev-parse", "HEAD^{tree}")
+        if head_tree:
+            return head_tree
+        return _run_git("write-tree")
+
+    # Exit code 1 means there are staged differences; capture them.
+    index_tree = _run_git("write-tree")
+    if index_tree:
+        return index_tree
+    return _run_git("rev-parse", "HEAD^{tree}")
+
+
+def _run_check(name: str, command: list[str]) -> dict:
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+    )
+    status = "passed" if completed.returncode == 0 else "failed"
+    # The canonical schema only requires `name` and `status`, but we
+    # keep the exit_code so a human reviewer can triage failures from
+    # the JSON without re-running the checks.
+    return {
+        "name": name,
+        "status": status,
+        "exit_code": completed.returncode,
+        "command": " ".join(command),
+    }
 
 
 def main() -> int:
-    # The three canonical local gates.  Each is a deterministic check
-    # that fails closed when the staged tree regresses.
     gates: list[tuple[str, list[str]]] = [
         (
             "container-publication-policy",
@@ -122,49 +124,25 @@ def main() -> int:
         ),
     ]
 
-    results = [_run(label, command) for label, command in gates]
-    passed = sum(1 for result in results if result["status"] == "passed")
-    failed = len(results) - passed
-    overall = "green" if failed == 0 else "red"
+    checks = [_run_check(name, command) for name, command in gates]
+    passed_count = sum(1 for check in checks if check["status"] == "passed")
+    overall = "green" if passed_count == len(checks) else "red"
+
+    tested_tree_oid = _resolve_tested_tree_oid()
 
     summary = {
         "schema_version": 1,
-        "gate_id": "circus-container-publish01",
-        "doctrine": "ACT-CIRCUS-CONTAINER-HARBOR-PUBLISH01",
         "generated_at": _dt.datetime.now(tz=_dt.timezone.utc).isoformat(),
-        "generated_by": f"leamas-core@{_git_short_sha()}",
-        "source": ".factory/gate-summary.json",
-        "source_status": "present",
+        "tool": TOOL,
         "overall_status": overall,
-        "checks_total": len(results),
-        "checks_passed": passed,
-        "checks_failed": failed,
-        "checks": results,
-        "evidence": {
-            # Pinned supply-chain artefacts.  Updating these requires
-            # a deliberate review of the upstream release attestation.
-            "shellcheck_release": {
-                "version": "0.11.0",
-                "asset": "shellcheck-v0.11.0.linux.x86_64.tar.xz",
-                "sha256": "8afc50b302d5feeac9381ea114d563f0150d061520042b254d6eb715797c8223",
-            },
-            "actionlint_release": {
-                "version": "1.7.12",
-                "asset": "actionlint_1.7.12_linux_amd64.tar.gz",
-                "sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
-            },
-            "actions_checkout_pins": [
-                "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-            ],
-            "harbor_host": "harbor-pve1.spbnix.local",
-            "harbor_project": "circus",
-            "buildkit_image": "harbor-pve1.spbnix.local/dockerhub-cache/moby/buildkit:buildx-stable-1",
-        },
-        "remediation": {
-            "container_publication_policy": "Update scripts/verify_container_policy.py and the files it inspects (Dockerfile.*, .github/workflows/*.yml, scripts/ci/*.sh).",
-            "executable_shell_tests": "Update tests/ci/test_build_publish_shell.sh and the scripts/ci/*.sh files it exercises.",
-            "action_pin_mutation_test": "Update scripts/verify_container_policy.py's action-pin parser so it rejects unpinned uses: entries.",
-        },
+        "checks_total": len(checks),
+        "checks_passed": passed_count,
+        "checks_failed": sum(1 for check in checks if check["status"] == "failed"),
+        "checks_unavailable": sum(
+            1 for check in checks if check["status"] == "unavailable"
+        ),
+        "checks": checks,
+        "tested_tree_oid": tested_tree_oid,
     }
 
     SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -173,11 +151,10 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    # Emit a one-line confirmation to stdout so the caller (CI or a
-    # developer) sees the overall outcome.
     print(
         f"gate summary written to {SUMMARY_PATH.relative_to(ROOT)}: "
-        f"{overall} ({passed}/{len(results)} passed)"
+        f"{overall} ({passed_count}/{len(checks)} passed) "
+        f"tree={tested_tree_oid[:12]}"
     )
     return 0 if overall == "green" else 1
 

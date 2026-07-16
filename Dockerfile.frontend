@@ -19,6 +19,15 @@ FROM node:22.17.0-bookworm-slim AS build
 WORKDIR /build
 
 COPY web/package.json web/package-lock.json ./web/
+# The frontend Dockerfile runs `npm ci --ignore-scripts` to keep the
+# install layer free from arbitrary upstream lifecycle scripts, then
+# explicitly invokes the Elm installer (`node node_modules/elm/install.js`)
+# to provision the platform-specific Elm binary.  Without this explicit
+# step `npm run build` cannot locate `elm` because the npm elm package
+# (elm@0.19.2-0) ships its binary through the `install` lifecycle script
+# rather than a prebuilt tarball.  An executable assertion runs the
+# freshly-installed Elm CLI and fails the layer if the reported version
+# does not match the lockfile pin.
 RUN --mount=type=secret,id=spbnix-ca,target=/run/secrets/spbnix-ca \
     --mount=type=cache,id=circus-frontend-npm,target=/root/.npm \
     set -eux; \
@@ -31,6 +40,13 @@ RUN --mount=type=secret,id=spbnix-ca,target=/run/secrets/spbnix-ca \
     fi; \
     cd web; \
     npm ci --ignore-scripts; \
+    node node_modules/elm/install.js; \
+    ELM_VERSION="$(./node_modules/.bin/elm --version)"; \
+    echo "Elm ${ELM_VERSION}"; \
+    case "${ELM_VERSION}" in \
+        0.19.2|Elm\ 0.19.2) ;; \
+        *) echo "frontend Dockerfile: expected Elm 0.19.2, got '${ELM_VERSION}'" >&2; exit 1 ;; \
+    esac; \
     rm -f /tmp/circus-ca-bundle.pem
 
 COPY web/elm.json web/index.html web/styles.css ./web/

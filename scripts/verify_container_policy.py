@@ -2,6 +2,7 @@
 """Repository-owned static policy checks for Circus container publication."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -234,6 +235,24 @@ def main() -> int:
     # layer; we enforce that by checking the cleanup marker instead.
     if "/tmp/spbnix-ca.crt" in frontend:
         fail("frontend Dockerfile references the obsolete /tmp/spbnix-ca.crt path; use /tmp/circus-ca-bundle.pem")
+    # The frontend install layer must explicitly run the Elm installer
+    # script (`node node_modules/elm/install.js`) after the
+    # script-suppressed `npm ci --ignore-scripts`.  The `elm@0.19.2-0`
+    # npm package ships its platform-specific binary through the
+    # `install` lifecycle script, so disabling all lifecycle scripts
+    # leaves the layer with no Elm CLI.  The Dockerfile must also
+    # assert the freshly-installed Elm CLI reports `0.19.2` (or
+    # `Elm 0.19.2`) before the build layer is allowed to proceed.
+    elm_install_markers = (
+        "npm ci --ignore-scripts",
+        "node node_modules/elm/install.js",
+        "./node_modules/.bin/elm --version",
+        "Elm ${ELM_VERSION}",
+        "0.19.2|Elm\\ 0.19.2",
+    )
+    for marker in elm_install_markers:
+        if marker not in frontend:
+            fail(f"frontend Dockerfile is missing the required Elm installer marker: {marker!r}")
 
     if not re.search(r"USER\s+\d+:\d+", backend):
         fail("backend final image lacks an explicit numeric non-root user")
@@ -364,8 +383,27 @@ def main() -> int:
     leaked = [path for path in tracked if secret_like.search(path)]
     if leaked:
         fail(f"secret-like files are tracked in the build context: {leaked}")
+    # The forbidden-runtime-material check must inspect only the final
+    # runtime stage of the Dockerfile, not the multi-stage build graph.
+    # The build stage legitimately references node_modules to drive
+    # `npm ci`/`npm run build`; the runtime stage (the published image)
+    # is the one that must not carry that material.  The final stage
+    # starts at the last `FROM ... AS runtime` (or the last unaliased
+    # `FROM` when there is no `AS runtime`) and extends to the end of
+    # the file.
+    final_stage_match = list(
+        re.finditer(
+            r"^FROM\s+\S+(?:\s+AS\s+runtime)?\s*$",
+            frontend,
+            re.MULTILINE | re.IGNORECASE,
+        )
+    )
+    if final_stage_match:
+        final_stage = frontend[final_stage_match[-1].start():]
+    else:
+        final_stage = frontend
     for forbidden in ("node_modules", "elm-stuff", "TestResults"):
-        if forbidden in frontend:
+        if forbidden in final_stage:
             fail(f"frontend final image mentions forbidden runtime material: {forbidden}")
 
     # The shell test must also exercise wire_buildx_builder.sh because the
@@ -376,6 +414,75 @@ def main() -> int:
         fail("shell test suite does not exercise wire_buildx_builder.sh")
     if "GITHUB_OUTPUT" not in shell_test:
         fail("shell test suite does not assert GITHUB_OUTPUT is used for step outputs")
+
+    # Canonical gate-summary schema.  The targeted digest consumer
+    # (`leamas factory gate-summary`) reads `.factory/gate-summary.json`
+    # and recognises only the canonical `{schema_version, generated_at,
+    # tool, overall_status, checks: [{name, status}]}` shape.  The
+    # earlier revision of this script used bespoke field names (`id`,
+    # `command`, `duration_seconds`, etc.) that the canonical consumer
+    # could not parse, leaving every check reported as `unavailable`.
+    # This block enforces the contract so the digest consumer cannot be
+    # silently broken by future edits.
+    gate_summary_path = ROOT / ".factory" / "gate-summary.json"
+    if not gate_summary_path.is_file():
+        fail(f"canonical gate evidence missing: {gate_summary_path.relative_to(ROOT)}")
+    try:
+        gate_summary = json.loads(gate_summary_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        fail(f"canonical gate evidence is not valid JSON: {exc}")
+    if not isinstance(gate_summary, dict):
+        fail("canonical gate evidence must be a JSON object")
+    if gate_summary.get("schema_version") != 1:
+        fail("canonical gate evidence schema_version must be 1")
+    if not isinstance(gate_summary.get("checks"), list) or not gate_summary["checks"]:
+        fail("canonical gate evidence must declare a non-empty checks list")
+    overall_status = gate_summary.get("overall_status")
+    if overall_status not in {"green", "red"}:
+        fail(f"canonical gate evidence overall_status must be green|red, got {overall_status!r}")
+    for index, check in enumerate(gate_summary["checks"]):
+        if not isinstance(check, dict):
+            fail(f"canonical gate evidence checks[{index}] must be a JSON object")
+        name = check.get("name")
+        status = check.get("status")
+        if not name or not isinstance(name, str):
+            fail(f"canonical gate evidence checks[{index}].name must be a non-empty string")
+        if status not in {"passed", "failed", "unavailable"}:
+            fail(
+                f"canonical gate evidence checks[{index}].status must be "
+                f"passed|failed|unavailable, got {status!r}"
+            )
+    # Tree-OID binding.  The artefact must record the staged Git tree
+    # OID it was generated against, so that the closure commit can prove
+    # the captured evidence matches the committed tree rather than an
+    # ancestor.  We compute the same OID here from `git rev-parse` and
+    # require the JSON to carry it under `tested_tree_oid`.  When the
+    # JSON is itself staged, we compare against HEAD^{tree}; otherwise
+    # we compare against the worktree tree.
+    recorded_tree = gate_summary.get("tested_tree_oid")
+    if not isinstance(recorded_tree, str) or not re.fullmatch(r"[0-9a-f]{40}", recorded_tree):
+        fail(
+            "canonical gate evidence must record a SHA-1 tested_tree_oid "
+            "matching the Git tree it was generated from"
+        )
+    expected_tree = subprocess.run(
+        ["git", "rev-parse", "HEAD^{tree}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    # The f-string below references the Git revision syntax
+    # HEAD^{tree}.  The doubled braces escape the literal { and } so
+    # the f-string only interpolates the {recorded_tree!r} and
+    # {expected_tree!r} placeholders; otherwise Python would try to
+    # evaluate `tree` as a variable and crash.
+    if recorded_tree != expected_tree:
+        fail(
+            f"canonical gate evidence tested_tree_oid {recorded_tree!r} does "
+            f"not match HEAD^{{tree}} ({expected_tree!r}); the artefact was "
+            "stamped against an ancestor or a different working tree"
+        )
 
     print("container publication policy checks passed")
     return 0

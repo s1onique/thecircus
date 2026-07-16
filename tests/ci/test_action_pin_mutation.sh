@@ -48,7 +48,7 @@ mkdir -p "$SANDBOX/.github/workflows" "$SANDBOX/scripts/ci" \
          "$SANDBOX/db/migrations" "$SANDBOX/src/Circus.Api" \
          "$SANDBOX/src/Circus.Application" "$SANDBOX/src/Circus.Contracts" \
          "$SANDBOX/src/Circus.Domain" "$SANDBOX/src/Circus.Persistence.Postgres" \
-         "$SANDBOX/tests/ci"
+         "$SANDBOX/tests/ci" "$SANDBOX/.factory"
 cp "$POLICY"               "$SANDBOX/scripts/verify_container_policy.py"
 cp "$ROOT/Dockerfile.backend"     "$SANDBOX/Dockerfile.backend"
 cp "$ROOT/Dockerfile.frontend"    "$SANDBOX/Dockerfile.frontend"
@@ -77,6 +77,46 @@ git -C "$SANDBOX" -c init.defaultBranch=main -c user.email=ci@local \
 git -C "$SANDBOX" add -A
 git -C "$SANDBOX" -c user.email=ci@local -c user.name=ci \
     commit --quiet -m "sandbox" >/dev/null 2>&1 || true
+
+# The policy now requires .factory/gate-summary.json to be present
+# and bound to a Git tree OID.  Copy the live artefact into the
+# sandbox so the pristine-tree assertion has the same evidence the
+# working tree has, then re-stamp the `tested_tree_oid` against the
+# sandbox's own HEAD^{tree} so the binding check passes.  The
+# re-stamp runs AFTER the sandbox git init+commit so HEAD^{tree}
+# resolves to the sandbox's committed tree rather than the empty
+# initial state.
+if [[ -f "$ROOT/.factory/gate-summary.json" ]]; then
+    cp "$ROOT/.factory/gate-summary.json" "$SANDBOX/.factory/gate-summary.json"
+fi
+if [[ -f "$ROOT/.factory/regenerate_gate_summary.py" ]]; then
+    cp "$ROOT/.factory/regenerate_gate_summary.py" "$SANDBOX/.factory/regenerate_gate_summary.py"
+fi
+# Use python3 so the JSON edit is deterministic and the indentation
+# is preserved.
+SANDBOX="$SANDBOX" python3 - "$SANDBOX/.factory/gate-summary.json" <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    summary = json.load(handle)
+
+# Resolve HEAD^{tree} from the sandbox (the parent of the script).
+head_tree = subprocess.run(
+    ["git", "-C", os.environ["SANDBOX"], "rev-parse", "HEAD^{tree}"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
+summary["tested_tree_oid"] = head_tree
+
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(summary, handle, indent=2, sort_keys=False)
+    handle.write("\n")
+PY
 
 # Step 1: pristine tree must pass.
 python3 "$SANDBOX/scripts/verify_container_policy.py" >/dev/null
