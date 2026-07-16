@@ -104,6 +104,24 @@ jobs:
       - name: Run action-pin mutation test
         run: bash tests/ci/test_action_pin_mutation.sh
 
+      # R1/R2: regenerate .factory/gate-summary.json from the three
+      # canonical local gates and exercise the targeted digest consumer
+      # (`leamas factory digest`).  The artefact is *detached* evidence:
+      # it is untracked (see .gitignore) and regenerated against the
+      # committed tree so the closure commit's `tested_tree_oid` binding
+      # cannot regress into a self-reference.
+      - name: Install leamas CLI for the targeted-digest acceptance test
+        run: |
+          set -euo pipefail
+          if command -v leamas >/dev/null 2>&1; then
+            leamas version || true
+          else
+            echo "FAIL: leamas CLI not installed on the runner; the gate-summary acceptance test cannot run" >&2
+            exit 1
+          fi
+      - name: Run gate-summary acceptance test (canonical Leamas v1 contract)
+        run: bash tests/ci/test_gate_summary_acceptance.sh
+
   backend:
     name: Build Circus backend image
     needs: policy

@@ -36,3 +36,11 @@ TestResults/
 *.user
 *.suo
 project.lock.json
+
+# Factory CI evidence (regenerated locally and on the runner; never tracked)
+# The gate-summary is a detached artefact: it is regenerated against the
+# committed tree and then archived as part of the PR/CI run.  Tracking it
+# would create a self-reference (the file would carry the hash of the tree
+# that contains itself) and would invalidate the tree-OID binding.
+.factory/gate-summary.json
+.factory/CORRECTION07_TODO.md

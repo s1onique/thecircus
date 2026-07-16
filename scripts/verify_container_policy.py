@@ -79,6 +79,8 @@ def main() -> int:
         "scripts/ci/verify_build_image.sh",
         "scripts/ci/wire_buildx_builder.sh",
         "tests/ci/test_build_publish_shell.sh",
+        "tests/ci/test_action_pin_mutation.sh",
+        "tests/ci/test_gate_summary_acceptance.sh",
     ]
     for relative in required_files:
         if not (ROOT / relative).is_file():
@@ -93,6 +95,8 @@ def main() -> int:
         "scripts/ci/verify_build_image.sh",
         "scripts/ci/wire_buildx_builder.sh",
         "tests/ci/test_build_publish_shell.sh",
+        "tests/ci/test_action_pin_mutation.sh",
+        "tests/ci/test_gate_summary_acceptance.sh",
     ):
         path = ROOT / relative
         st = path.stat()
@@ -415,74 +419,34 @@ def main() -> int:
     if "GITHUB_OUTPUT" not in shell_test:
         fail("shell test suite does not assert GITHUB_OUTPUT is used for step outputs")
 
-    # Canonical gate-summary schema.  The targeted digest consumer
-    # (`leamas factory gate-summary`) reads `.factory/gate-summary.json`
-    # and recognises only the canonical `{schema_version, generated_at,
-    # tool, overall_status, checks: [{name, status}]}` shape.  The
-    # earlier revision of this script used bespoke field names (`id`,
-    # `command`, `duration_seconds`, etc.) that the canonical consumer
-    # could not parse, leaving every check reported as `unavailable`.
-    # This block enforces the contract so the digest consumer cannot be
-    # silently broken by future edits.
-    gate_summary_path = ROOT / ".factory" / "gate-summary.json"
-    if not gate_summary_path.is_file():
-        fail(f"canonical gate evidence missing: {gate_summary_path.relative_to(ROOT)}")
-    try:
-        gate_summary = json.loads(gate_summary_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        fail(f"canonical gate evidence is not valid JSON: {exc}")
-    if not isinstance(gate_summary, dict):
-        fail("canonical gate evidence must be a JSON object")
-    if gate_summary.get("schema_version") != 1:
-        fail("canonical gate evidence schema_version must be 1")
-    if not isinstance(gate_summary.get("checks"), list) or not gate_summary["checks"]:
-        fail("canonical gate evidence must declare a non-empty checks list")
-    overall_status = gate_summary.get("overall_status")
-    if overall_status not in {"green", "red"}:
-        fail(f"canonical gate evidence overall_status must be green|red, got {overall_status!r}")
-    for index, check in enumerate(gate_summary["checks"]):
-        if not isinstance(check, dict):
-            fail(f"canonical gate evidence checks[{index}] must be a JSON object")
-        name = check.get("name")
-        status = check.get("status")
-        if not name or not isinstance(name, str):
-            fail(f"canonical gate evidence checks[{index}].name must be a non-empty string")
-        if status not in {"passed", "failed", "unavailable"}:
-            fail(
-                f"canonical gate evidence checks[{index}].status must be "
-                f"passed|failed|unavailable, got {status!r}"
-            )
-    # Tree-OID binding.  The artefact must record the staged Git tree
-    # OID it was generated against, so that the closure commit can prove
-    # the captured evidence matches the committed tree rather than an
-    # ancestor.  We compute the same OID here from `git rev-parse` and
-    # require the JSON to carry it under `tested_tree_oid`.  When the
-    # JSON is itself staged, we compare against HEAD^{tree}; otherwise
-    # we compare against the worktree tree.
-    recorded_tree = gate_summary.get("tested_tree_oid")
-    if not isinstance(recorded_tree, str) or not re.fullmatch(r"[0-9a-f]{40}", recorded_tree):
-        fail(
-            "canonical gate evidence must record a SHA-1 tested_tree_oid "
-            "matching the Git tree it was generated from"
-        )
-    expected_tree = subprocess.run(
-        ["git", "rev-parse", "HEAD^{tree}"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    # The f-string below references the Git revision syntax
-    # HEAD^{tree}.  The doubled braces escape the literal { and } so
-    # the f-string only interpolates the {recorded_tree!r} and
-    # {expected_tree!r} placeholders; otherwise Python would try to
-    # evaluate `tree` as a variable and crash.
-    if recorded_tree != expected_tree:
-        fail(
-            f"canonical gate evidence tested_tree_oid {recorded_tree!r} does "
-            f"not match HEAD^{{tree}} ({expected_tree!r}); the artefact was "
-            "stamped against an ancestor or a different working tree"
-        )
+    # The gate-summary acceptance test must validate the canonical Leamas
+    # v1 vocabulary and exercise the targeted digest consumer
+    # (leamas factory digest).  This protects against the R1 regression
+    # where the raw JSON used non-canonical green/passed values while
+    # the digest consumer reported every check as unavailable.
+    acceptance_test = read("tests/ci/test_gate_summary_acceptance.sh")
+    for marker in (
+        "pass", "fail", "skip", "unavailable",
+        "leamas factory digest",
+        "overall_status=pass",
+        "checks_passed",
+        "checks_unavailable",
+    ):
+        if marker not in acceptance_test:
+            fail(f"gate-summary acceptance test is missing required marker: {marker!r}")
+
+
+    # The gate-summary validation (canonical Leamas v1 vocabulary +
+    # tree-OID binding + targeted-digest integration) is intentionally
+    # NOT performed here.  This script is itself one of the three gates
+    # the gate-summary records, so depending on a present
+    # ``.factory/gate-summary.json`` would create a chicken-and-egg: the
+    # regenerate script could not invoke this policy until after it had
+    # generated the artefact, and the artefact could not be generated
+    # until the policy had passed.  Instead,
+    # tests/ci/test_gate_summary_acceptance.sh runs after this policy and
+    # exercises the full regenerate -> validate -> targeted-digest -> assert
+    # loop against the canonical Leamas v1 status vocabulary.
 
     print("container publication policy checks passed")
     return 0

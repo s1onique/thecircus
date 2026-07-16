@@ -61,6 +61,8 @@ cp "$ROOT/scripts/ci/publish_image.sh" "$SANDBOX/scripts/ci/publish_image.sh"
 cp "$ROOT/scripts/ci/verify_build_image.sh" "$SANDBOX/scripts/ci/verify_build_image.sh"
 cp "$ROOT/scripts/ci/wire_buildx_builder.sh" "$SANDBOX/scripts/ci/wire_buildx_builder.sh"
 cp "$ROOT/tests/ci/test_build_publish_shell.sh" "$SANDBOX/tests/ci/test_build_publish_shell.sh"
+cp "$ROOT/tests/ci/test_action_pin_mutation.sh" "$SANDBOX/tests/ci/test_action_pin_mutation.sh"
+cp "$ROOT/tests/ci/test_gate_summary_acceptance.sh" "$SANDBOX/tests/ci/test_gate_summary_acceptance.sh"
 cp "$ROOT/.github/scripts/harbor-metadata.sh" "$SANDBOX/.github/scripts/harbor-metadata.sh"
 cp "$ROOT/.github/scripts/install-spbnix-harbor-ca.sh" "$SANDBOX/.github/scripts/install-spbnix-harbor-ca.sh"
 cp "$ROOT/docs/harbor-publishing.md" "$SANDBOX/docs/harbor-publishing.md"
@@ -78,45 +80,18 @@ git -C "$SANDBOX" add -A
 git -C "$SANDBOX" -c user.email=ci@local -c user.name=ci \
     commit --quiet -m "sandbox" >/dev/null 2>&1 || true
 
-# The policy now requires .factory/gate-summary.json to be present
-# and bound to a Git tree OID.  Copy the live artefact into the
-# sandbox so the pristine-tree assertion has the same evidence the
-# working tree has, then re-stamp the `tested_tree_oid` against the
-# sandbox's own HEAD^{tree} so the binding check passes.  The
-# re-stamp runs AFTER the sandbox git init+commit so HEAD^{tree}
-# resolves to the sandbox's committed tree rather than the empty
-# initial state.
-if [[ -f "$ROOT/.factory/gate-summary.json" ]]; then
-    cp "$ROOT/.factory/gate-summary.json" "$SANDBOX/.factory/gate-summary.json"
-fi
+
+# The .factory/gate-summary.json file is now *detached* evidence
+# (untracked, see .gitignore).  The action-pin mutation test no longer
+# needs to copy the artefact into the sandbox or re-stamp its
+# tested_tree_oid: the policy script does not read the artefact, and
+# the regenerate script records HEAD^{tree} against the committed
+# sandbox tree at generation time.
+
 if [[ -f "$ROOT/.factory/regenerate_gate_summary.py" ]]; then
-    cp "$ROOT/.factory/regenerate_gate_summary.py" "$SANDBOX/.factory/regenerate_gate_summary.py"
+    cp "$ROOT/.factory/regenerate_gate_summary.py" \
+        "$SANDBOX/.factory/regenerate_gate_summary.py"
 fi
-# Use python3 so the JSON edit is deterministic and the indentation
-# is preserved.
-SANDBOX="$SANDBOX" python3 - "$SANDBOX/.factory/gate-summary.json" <<'PY'
-import json
-import os
-import subprocess
-import sys
-
-path = sys.argv[1]
-with open(path, encoding="utf-8") as handle:
-    summary = json.load(handle)
-
-# Resolve HEAD^{tree} from the sandbox (the parent of the script).
-head_tree = subprocess.run(
-    ["git", "-C", os.environ["SANDBOX"], "rev-parse", "HEAD^{tree}"],
-    check=True,
-    capture_output=True,
-    text=True,
-).stdout.strip()
-summary["tested_tree_oid"] = head_tree
-
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(summary, handle, indent=2, sort_keys=False)
-    handle.write("\n")
-PY
 
 # Step 1: pristine tree must pass.
 python3 "$SANDBOX/scripts/verify_container_policy.py" >/dev/null
