@@ -145,9 +145,9 @@ let private extractionOutcome
 /// flags, so an exception that is raised after a side-effect still leaves
 /// the previous installation reachable. We never delete the previous
 /// install unless we have already restored it (or, for the cold-start
-/// path, the target is empty). The install-temp and previous-temp are
-/// reclaimed in a `try … finally` block; the previous-temp is preserved
-/// whenever a partial recovery has left the previous install in place.
+/// path, the target is empty). The `try … finally` block reclaims the
+/// install-temp and (only when the recovery copy is no longer the
+/// authoritative fallback) the previous-temp.
 let extractAtomicWith
     (operations: DirectoryOperations)
     (runner: IProcessRunner)
@@ -181,35 +181,6 @@ let extractAtomicWith
             with _ ->
                 false
 
-        let disposeInstallation () = ignore (deleteIfPresent installDir)
-
-        /// Conditionally release the previous-temp. We only delete it when
-        /// the recovery succeeded; otherwise we leave it in place so the
-        /// caller can attempt another recovery (e.g. a human operator).
-        let tryDisposePreviousIfSafe () =
-            let finalPresent = operations.Exists absoluteFinal
-            let previousPresent = operations.Exists previousDir
-            let candidatePresent = operations.Exists installDir
-
-            if previousPresent
-               && not finalPresent
-               && not candidatePresent
-               && hadPrevious then
-                // The previous-temp is the only thing left; keeping it
-                // provides an out-of-band recovery path. The recovery
-                // copy is the only thing on disk.
-                false
-            else if previousPresent
-                    && finalPresent
-                    && not candidatePresent then
-                // The previous install is back in `absoluteFinal`; the temp
-                // is safe to release.
-                ignore (deleteIfPresent previousDir)
-                true
-            else
-                ignore (deleteIfPresent previousDir)
-                previousPresent
-
         let moveOrFail (source: string) (destination: string) =
             try
                 operations.Move source destination
@@ -223,33 +194,47 @@ let extractAtomicWith
                 )
 
         /// Inspect the live filesystem and bring `absoluteFinal` back to
-        /// the previous install. `hadPrevious` distinguishes the upgrade
-        /// path (we must restore `previousDir`) from the cold-start path
-        /// (we must simply delete the failed candidate). Returns a list of
-        /// recovery problems for the caller to surface.
-        let restorePrevious (errors: ResizeArray<string>) =
+        /// the previous install. Returns a recovery report that records
+        /// whether the previous install is back in place, whether the
+        /// recovery copy is still in `previousDir`, and any human-readable
+        /// problems.
+        let restorePrevious () =
+            let mutable notes = ResizeArray<string> ()
+            let mutable previousRecovered = false
+            let mutable previousPreserved = false
+
             if not (hadPrevious && operations.Exists previousDir) then
                 ()
             else
-                // The candidate may have been renamed onto `absoluteFinal`
-                // and then the second move threw; the live filesystem
-                // shows the truth.
-                if operations.Exists absoluteFinal then
+                let candidatePresent = operations.Exists absoluteFinal
+
+                if candidatePresent then
                     if not (deleteIfPresent absoluteFinal) then
-                        errors.Add("could not delete the failed candidate before restoring the previous install")
+                        notes.Add("could not delete the failed candidate before restoring the previous install")
 
                 if operations.Exists absoluteFinal then
-                    errors.Add("failed candidate still present; previous install cannot be restored")
+                    notes.Add("failed candidate still present; previous install cannot be restored")
                 else
                     try
                         operations.Move previousDir absoluteFinal
+                        if not (operations.Exists previousDir) then
+                            previousRecovered <- true
                     with ex ->
-                        errors.Add(sprintf "restore previous install: %s" ex.Message)
+                        notes.Add(sprintf "restore previous install: %s" ex.Message)
 
-        let restoreColdStart (errors: ResizeArray<string>) =
+            if operations.Exists previousDir then
+                previousPreserved <- true
+
+            (notes, previousRecovered, previousPreserved)
+
+        let restoreColdStart () =
+            let mutable notes = ResizeArray<string> ()
+
             if operations.Exists absoluteFinal then
                 if not (deleteIfPresent absoluteFinal) then
-                    errors.Add("could not delete the failed candidate on cold-start install")
+                    notes.Add("could not delete the failed candidate on cold-start install")
+
+            notes
 
         let performInstall () =
             try
@@ -273,71 +258,78 @@ let extractAtomicWith
             with ex ->
                 Error(ExtractionFailure(archive, ex.Message))
 
-        let installOutcome = performInstall ()
-
-        /// Decide whether the previous install is safely back in
-        /// `absoluteFinal` and the recovery copy can be released.
-        let labelFor (label: string) (rollbackErrors: ResizeArray<string>) =
-            if rollbackErrors.Count > 0 then
-                label
-                + "; rollback failed: "
-                + String.concat "; " rollbackErrors
+        let labelFor (label: string) (notes: ResizeArray<string>) =
+            if notes.Count > 0 then
+                label + "; rollback notes: " + String.concat "; " notes
             else
                 label
 
-        try
-            match installOutcome with
-            | Ok _ ->
-                match verifyInstalled absoluteFinal with
-                | Ok() ->
-                    if hadPrevious then ignore (deleteIfPresent previousDir)
-                    disposeInstallation ()
-                    Ok absoluteFinal
-                | Error verificationFailure ->
-                    let errors = ResizeArray<string> ()
-
-                    if hadPrevious then
-                        restorePrevious errors
-                    else
-                        restoreColdStart errors
-
-                    disposeInstallation ()
-                    Error(
-                        ExtractionFailure(
-                            archive,
-                            labelFor
-                                (sprintf "verification failed: %s" (renderFailure verificationFailure))
-                                errors
-                        )
-                    )
-            | Error installFailure ->
-                let errors = ResizeArray<string> ()
-
-                if hadPrevious then
-                    restorePrevious errors
-                else
-                    restoreColdStart errors
-
+        let reportOutcome
+            (label: string)
+            (notes: ResizeArray<string>)
+            (previousRecovered: bool)
+            (previousPreserved: bool)
+            : Result<string, DevHostFailure> =
+            if hadPrevious
+               && not previousRecovered
+               && previousPreserved
+               && operations.Exists absoluteFinal then
                 Error(
                     ExtractionFailure(
                         archive,
                         labelFor
-                            (sprintf "install failed: %s" (renderFailure installFailure))
-                            errors
+                            (sprintf
+                                 "rollback incomplete; previous installation retained at %s"
+                                 previousDir)
+                            notes
                     )
                 )
+            else
+                Error(ExtractionFailure(archive, labelFor label notes))
+
+        try
+            match performInstall () with
+            | Ok _ ->
+                match verifyInstalled absoluteFinal with
+                | Ok() ->
+                    // Successful verification: the new install is committed
+                    // and the previous-temp can be released unconditionally.
+                    if hadPrevious then
+                        ignore (deleteIfPresent previousDir)
+
+                    ignore (deleteIfPresent installDir)
+                    Ok absoluteFinal
+                | Error verificationFailure ->
+                    let notes, previousRecovered, previousPreserved =
+                        restorePrevious ()
+
+                    ignore (deleteIfPresent installDir)
+                    reportOutcome
+                        (sprintf "verification failed: %s" (renderFailure verificationFailure))
+                        notes
+                        previousRecovered
+                        previousPreserved
+            | Error installFailure ->
+                let notes, previousRecovered, previousPreserved =
+                    restorePrevious ()
+
+                reportOutcome
+                    (sprintf "install failed: %s" (renderFailure installFailure))
+                    notes
+                    previousRecovered
+                    previousPreserved
         finally
             // The install-temp is only consumed when the new install is
             // committed; until then it must be reclaimed so we do not leak
-            // directories. The previous-temp is preserved whenever the
-            // recovery copy is still the only thing on disk so a human
-            // operator can attempt another recovery.
+            // directories.
             if operations.Exists installDir then
-                disposeInstallation ()
+                ignore (deleteIfPresent installDir)
 
+            // The previous-temp is the only recovery copy on disk after a
+            // failed install. It is safe to release only when the new
+            // install is committed or when the cold-start path was taken.
             if operations.Exists previousDir
-               && (operations.Exists absoluteFinal
-                   || operations.Exists installDir
+               && ((operations.Exists absoluteFinal && hadPrevious)
                    || not hadPrevious) then
                 ignore (deleteIfPresent previousDir)
 

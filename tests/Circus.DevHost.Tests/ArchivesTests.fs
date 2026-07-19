@@ -42,12 +42,16 @@ let private assertOld (finalDirectory: string) =
 let tests =
     testList
         "Archives"
-        [ test "a failed replacement move reports Error and restores the previous tree" {
+        [ test "an ordinary failed second-move (pre-effect) preserves the previous tree" {
               let temp, archive, finalDirectory = createFixture ()
               use cleanup = temp
               let runner = successfulArchiveRunner ()
               let mutable injected = false
 
+              // The first move (`absoluteFinal -> previousDir`) succeeds, but
+              // the second move (`installDir -> absoluteFinal`) throws
+              // before renaming the candidate. The recovery must leave the
+              // previous install reachable.
               let operations =
                   { realDirectoryOperations with
                       Move =
@@ -58,20 +62,44 @@ let tests =
                                   && Path.GetFullPath(destination) = Path.GetFullPath(finalDirectory)
                               then
                                   injected <- true
-                                  // Move the candidate in and then throw; the
-                                  // effect is visible on disk but we never
-                                  // recorded success. The recovery must rely
-                                  // on observed state, not on a flag.
-                                  Directory.Move(source, destination)
-                                  raise (IOException "injected replacement failure")
+                                  raise (IOException "ordinary pre-effect failure")
                               else
                                   Directory.Move(source, destination) }
 
               match safeExtractVerified operations runner archive finalDirectory (fun _ -> Ok()) with
               | Error _ ->
-                  Expect.isTrue injected "The replacement seam should have been exercised"
+                  Expect.isTrue injected "The ordinary pre-effect seam should have been exercised"
                   assertOld finalDirectory
-              | Ok path -> failtestf "A failed move must never return Ok %s" path
+              | Ok path -> failtestf "A pre-effect failure must never return Ok %s" path
+          }
+
+          test "an ordinary failed first-move (pre-effect) preserves the previous tree" {
+              let temp, archive, finalDirectory = createFixture ()
+              use cleanup = temp
+              let runner = successfulArchiveRunner ()
+              let mutable injected = false
+
+              // The very first move (`absoluteFinal -> previousDir`) throws
+              // before renaming. The recovery must leave the previous
+              // install in `absoluteFinal` and the previous-temp absent.
+              let operations =
+                  { realDirectoryOperations with
+                      Move =
+                          fun source destination ->
+                              if
+                                  not injected
+                                  && Path.GetFullPath(source) = Path.GetFullPath(finalDirectory)
+                              then
+                                  injected <- true
+                                  raise (IOException "ordinary pre-effect failure (first move)")
+                              else
+                                  Directory.Move(source, destination) }
+
+              match safeExtractVerified operations runner archive finalDirectory (fun _ -> Ok()) with
+              | Error _ ->
+                  Expect.isTrue injected "The ordinary first-move seam should have been exercised"
+                  assertOld finalDirectory
+              | Ok path -> failtestf "A pre-effect failure must never return Ok %s" path
           }
 
           test "a failed second-move that mutates then throws leaves the previous tree live" {
@@ -132,7 +160,7 @@ let tests =
               | Ok path -> failtestf "An unverified tree must never return Ok %s" path
           }
 
-          test "a cold-start install with a failed second move leaves no stale directories" {
+          test "a cold-start install with a failed second move does not leak the candidate" {
               let temp = new TempDirectory ()
               use cleanup = temp
               let archive = Path.Combine(temp.Path, "fixture.tar.gz")
@@ -160,8 +188,51 @@ let tests =
               match safeExtractVerified operations runner archive finalDirectory (fun _ -> Ok()) with
               | Error _ ->
                   Expect.isTrue injected "The move seam should have been exercised"
-                  Expect.isTrue
-                      (not (Directory.Exists finalDirectory))
-                      "A cold-start failure must not leave a candidate on disk"
+                  let installDirs =
+                      Directory.GetDirectories(temp.Path, ".circus-install-*")
+                  Expect.isEmpty installDirs "A cold-start failure must not leak a .circus-install-* directory"
               | Ok path -> failtestf "A failed cold-start must never return Ok %s" path
+          }
+
+          test "a failed delete of the candidate leaves the previous installation reachable" {
+              // When the candidate is already in `absoluteFinal` and the
+              // restore path tries (and fails) to delete it, the previous
+              // installation must remain on disk for a human operator to
+              // recover.
+              let temp, archive, finalDirectory = createFixture ()
+              use cleanup = temp
+              let runner = successfulArchiveRunner ()
+              let mutable failDelete = false
+
+              let operations =
+                  { realDirectoryOperations with
+                      Delete =
+                          fun path ->
+                              if
+                                  not failDelete
+                                  && Path.GetFullPath(path) = Path.GetFullPath(finalDirectory)
+                              then
+                                  failDelete <- true
+                                  raise (IOException "injected delete failure")
+                              else
+                                  if Directory.Exists path then
+                                      Directory.Delete(path, true) }
+
+              match
+                  safeExtractVerified
+                      operations
+                      runner
+                      archive
+                      finalDirectory
+                      (fun _ -> Error(VerificationFailure "verification failed"))
+              with
+              | Error detail ->
+                  Expect.stringContains
+                    (string detail)
+                    "rollback incomplete; previous installation retained at"
+                    "The error detail must announce that the previous installation is retained"
+                  Expect.isTrue
+                      (Directory.Exists finalDirectory)
+                      "The final directory must still exist on disk after a failed candidate delete"
+              | Ok path -> failtestf "A delete-failed rollback must never return Ok %s" path
           } ]
