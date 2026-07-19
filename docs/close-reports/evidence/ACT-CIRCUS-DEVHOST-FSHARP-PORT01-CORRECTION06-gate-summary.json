@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-19T19:02:00.190282+00:00",
+  "tool": "circus-regenerate-gate-summary",
+  "overall_status": "pass",
+  "checks_total": 3,
+  "checks_passed": 3,
+  "checks_failed": 0,
+  "checks_unavailable": 0,
+  "checks": [
+    {
+      "name": "container-publication-policy",
+      "status": "pass",
+      "exit_code": 0,
+      "command": "/usr/bin/python3 scripts/verify_container_policy.py"
+    },
+    {
+      "name": "executable-shell-tests",
+      "status": "pass",
+      "exit_code": 0,
+      "command": "bash tests/ci/test_build_publish_shell.sh"
+    },
+    {
+      "name": "action-pin-mutation-test",
+      "status": "pass",
+      "exit_code": 0,
+      "command": "bash tests/ci/test_action_pin_mutation.sh"
+    }
+  ],
+  "tested_tree_oid": "880509bdb2e48d81c1c541ed17b6e2ce2e48b724"
+}

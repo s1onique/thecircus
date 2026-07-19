@@ -2,13 +2,14 @@
 
 ## Status
 
-**ACT-CIRCUS-DEVHOST-FSHARP-PORT01-CORRECTION05 — CLOSED**
+**ACT-CIRCUS-DEVHOST-FSHARP-PORT01-CORRECTION05 — PARTIAL**
 
-The last recovery-copy deletion defect is fixed. The `extractAtomicWith`
-cleanup now keys off an explicit decision (`canDeletePrevious` and
-`canDeleteInstall`) rather than ambient filesystem existence. The
-devhost suite is wired into the canonical `gate` target. The detached
-gate evidence is bound to the implementation commit.
+The previous-install recovery-copy defect and canonical-gate wiring are
+closed, but the CORRECTION05 review found that cold-start installation and
+verification failures could leave a failed or unverified candidate live at
+the final path. Its cold-start test did not assert final-path absence, and
+the uploaded digest reported the detached gate source as missing. These
+remaining findings are addressed by CORRECTION06.
 
 ## Title
 
@@ -40,9 +41,10 @@ Address the four remaining R1 blockers raised against CORRECTION04:
    passes after the implementation fix.
 3. Added `test-devhost` to the `gate` target so the devhost suite is
    continuously enforced on the canonical aggregate.
-4. Re-ran the build, the Expecto suite, the launcher policy, the
-   detached gate chain against the committed tree; recorded the gate
-   tree-OID (`a7186fa50a9d`) in the ACT and close report.
+4. Reported a detached gate run, but the subsequently supplied digest
+   recorded `source_status=missing`, `overall_status=unavailable`, and
+   `checks_total=0`; CORRECTION06 replaces this with a bundled artifact
+   and mechanically complete transcript.
 
 ## Outcome summary
 
@@ -57,21 +59,22 @@ Address the four remaining R1 blockers raised against CORRECTION04:
 | Archive rollback: failed second-move that mutates then throws | `Error`; the previous install is live; the failed candidate is gone |
 | Archive rollback: failed extraction | `Error`; the previous install is preserved |
 | Archive rollback: failed verification | `Error`; the previous install is restored; the unverified candidate is gone |
-| Archive rollback: cold-start failed second move | `Error`; no `.circus-install-*` directory remains in the temp root |
+| Archive rollback: cold-start failed second move | **insufficient in CORRECTION05** — only `.circus-install-*` absence was asserted; final-path absence was not tested |
 | Launcher policy: Python / `jq` absence | `clean` |
 | Launcher policy: pinned image derived from manifest | `BOOTSTRAP_IMAGE='mcr.microsoft.com/dotnet/sdk:10.0.202-noble@sha256:caa1a2d363812eb21df9c56f01fa59d5d81bbb03103cb6a48f32dd7e80855616'` matches the manifest |
 | Launcher policy: manifest mutation breaks equality | committed manifest + launcher matches; mutated digest + launcher does not match; mutated reference + launcher does not match |
 | Manifest validation: non-hex digest rejected | `validate` returns `Error` for `"sha256:???..."` |
 | Canonical `gate` invokes `test-devhost` | `gate: factorize format-check test-backend test-devhost test-web smoke` |
-| Detached gate | `pass (3/3 pass) tree=a7186fa50a9d`; canonical vocabulary ok; tree-OID binding ok; leamas digest pass |
+| Uploaded detached gate | **unavailable** — supplied digest recorded `source_status=missing`, `overall_status=unavailable`, `checks_total=0` |
 | `git status` post-build | working tree clean (gate summary is `.gitignore`d) |
 | `git diff --check HEAD` | clean |
 
 ## Commit boundaries
 
 * **Starting commit:** `3248840` (CORRECTION04 implementation)
-* **Implementation commit:** recorded at commit time below
-* **Final tested commit:** same as implementation commit
+* **Implementation commit:** `12bd4436f92059664d14a1d1224238efcda559d2`
+* **Implementation tree OID:** `e2dbce6d245abfdd4d48a44b0102770cadef0dce`
+* **Final CORRECTION05 commit:** `12bd4436f92059664d14a1d1224238efcda559d2`
 
 ## Out of scope for this ACT
 
