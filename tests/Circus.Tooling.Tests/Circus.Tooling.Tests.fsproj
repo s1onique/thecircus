@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Circus.Tooling.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="TestDoubles.fs" />
+    <Compile Include="SourcePolicy/LineCountingTests.fs" />
+    <Compile Include="SourcePolicy/ClassificationTests.fs" />
+    <Compile Include="SourcePolicy/ShebangTests.fs" />
+    <Compile Include="SourcePolicy/ShellPolicyTests.fs" />
+    <Compile Include="SourcePolicy/InvocationPolicyTests.fs" />
+    <Compile Include="SourcePolicy/BaselineTests.fs" />
+    <Compile Include="SourcePolicy/PathsTests.fs" />
+    <Compile Include="SourcePolicy/DeterminismTests.fs" />
+    <Compile Include="SourcePolicy/CliTests.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Expecto" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\tools\Circus.Tooling\Circus.Tooling.fsproj" />
+  </ItemGroup>
+
+</Project>

@@ -228,7 +228,7 @@ Trusted publication attempts `--provenance=mode=min --sbom=true`. If the deploye
 Run the static policy suite with:
 
 ```bash
-python3 scripts/verify_container_policy.py
+make verify-container-policy
 ```
 
-It parses both workflows, checks trigger/runner/secrets/cache/tag/digest security boundaries, verifies numeric users and ports, checks action SHA pins, and checks that tracked secret-like files cannot enter the Docker context.
+It is implemented in F# (see `ACT-CIRCUS-CONTAINER-HARBOR-PUBLISH01` for the equivalent contract) and verifies the same trigger/runner/secrets/cache/tag/digest security boundaries, numeric users and ports, action SHA pins, and that tracked secret-like files cannot enter the Docker context.

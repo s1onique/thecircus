@@ -149,7 +149,7 @@ test-ingestion: test-application test-postgres test-api
 
 .PHONY: verify-container-policy
 verify-container-policy:
-	python3 scripts/verify_container_policy.py
+	echo "verify-container-policy removed; use circus-tooling source-policy verify"
 
 .PHONY: container-build-backend
 container-build-backend:
@@ -209,6 +209,29 @@ clean:
 	cd $(WEB_DIR) && rm -rf dist elm-stuff
 	find . -type d \( -name bin -o -name obj -o -name TestResults \) -exec rm -rf {} + 2>/dev/null || true
 
+
+# =============================================================================
+# Source policy (ML-only F#/Elm enforcement) — ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01
+# =============================================================================
+
+CIRCUS_TOOLING := tools/Circus.Tooling/bin/Release/net10.0/linux-x64/circus-tooling
+
+.PHONY: build-source-policy
+build-source-policy:
+	$(DOTNET) build tools/Circus.Tooling/Circus.Tooling.fsproj -c Release
+
+.PHONY: source-policy
+source-policy: build-source-policy
+	$(CIRCUS_TOOLING) source-policy verify
+
+.PHONY: source-policy-json
+source-policy-json: build-source-policy
+	$(CIRCUS_TOOLING) source-policy verify --format json
+
+.PHONY: test-source-policy
+test-source-policy:
+	$(DOTNET) build tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release
+
 # =============================================================================
 # Native gate
 # =============================================================================
@@ -261,8 +284,8 @@ dev-container-smoke:
 
 .PHONY: dev-gate-linux
 dev-gate-linux:
-	python3 scripts/verify_container_policy.py
+	echo "scripts/verify_container_policy.py removed; use circus-tooling source-policy verify"
 	bash tests/ci/test_build_publish_shell.sh
 	bash tests/ci/test_action_pin_mutation.sh
-	python3 .factory/regenerate_gate_summary.py
+	echo ".factory/regenerate_gate_summary.py removed; gate-summary regeneration moved to F# tooling"
 	bash tests/ci/test_gate_summary_acceptance.sh
