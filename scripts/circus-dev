@@ -1,0 +1,36 @@
+#!/usr/bin/env sh
+# circus-dev cycle-break launcher. Locates an installed self-contained binary
+# or publishes one with the manifest-pinned SDK image. POSIX-compatible.
+
+set -eu
+
+CIRCUS_TOOL_ROOT="${CIRCUS_TOOL_ROOT:-$HOME/.local/share/circus-dev}"
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+[ -f "$REPO_ROOT/Circus.sln" ] || { echo "circus-dev: Circus.sln not found" >&2; exit 2; }
+
+BINARY="$CIRCUS_TOOL_ROOT/bin/circus-dev"
+[ -x "$BINARY" ] && exec "$BINARY" "$@"
+
+command -v docker >/dev/null 2>&1 || { echo "circus-dev: no installed binary and no docker" >&2; exit 2; }
+docker info >/dev/null 2>&1 || { echo "circus-dev: docker not accessible" >&2; exit 2; }
+
+TOOLCHAIN_MANIFEST="$REPO_ROOT/eng/devhost-toolchain.json"
+[ -f "$TOOLCHAIN_MANIFEST" ] || { echo "circus-dev: toolchain manifest missing" >&2; exit 2; }
+
+# Pinned via the committed manifests, not parsed at runtime; this launcher
+# is intentionally free of JSON parsers and second-language dependencies.
+# The launcher-policy test asserts the literal below matches the values
+# produced by the F# validate function on the committed manifest.
+BOOTSTRAP_IMAGE='mcr.microsoft.com/dotnet/sdk:10.0.202-noble@sha256:caa1a2d363812eb21df9c56f01fa59d5d81bbb03103cb6a48f32dd7e80855616'
+
+mkdir -p "$CIRCUS_TOOL_ROOT/bin"
+docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp/circus-dev-build \
+    -v "$REPO_ROOT":/src -v "$CIRCUS_TOOL_ROOT/bin":/out -w /src \
+    "$BOOTSTRAP_IMAGE" \
+    sh -c 'set -eu; dotnet publish tools/Circus.DevHost/Circus.DevHost.fsproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -p:PublishDir=/out; chmod +x /out/circus-dev'
+
+[ -x "$BINARY" ] || { echo "circus-dev: published binary missing" >&2; exit 2; }
+exec "$BINARY" "$@"

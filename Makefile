@@ -8,9 +8,16 @@ include .factory/generated/factory.mk
 # =============================================================================
 DOTNET  ?= dotnet
 NPM     ?= npm
+DEV_BOOTSTRAP_ARGS ?=
+CONTAINER_CLI ?= docker
+CONTAINER_PLATFORM ?= linux/amd64
 SLN      := Circus.sln
 WEB_DIR  := web
 WEB_DIST := $(WEB_DIR)/dist
+CONTAINER_BACKEND_IMAGE ?= circus-backend:act-local
+CONTAINER_FRONTEND_IMAGE ?= circus-frontend:act-local
+CONTAINER_SOURCE_REVISION := $(shell git rev-parse HEAD 2>/dev/null || printf 'local')
+CONTAINER_CREATED := $(shell git show -s --format=%cI HEAD 2>/dev/null || printf '1970-01-01T00:00:00Z')
 
 # Sources that should trigger an Elm rebuild.
 WEB_SOURCES := \
@@ -92,6 +99,10 @@ test-postgres: build-backend
 test-api: build-backend
 	$(DOTNET) run --project tests/Circus.Api.Tests -c Release --no-build --no-restore
 
+.PHONY: test-devhost
+test-devhost: build-backend
+	$(DOTNET) run --project tests/Circus.DevHost.Tests -c Release --no-build --no-restore
+
 .PHONY: test-backend
 test-backend: build-backend
 	$(DOTNET) run --project tests/Circus.Domain.Tests   -c Release --no-build --no-restore
@@ -133,6 +144,46 @@ test: test-backend test-web
 test-ingestion: test-application test-postgres test-api
 
 # =============================================================================
+# Container images and runtime smoke tests
+# =============================================================================
+
+.PHONY: verify-container-policy
+verify-container-policy:
+	python3 scripts/verify_container_policy.py
+
+.PHONY: container-build-backend
+container-build-backend:
+	DOCKER_BUILDKIT=1 $(CONTAINER_CLI) build --platform $(CONTAINER_PLATFORM) --file Dockerfile.backend --tag $(CONTAINER_BACKEND_IMAGE) \
+		--build-arg OCI_TITLE="The Circus backend" \
+		--build-arg OCI_DESCRIPTION="The Circus production backend OCI image" \
+		--build-arg OCI_SOURCE="local://thecircus" \
+		--build-arg OCI_REVISION=$(CONTAINER_SOURCE_REVISION) \
+		--build-arg OCI_VERSION=act-local \
+		--build-arg OCI_CREATED=$(CONTAINER_CREATED) .
+
+.PHONY: container-build-frontend
+container-build-frontend:
+	DOCKER_BUILDKIT=1 $(CONTAINER_CLI) build --platform $(CONTAINER_PLATFORM) --file Dockerfile.frontend --tag $(CONTAINER_FRONTEND_IMAGE) \
+		--build-arg OCI_TITLE="The Circus frontend" \
+		--build-arg OCI_DESCRIPTION="The Circus production frontend OCI image" \
+		--build-arg OCI_SOURCE="local://thecircus" \
+		--build-arg OCI_REVISION=$(CONTAINER_SOURCE_REVISION) \
+		--build-arg OCI_VERSION=act-local \
+		--build-arg OCI_CREATED=$(CONTAINER_CREATED) .
+
+.PHONY: container-smoke-backend
+container-smoke-backend: container-build-backend
+	CONTAINER_CLI=$(CONTAINER_CLI) scripts/container-smoke.sh backend $(CONTAINER_BACKEND_IMAGE)
+
+.PHONY: container-smoke-frontend
+container-smoke-frontend: container-build-frontend
+	CONTAINER_CLI=$(CONTAINER_CLI) scripts/container-smoke.sh frontend $(CONTAINER_FRONTEND_IMAGE)
+
+.PHONY: container-smoke
+container-smoke: container-smoke-backend container-smoke-frontend
+	@echo "Container smoke tests passed."
+
+# =============================================================================
 # Run
 # =============================================================================
 
@@ -163,5 +214,55 @@ clean:
 # =============================================================================
 
 .PHONY: gate
-gate: factorize format-check test-backend test-web smoke
+gate: factorize format-check test-backend test-devhost test-web smoke
 	@echo "=== Native gate passed ==="
+
+# =============================================================================
+# Linux development environment (ACT-CIRCUS-LINUX-DEV-HOST-BOOTSTRAP01)
+# =============================================================================
+
+# Bootstrap the Linux development environment through the typed F# authority.
+.PHONY: dev-bootstrap-linux
+dev-bootstrap-linux:
+	./scripts/circus-dev bootstrap $(DEV_BOOTSTRAP_ARGS)
+
+# Check prerequisites only (no installation)
+.PHONY: dev-bootstrap-check-linux
+dev-bootstrap-check-linux:
+	./scripts/circus-dev check
+
+.PHONY: dev-activate-help
+dev-activate-help:
+	@echo 'Run: eval "$$(./scripts/circus-dev env)"'
+
+.PHONY: dev-doctor
+dev-doctor:
+	./scripts/circus-dev doctor
+
+.PHONY: dev-restore
+dev-restore:
+	$(DOTNET) restore $(SLN) --locked-mode
+	cd $(WEB_DIR) && $(NPM) ci
+
+.PHONY: dev-test-linux
+dev-test-linux:
+	$(MAKE) format-check
+	$(MAKE) test-domain
+	$(MAKE) test-contracts
+	$(MAKE) test-application
+	$(MAKE) test-web
+	$(MAKE) test-postgres
+	$(MAKE) test-api
+	$(MAKE) test-devhost
+
+.PHONY: dev-container-smoke
+dev-container-smoke:
+	$(MAKE) CONTAINER_CLI=docker CONTAINER_PLATFORM=linux/amd64 container-smoke
+
+.PHONY: dev-gate-linux
+dev-gate-linux:
+	python3 scripts/verify_container_policy.py
+	bash tests/ci/test_build_publish_shell.sh
+	bash tests/ci/test_action_pin_mutation.sh
+	python3 .factory/regenerate_gate_summary.py
+	bash tests/ci/test_gate_summary_acceptance.sh

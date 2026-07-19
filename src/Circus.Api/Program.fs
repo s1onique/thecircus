@@ -95,15 +95,33 @@ let configureApp (app: IApplicationBuilder) : unit =
     let service = IngestEventService.create dataSource
     app.UseGiraffe(webApp AuthorizationAdapters.denyAll service.Ingest) |> ignore
 
+let httpPort () : int =
+    let configured = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS")
+
+    if String.IsNullOrWhiteSpace configured then
+        5000
+    else
+        let firstPort =
+            configured.Split(';', StringSplitOptions.RemoveEmptyEntries) |> Array.tryHead
+
+        match firstPort with
+        | Some value ->
+            match Int32.TryParse(value) with
+            | true, port when port > 0 && port <= 65535 -> port
+            | _ -> failwith "ASPNETCORE_HTTP_PORTS must contain a valid TCP port"
+        | None -> failwith "ASPNETCORE_HTTP_PORTS must contain a valid TCP port"
+
 /// Build the production host.  CIRCUS_DATABASE_URL is validated before the
 /// host is built, and its single data source is registered as a singleton.
+/// Liveness itself never opens the data source; a syntactically valid setting is
+/// enough for a container health probe without a PostgreSQL service.
 let buildHost (args: string[]) : IHost =
     let connectionString = postgresConnectionString ()
 
     let dataSource =
         PostgresConfiguration.createDataSource (PostgresConfiguration.defaultConfiguration connectionString)
 
-    let kestrelOptions (options: KestrelServerOptions) : unit = options.ListenLocalhost(5000)
+    let kestrelOptions (options: KestrelServerOptions) : unit = options.ListenAnyIP(httpPort ())
 
     let configureWebHost (builder: IWebHostBuilder) : unit =
         builder

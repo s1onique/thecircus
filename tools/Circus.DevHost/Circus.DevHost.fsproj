@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>circus-dev</AssemblyName>
+    <RootNamespace>Circus.DevHost</RootNamespace>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <PublishSelfContained>true</PublishSelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <Nullable>enable</Nullable>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AssemblyInformationalVersion>1.0.0</AssemblyInformationalVersion>
+    <Version>1.0.0</Version>
+    <!-- This project opts out of central package version management for its
+         BCL-only dependency surface. We intentionally depend only on
+         FSharp.Core and the BCL so no external runtime packages are needed. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Domain.fs" />
+    <Compile Include="ExitCodes.fs" />
+    <Compile Include="Paths.fs" />
+    <Compile Include="Platform.fs" />
+    <Compile Include="Repository.fs" />
+    <Compile Include="ToolchainManifest.fs" />
+    <Compile Include="ProcessRunner.fs" />
+    <Compile Include="Integrity.fs" />
+    <Compile Include="Downloads.fs" />
+    <Compile Include="Adapters.fs" />
+    <Compile Include="Archives.fs" />
+    <Compile Include="DotNetInstaller.fs" />
+    <Compile Include="NodeInstaller.fs" />
+    <Compile Include="FrontendInstaller.fs" />
+    <Compile Include="PolicyEnvironment.fs" />
+    <Compile Include="ToolInstaller.fs" />
+    <Compile Include="DockerChecks.fs" />
+    <Compile Include="LeamasChecks.fs" />
+    <Compile Include="SourceVerification.fs" />
+    <Compile Include="ShellEnvironment.fs" />
+    <Compile Include="ShellProfile.fs" />
+    <Compile Include="Evidence.fs" />
+    <Compile Include="Doctor.fs" />
+    <Compile Include="Bootstrap.fs" />
+    <Compile Include="Verify.fs" />
+    <Compile Include="Cli.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" Version="7.0.200" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\eng\devhost-toolchain.json" Link="devhost-toolchain.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

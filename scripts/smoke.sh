@@ -14,11 +14,12 @@ cd "$REPO_ROOT"
 TMP_DIR="$(mktemp -d -t circus-smoke.XXXXXX)"
 SERVER_PID=""
 
-HEALTH_URL="http://127.0.0.1:5000/health/live"
-ABOUT_URL="http://127.0.0.1:5000/api/v1/about"
-STYLES_URL="http://127.0.0.1:5000/styles.css"
-ROOT_URL="http://127.0.0.1:5000/"
-APP_JS_URL="http://127.0.0.1:5000/app.js"
+SMOKE_PORT="${SMOKE_PORT:-18080}"
+HEALTH_URL="http://127.0.0.1:${SMOKE_PORT}/health/live"
+ABOUT_URL="http://127.0.0.1:${SMOKE_PORT}/api/v1/about"
+STYLES_URL="http://127.0.0.1:${SMOKE_PORT}/styles.css"
+ROOT_URL="http://127.0.0.1:${SMOKE_PORT}/"
+APP_JS_URL="http://127.0.0.1:${SMOKE_PORT}/app.js"
 
 cleanup() {
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -54,8 +55,9 @@ assert_contains() {
 }
 
 echo "Starting API server..."
-dotnet run --project src/Circus.Api -c Release --no-build --no-restore \
-    > "$TMP_DIR/server.log" 2>&1 &
+ASPNETCORE_HTTP_PORTS="$SMOKE_PORT" CIRCUS_DATABASE_URL='Host=127.0.0.1;Port=5432;Database=circus_smoke;Username=smoke;Password=smoke' \
+    dotnet run --project src/Circus.Api -c Release --no-build --no-restore \
+     > "$TMP_DIR/server.log" 2>&1 &
 SERVER_PID=$!
 
 echo "Waiting for $HEALTH_URL ..."
