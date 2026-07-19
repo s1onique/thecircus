@@ -1,4 +1,4 @@
-
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
@@ -26,6 +26,12 @@ EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Circus.Persistence.Postgres.Tests", "tests\Circus.Persistence.Postgres.Tests\Circus.Persistence.Postgres.Tests.fsproj", "{D4E5F6A7-B8C9-0123-DEF0-234567890123}"
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Circus.Api.Tests", "tests\Circus.Api.Tests\Circus.Api.Tests.fsproj", "{48BD7684-6C68-4E16-BE73-8595EDE97FB0}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{07C2787E-EAC7-C090-1BA3-A61EC2A24D84}"
+EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Circus.DevHost", "tools\Circus.DevHost\Circus.DevHost.fsproj", "{AD738661-91D3-44B5-9940-9B3BA12A2AF0}"
+EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Circus.DevHost.Tests", "tests\Circus.DevHost.Tests\Circus.DevHost.Tests.fsproj", "{00C42A19-5867-45F7-8112-BDC57630E6ED}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -89,6 +95,30 @@ Global
 		{48BD7684-6C68-4E16-BE73-8595EDE97FB0}.Release|Any CPU.Build.0 = Release|Any CPU
 		{48BD7684-6C68-4E16-BE73-8595EDE97FB0}.Release|x64.ActiveCfg = Release|Any CPU
 		{48BD7684-6C68-4E16-BE73-8595EDE97FB0}.Release|x64.Build.0 = Release|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Debug|x64.Build.0 = Debug|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Debug|x86.Build.0 = Debug|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Release|x64.ActiveCfg = Release|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Release|x64.Build.0 = Release|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Release|x86.ActiveCfg = Release|Any CPU
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0}.Release|x86.Build.0 = Release|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Debug|x64.Build.0 = Debug|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Debug|x86.Build.0 = Debug|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Release|Any CPU.Build.0 = Release|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Release|x64.ActiveCfg = Release|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Release|x64.Build.0 = Release|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Release|x86.ActiveCfg = Release|Any CPU
+		{00C42A19-5867-45F7-8112-BDC57630E6ED}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -104,5 +134,7 @@ Global
 		{C3D4E5F6-A7B8-9012-CDEF-123456789012} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{D4E5F6A7-B8C9-0123-DEF0-234567890123} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{48BD7684-6C68-4E16-BE73-8595EDE97FB0} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{AD738661-91D3-44B5-9940-9B3BA12A2AF0} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
+		{00C42A19-5867-45F7-8112-BDC57630E6ED} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

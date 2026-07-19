@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "actionlint": {
+    "version": "1.7.12",
+    "linux_x64_url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz",
+    "sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+  },
+  "shellcheck": {
+    "version": "0.11.0",
+    "linux_x64_url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz",
+    "sha256": "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+  },
+  "python_policy": {
+    "python": "3.12",
+    "pip": "24.0",
+    "pyyaml": "6.0.1"
+  },
+  "bootstrap_sdk_image": {
+    "reference": "mcr.microsoft.com/dotnet/sdk:10.0.202-bookworm-slim",
+    "digest": "sha256:f3d6c0d9d7d62a1a16b3b1b15d3e5a2e1c2c8d77a7c8d3d2e9b7e2f7b1f0e3a4"
+  }
+}

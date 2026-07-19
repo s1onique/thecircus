@@ -219,26 +219,26 @@ gate: factorize format-check test-backend test-web smoke
 # Bootstrap the Linux development environment
 .PHONY: dev-bootstrap-linux
 dev-bootstrap-linux:
-	./scripts/bootstrap-linux-dev.sh
+	./scripts/circus-dev bootstrap
 
 # Check prerequisites only (no installation)
 .PHONY: dev-bootstrap-check-linux
-dev-bootstrap-check-linux:
-	./scripts/bootstrap-linux-dev.sh --check
+dev-check-linux:
+	./scripts/circus-dev check
 
 .PHONY: dev-activate-help
 dev-activate-help:
 	@echo "To activate the development environment:"
-	@echo "  Run: source ~/.local/bin/circus-dev-activate"
+	@echo "  Run: eval "$(./scripts/circus-dev env)""
 	@echo ""
 	@echo "Or add this line to your ~/.bashrc or ~/.zshrc:"
 	@echo '  [ -f "$$HOME/.local/bin/circus-dev-activate" ] && source "$$HOME/.local/bin/circus-dev-activate"'
 	@echo ""
-	@echo "The stable activation shim is installed by scripts/bootstrap-linux-dev.sh"
+	@echo "The stable activation shim is managed by scripts/circus-dev install-shell-hook"
 
 .PHONY: dev-doctor
 dev-doctor:
-	./scripts/dev-doctor.sh
+	./scripts/circus-dev doctor
 
 .PHONY: dev-restore
 dev-restore:

@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+# circus-dev cycle-break launcher. Locates an installed self-contained
+# binary or publishes one via Docker. POSIX-compatible.
+
+set -eu
+
+CIRCUS_TOOL_ROOT="${CIRCUS_TOOL_ROOT:-$HOME/.local/share/circus-dev}"
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+[ -f "$REPO_ROOT/Circus.sln" ] || { echo "circus-dev: Circus.sln not found" >&2; exit 2; }
+
+BINARY="$CIRCUS_TOOL_ROOT/bin/circus-dev"
+[ -x "$BINARY" ] && exec "$BINARY" "$@"
+
+command -v docker >/dev/null 2>&1 || { echo "circus-dev: no installed binary and no docker" >&2; exit 2; }
+docker info >/dev/null 2>&1 || { echo "circus-dev: docker not accessible" >&2; exit 2; }
+
+mkdir -p "$CIRCUS_TOOL_ROOT/bin"
+docker run --rm --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp/circus-dev-build \
+    -v "$REPO_ROOT":/src -v "$CIRCUS_TOOL_ROOT/bin":/out -w /src \
+    mcr.microsoft.com/dotnet/sdk:10.0.202-bookworm-slim \
+    sh -c 'set -eu; dotnet publish tools/Circus.DevHost/Circus.DevHost.fsproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -p:PublishDir=/out; chmod +x /out/circus-dev'
+
+[ -x "$BINARY" ] || { echo "circus-dev: published binary missing" >&2; exit 2; }
+exec "$BINARY" "$@"
