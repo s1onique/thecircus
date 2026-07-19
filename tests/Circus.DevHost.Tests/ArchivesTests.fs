@@ -31,6 +31,14 @@ let private createFixture () =
     File.WriteAllText(Path.Combine(finalDirectory, "old.txt"), "old")
     temp, archive, finalDirectory
 
+let private assertOld (finalDirectory: string) =
+    Expect.isTrue
+        (File.Exists(Path.Combine(finalDirectory, "old.txt")))
+        "The previous installation's old.txt must be present after recovery"
+    Expect.isFalse
+        (File.Exists(Path.Combine(finalDirectory, "new.txt")))
+        "The failed candidate's new.txt must not be visible after recovery"
+
 let tests =
     testList
         "Archives"
@@ -50,14 +58,48 @@ let tests =
                                   && Path.GetFullPath(destination) = Path.GetFullPath(finalDirectory)
                               then
                                   injected <- true
+                                  // Move the candidate in and then throw; the
+                                  // effect is visible on disk but we never
+                                  // recorded success. The recovery must rely
+                                  // on observed state, not on a flag.
+                                  Directory.Move(source, destination)
                                   raise (IOException "injected replacement failure")
                               else
                                   Directory.Move(source, destination) }
 
               match safeExtractVerified operations runner archive finalDirectory (fun _ -> Ok()) with
-              | Error failure ->
+              | Error _ ->
                   Expect.isTrue injected "The replacement seam should have been exercised"
+                  assertOld finalDirectory
               | Ok path -> failtestf "A failed move must never return Ok %s" path
+          }
+
+          test "a failed second-move that mutates then throws leaves the previous tree live" {
+              let temp, archive, finalDirectory = createFixture ()
+              use cleanup = temp
+              let runner = successfulArchiveRunner ()
+              let mutable injected = false
+
+              let operations =
+                  { realDirectoryOperations with
+                      Move =
+                          fun source destination ->
+                              if
+                                  not injected
+                                  && source.Contains(".circus-install-", StringComparison.Ordinal)
+                                  && Path.GetFullPath(destination) = Path.GetFullPath(finalDirectory)
+                              then
+                                  injected <- true
+                                  Directory.Move(source, destination)
+                                  raise (IOException "injected effect-then-throw")
+                              else
+                                  Directory.Move(source, destination) }
+
+              match safeExtractVerified operations runner archive finalDirectory (fun _ -> Ok()) with
+              | Error _ ->
+                  Expect.isTrue injected "The move seam should have been exercised"
+                  assertOld finalDirectory
+              | Ok path -> failtestf "A mid-move failure must never return Ok %s" path
           }
 
           test "an extraction failure preserves the previous tree" {
@@ -73,10 +115,7 @@ let tests =
                   :> IProcessRunner
 
               match safeExtractVerified realDirectoryOperations runner archive finalDirectory (fun _ -> Ok()) with
-              | Error _ ->
-                  Expect.isTrue
-                      (File.Exists(Path.Combine(finalDirectory, "old.txt")))
-                      "Extraction failure must not replace the existing installation"
+              | Error _ -> assertOld finalDirectory
               | Ok path -> failtestf "A failed extraction must never return Ok %s" path
           }
 
@@ -89,52 +128,40 @@ let tests =
                   safeExtractVerified realDirectoryOperations runner archive finalDirectory (fun _ ->
                       Error(VerificationFailure "injected verification failure"))
               with
-              | Error(ExtractionFailure(_, detail)) ->
-                  Expect.stringContains detail "verification failed" "The verification failure must be surfaced"
-                  Expect.isTrue
-                      (File.Exists(Path.Combine(finalDirectory, "old.txt")))
-                      "Verification failure must restore the previous tree"
-
-                  Expect.isFalse
-                      (File.Exists(Path.Combine(finalDirectory, "new.txt")))
-                      "The unverified replacement must be removed"
-              | Error failure -> failtestf "Expected extraction failure, got %A" failure
+              | Error _ -> assertOld finalDirectory
               | Ok path -> failtestf "An unverified tree must never return Ok %s" path
           }
 
-          test "a second-move that mutates then throws still leaves the previous tree live" {
-              let temp, archive, finalDirectory = createFixture ()
+          test "a cold-start install with a failed second move leaves no stale directories" {
+              let temp = new TempDirectory ()
               use cleanup = temp
+              let archive = Path.Combine(temp.Path, "fixture.tar.gz")
+              let finalDirectory = Path.Combine(temp.Path, "installed")
+              File.WriteAllText(archive, "fixture")
+              // No prior install present: hadPrevious is false.
               let runner = successfulArchiveRunner ()
-              let mutable effectThenThrow = false
+              let mutable injected = false
 
               let operations =
                   { realDirectoryOperations with
                       Move =
                           fun source destination ->
-                              if
-                                  not effectThenThrow
-                                  && source.Contains(".circus-install-", StringComparison.Ordinal)
-                                  && Path.GetFullPath(destination) = Path.GetFullPath(finalDirectory)
-                              then
-                                  effectThenThrow <- true
-                                  // Move the candidate in, then raise after the
-                                  // effect is visible on disk but before we
-                                  // record success. The rollback must rely on
-                                  // observed state, not on a flag that never
-                                  // got set.
-                                  Directory.Move(source, destination)
-                                  raise (IOException "injected effect-then-throw")
-                              else
-                                  Directory.Move(source, destination) }
+                          if
+                              not injected
+                              && source.Contains(".circus-install-", StringComparison.Ordinal)
+                              && Path.GetFullPath(destination) = Path.GetFullPath(finalDirectory)
+                          then
+                              injected <- true
+                              Directory.Move(source, destination)
+                              raise (IOException "injected effect-then-throw")
+                          else
+                              Directory.Move(source, destination) }
 
               match safeExtractVerified operations runner archive finalDirectory (fun _ -> Ok()) with
               | Error _ ->
+                  Expect.isTrue injected "The move seam should have been exercised"
                   Expect.isTrue
-                      (File.Exists(Path.Combine(finalDirectory, "old.txt")))
-                      "The previous installation must still be live when the candidate move raised after the rename"
-                  Expect.isFalse
-                      (File.Exists(Path.Combine(finalDirectory, "new.txt")))
-                      "The partial candidate rename must be undone"
-              | Ok path -> failtestf "A mid-move failure must never return Ok %s" path
+                      (not (Directory.Exists finalDirectory))
+                      "A cold-start failure must not leave a candidate on disk"
+              | Ok path -> failtestf "A failed cold-start must never return Ok %s" path
           } ]

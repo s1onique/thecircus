@@ -143,10 +143,11 @@ let private extractionOutcome
 /// and restore the previous tree if either the move or verification fails.
 /// Every recovery step inspects the live filesystem rather than post-call
 /// flags, so an exception that is raised after a side-effect still leaves
-/// the previous installation reachable. The body is wrapped in a
-/// `try … finally` so the candidate/previous-temp directories are reclaimed
-/// on every exception path and the previous install is only ever erased
-/// when the new install is committed.
+/// the previous installation reachable. We never delete the previous
+/// install unless we have already restored it (or, for the cold-start
+/// path, the target is empty). The install-temp and previous-temp are
+/// reclaimed in a `try … finally` block; the previous-temp is preserved
+/// whenever a partial recovery has left the previous install in place.
 let extractAtomicWith
     (operations: DirectoryOperations)
     (runner: IProcessRunner)
@@ -170,19 +171,44 @@ let extractAtomicWith
 
         let hadPrevious = operations.Exists absoluteFinal
 
-        let disposeInstallation () =
+        let deleteIfPresent path =
             try
-                if operations.Exists installDir then
-                    operations.Delete installDir
+                if operations.Exists path then
+                    operations.Delete path
+                    true
+                else
+                    false
             with _ ->
-                ()
+                false
 
-        let disposePrevious () =
-            try
-                if operations.Exists previousDir then
-                    operations.Delete previousDir
-            with _ ->
-                ()
+        let disposeInstallation () = ignore (deleteIfPresent installDir)
+
+        /// Conditionally release the previous-temp. We only delete it when
+        /// the recovery succeeded; otherwise we leave it in place so the
+        /// caller can attempt another recovery (e.g. a human operator).
+        let tryDisposePreviousIfSafe () =
+            let finalPresent = operations.Exists absoluteFinal
+            let previousPresent = operations.Exists previousDir
+            let candidatePresent = operations.Exists installDir
+
+            if previousPresent
+               && not finalPresent
+               && not candidatePresent
+               && hadPrevious then
+                // The previous-temp is the only thing left; keeping it
+                // provides an out-of-band recovery path. The recovery
+                // copy is the only thing on disk.
+                false
+            else if previousPresent
+                    && finalPresent
+                    && not candidatePresent then
+                // The previous install is back in `absoluteFinal`; the temp
+                // is safe to release.
+                ignore (deleteIfPresent previousDir)
+                true
+            else
+                ignore (deleteIfPresent previousDir)
+                previousPresent
 
         let moveOrFail (source: string) (destination: string) =
             try
@@ -196,22 +222,24 @@ let extractAtomicWith
                     )
                 )
 
-        /// Restore the previous install by inspecting the live filesystem.
-        /// Returns a list of recovery problems for the caller to surface.
+        /// Inspect the live filesystem and bring `absoluteFinal` back to
+        /// the previous install. `hadPrevious` distinguishes the upgrade
+        /// path (we must restore `previousDir`) from the cold-start path
+        /// (we must simply delete the failed candidate). Returns a list of
+        /// recovery problems for the caller to surface.
         let restorePrevious (errors: ResizeArray<string>) =
-            let previousPresent = operations.Exists previousDir
-
-            if not (hadPrevious && previousPresent) then
+            if not (hadPrevious && operations.Exists previousDir) then
                 ()
             else
+                // The candidate may have been renamed onto `absoluteFinal`
+                // and then the second move threw; the live filesystem
+                // shows the truth.
                 if operations.Exists absoluteFinal then
-                    try
-                        operations.Delete absoluteFinal
-                    with ex ->
-                        errors.Add(sprintf "delete failed candidate: %s" ex.Message)
+                    if not (deleteIfPresent absoluteFinal) then
+                        errors.Add("could not delete the failed candidate before restoring the previous install")
 
                 if operations.Exists absoluteFinal then
-                    errors.Add("could not delete the failed candidate before restoring the previous install")
+                    errors.Add("failed candidate still present; previous install cannot be restored")
                 else
                     try
                         operations.Move previousDir absoluteFinal
@@ -220,10 +248,8 @@ let extractAtomicWith
 
         let restoreColdStart (errors: ResizeArray<string>) =
             if operations.Exists absoluteFinal then
-                try
-                    operations.Delete absoluteFinal
-                with ex ->
-                    errors.Add(sprintf "delete failed candidate: %s" ex.Message)
+                if not (deleteIfPresent absoluteFinal) then
+                    errors.Add("could not delete the failed candidate on cold-start install")
 
         let performInstall () =
             try
@@ -249,37 +275,24 @@ let extractAtomicWith
 
         let installOutcome = performInstall ()
 
-        let reportInstallFailure (installFailure: DevHostFailure) : Result<string, DevHostFailure> =
-            if operations.Exists previousDir then
-                if operations.Exists absoluteFinal then
-                    let errors = ResizeArray<string> ()
-                    restorePrevious errors
-
-                    if operations.Exists previousDir then
-                        disposePrevious ()
-
-                    let label = sprintf "install failed: %s" (renderFailure installFailure)
-
-                    if errors.Count > 0 then
-                        Error(
-                            ExtractionFailure(
-                                archive,
-                                label + "; rollback failed: " + String.concat "; " errors
-                            )
-                        )
-                    else
-                        Error(ExtractionFailure(archive, label))
-                else
-                    disposePrevious ()
-                    Error(ExtractionFailure(archive, sprintf "install failed: %s" (renderFailure installFailure)))
+        /// Decide whether the previous install is safely back in
+        /// `absoluteFinal` and the recovery copy can be released.
+        let labelFor (label: string) (rollbackErrors: ResizeArray<string>) =
+            if rollbackErrors.Count > 0 then
+                label
+                + "; rollback failed: "
+                + String.concat "; " rollbackErrors
             else
-                Error installFailure
+                label
 
         try
             match installOutcome with
             | Ok _ ->
                 match verifyInstalled absoluteFinal with
-                | Ok() -> Ok absoluteFinal
+                | Ok() ->
+                    if hadPrevious then ignore (deleteIfPresent previousDir)
+                    disposeInstallation ()
+                    Ok absoluteFinal
                 | Error verificationFailure ->
                     let errors = ResizeArray<string> ()
 
@@ -288,27 +301,45 @@ let extractAtomicWith
                     else
                         restoreColdStart errors
 
-                    if operations.Exists previousDir then
-                        disposePrevious ()
-
-                    let label = sprintf "verification failed: %s" (renderFailure verificationFailure)
-
-                    if errors.Count > 0 then
-                        Error(ExtractionFailure(archive, label + "; rollback failed: " + String.concat "; " errors))
-                    else
-                        Error(ExtractionFailure(archive, label))
+                    disposeInstallation ()
+                    Error(
+                        ExtractionFailure(
+                            archive,
+                            labelFor
+                                (sprintf "verification failed: %s" (renderFailure verificationFailure))
+                                errors
+                        )
+                    )
             | Error installFailure ->
-                reportInstallFailure installFailure
+                let errors = ResizeArray<string> ()
+
+                if hadPrevious then
+                    restorePrevious errors
+                else
+                    restoreColdStart errors
+
+                Error(
+                    ExtractionFailure(
+                        archive,
+                        labelFor
+                            (sprintf "install failed: %s" (renderFailure installFailure))
+                            errors
+                    )
+                )
         finally
             // The install-temp is only consumed when the new install is
             // committed; until then it must be reclaimed so we do not leak
-            // directories. The previous-temp is consumed by the rollback path
-            // above, so we only dispose it if it survives.
+            // directories. The previous-temp is preserved whenever the
+            // recovery copy is still the only thing on disk so a human
+            // operator can attempt another recovery.
             if operations.Exists installDir then
                 disposeInstallation ()
 
-            if operations.Exists previousDir then
-                disposePrevious ()
+            if operations.Exists previousDir
+               && (operations.Exists absoluteFinal
+                   || operations.Exists installDir
+                   || not hadPrevious) then
+                ignore (deleteIfPresent previousDir)
 
 let extractAtomic (runner: IProcessRunner) (archive: string) (finalDir: string) : Result<string, DevHostFailure> =
     extractAtomicWith realDirectoryOperations runner archive finalDir (fun _ -> Ok())

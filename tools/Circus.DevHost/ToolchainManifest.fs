@@ -37,9 +37,22 @@ let private isMcrDotnetSdkReference (reference: string) =
     reference.StartsWith("mcr.microsoft.com/dotnet/sdk:", StringComparison.Ordinal)
     && not (reference.Contains("@", StringComparison.Ordinal))
 
+let private isHexChar (c: char) : bool =
+    (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+
+let private isLowerHex (text: string) : bool =
+    let mutable allHex = true
+    let mutable i = 0
+    while allHex && i < text.Length do
+        if not (isHexChar text.[i]) then
+            allHex <- false
+        i <- i + 1
+    allHex
+
 let private isPinnedSha256 (digest: string) =
     digest.StartsWith("sha256:", StringComparison.Ordinal)
     && digest.Length = 71
+    && isLowerHex (digest.Substring(7))
 
 /// Validate the manifest's structural invariants without reading the
 /// repository authority. Surfaces contract errors as a `Result` so callers
