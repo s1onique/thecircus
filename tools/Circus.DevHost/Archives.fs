@@ -13,150 +13,325 @@ type ArchiveKind =
     | RawBinary
 
 let classifyArchive (fileName: string) : ArchiveKind =
-    if fileName.EndsWith ".tar.xz" || fileName.EndsWith ".txz" then TarXz
-    elif fileName.EndsWith ".tar.gz" || fileName.EndsWith ".tgz" then TarGz
-    elif fileName.EndsWith ".zip" then Zip
-    else RawBinary
+    if fileName.EndsWith ".tar.xz" || fileName.EndsWith ".txz" then
+        TarXz
+    elif fileName.EndsWith ".tar.gz" || fileName.EndsWith ".tgz" then
+        TarGz
+    elif fileName.EndsWith ".zip" then
+        Zip
+    else
+        RawBinary
 
 let isInside (root: string) (target: string) : bool =
-    let norm = Path.GetFullPath(target).Replace("\\", "/")
-    let basePath = Path.GetFullPath(root).Replace("\\", "/")
-    let trimmedBase = if basePath.EndsWith "/" then basePath else basePath + "/"
-    norm.StartsWith(trimmedBase, StringComparison.Ordinal)
+    let normalizedTarget = Path.GetFullPath(target).Replace("\\", "/")
+    let normalizedRoot = Path.GetFullPath(root).Replace("\\", "/")
+
+    let prefix =
+        if normalizedRoot.EndsWith "/" then
+            normalizedRoot
+        else
+            normalizedRoot + "/"
+
+    normalizedTarget.StartsWith(prefix, StringComparison.Ordinal)
 
 type ArchiveListing = { Members: string list }
 
-let listTarball
-    (runner: IProcessRunner)
-    (archive: string)
+let private listingFromResult
+    (outcome: Result<ProcessResult, DevHostFailure>)
     : Result<ArchiveListing, DevHostFailure> =
-    let spec = mkSpec "tar" [ "-tJf"; archive ] (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromSeconds(60.0)) None
-    match runSync runner spec with
-    | Error e -> Error e
-    | Ok r ->
-        let members =
-            r.StandardOutput.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
-            |> Array.toList
-        Ok { Members = members }
+    outcome
+    |> Result.map (fun result ->
+        { Members =
+            result.StandardOutput.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+            |> Array.toList })
 
-let listZip
-    (runner: IProcessRunner)
-    (archive: string)
-    : Result<ArchiveListing, DevHostFailure> =
-    let spec = mkSpec "unzip" [ "-Z1"; archive ] (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromSeconds(60.0)) None
-    match runSync runner spec with
-    | Error e -> Error e
-    | Ok r ->
-        let members =
-            r.StandardOutput.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
-            |> Array.toList
-        Ok { Members = members }
+let listTarball (runner: IProcessRunner) (archive: string) : Result<ArchiveListing, DevHostFailure> =
+    let compressionFlag =
+        match classifyArchive archive with
+        | TarXz -> "-tJf"
+        | TarGz -> "-tzf"
+        | _ -> "-tf"
+
+    mkSpec
+        "tar"
+        [ compressionFlag; archive ]
+        (Directory.GetCurrentDirectory())
+        Map.empty
+        (TimeSpan.FromSeconds 60.0)
+        None
+    |> runSync runner
+    |> listingFromResult
+
+let listZip (runner: IProcessRunner) (archive: string) : Result<ArchiveListing, DevHostFailure> =
+    mkSpec "unzip" [ "-Z1"; archive ] (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromSeconds 60.0) None
+    |> runSync runner
+    |> listingFromResult
 
 let hasTraversal (memberPath: string) : bool =
-    let trimmed = memberPath.Replace("\\", "/")
-    if trimmed.StartsWith "/" then true
-    elif trimmed.Contains "../" then true
-    elif trimmed = ".." || trimmed.StartsWith "../" then true
-    else false
+    let normalized = memberPath.Replace("\\", "/")
 
-let rejectIfTraversal
+    normalized.StartsWith "/"
+    || (normalized.Split('/', StringSplitOptions.RemoveEmptyEntries)
+        |> Array.exists ((=) ".."))
+
+let rejectIfTraversal (destinationRoot: string) (listing: ArchiveListing) : Result<unit, DevHostFailure> =
+    listing.Members
+    |> List.tryFind (fun memberPath ->
+        hasTraversal memberPath
+        || not (
+            isInside
+                destinationRoot
+                (Path.Combine(destinationRoot, memberPath.Replace("/", string Path.DirectorySeparatorChar)))
+        ))
+    |> function
+        | Some memberPath -> Error(ExtractionFailure(destinationRoot, sprintf "traversal: %s" memberPath))
+        | None -> Ok()
+
+let private extractTar
+    (runner: IProcessRunner)
+    (flag: string)
+    (archive: string)
     (destinationRoot: string)
-    (listing: ArchiveListing)
     : Result<unit, DevHostFailure> =
-    let mutable bad : string option = None
-    for m in listing.Members do
-        if hasTraversal m then
-            bad <- Some m
-        else
-            let combined = Path.Combine(destinationRoot, m.Replace("/", Path.DirectorySeparatorChar.ToString()))
-            if not (isInside destinationRoot combined) then
-                bad <- Some m
-    match bad with
-    | Some m -> Error(ExtractionFailure(destinationRoot, sprintf "traversal: %s" m))
-    | None -> Ok ()
+    if not (File.Exists archive) then
+        Error(ExtractionFailure(archive, "archive missing"))
+    else
+        mkSpec
+            "tar"
+            [ flag; archive; "-C"; destinationRoot; "--strip-components=1" ]
+            (Directory.GetCurrentDirectory())
+            Map.empty
+            (TimeSpan.FromMinutes 10.0)
+            None
+        |> runSync runner
+        |> Result.map ignore
 
-let extractTarXz
+let extractTarXz (runner: IProcessRunner) (archive: string) (destinationRoot: string) : Result<unit, DevHostFailure> =
+    extractTar runner "-xJf" archive destinationRoot
+
+let extractTarGz (runner: IProcessRunner) (archive: string) (destinationRoot: string) : Result<unit, DevHostFailure> =
+    extractTar runner "-xzf" archive destinationRoot
+
+/// Directory operations are injectable so rollback behavior can be exercised
+/// without relying on platform-specific permission tricks.
+type DirectoryOperations =
+    { Exists: string -> bool
+      Create: string -> unit
+      Move: string -> string -> unit
+      Delete: string -> unit }
+
+let realDirectoryOperations: DirectoryOperations =
+    { Exists = Directory.Exists
+      Create = fun path -> Directory.CreateDirectory path |> ignore
+      Move = fun source destination -> Directory.Move(source, destination)
+      Delete =
+        fun path ->
+            if Directory.Exists path then
+                Directory.Delete(path, true) }
+
+let private extractionOutcome
     (runner: IProcessRunner)
     (archive: string)
     (destinationRoot: string)
     : Result<unit, DevHostFailure> =
-    let spec = mkSpec "tar" [ "-xJf"; archive; "-C"; destinationRoot; "--strip-components=1" ] (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromMinutes(10.0)) None
-    match runSync runner spec with
-    | Ok _ -> Ok ()
-    | Error e ->
-        if not (File.Exists archive) then Error(ExtractionFailure(archive, "archive missing"))
-        else Error e
+    match classifyArchive archive with
+    | TarXz -> extractTarXz runner archive destinationRoot
+    | TarGz -> extractTarGz runner archive destinationRoot
+    | kind -> Error(ExtractionFailure(archive, sprintf "unsupported archive format %A" kind))
 
-let extractTarGz
-    (runner: IProcessRunner)
-    (archive: string)
-    (destinationRoot: string)
-    : Result<unit, DevHostFailure> =
-    let spec = mkSpec "tar" [ "-xzf"; archive; "-C"; destinationRoot; "--strip-components=1" ] (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromMinutes(10.0)) None
-    match runSync runner spec with
-    | Ok _ -> Ok ()
-    | Error e ->
-        if not (File.Exists archive) then Error(ExtractionFailure(archive, "archive missing"))
-        else Error e
-
-let extractAtomic
+/// Extract to a sibling directory, swap it into place, verify the new tree,
+/// and restore the previous tree if either the move or verification fails.
+/// Every recovery step inspects the live filesystem rather than post-call
+/// flags, so an exception that is raised after a side-effect still leaves
+/// the previous installation reachable. The body is wrapped in a
+/// `try … finally` so the candidate/previous-temp directories are reclaimed
+/// on every exception path and the previous install is only ever erased
+/// when the new install is committed.
+let extractAtomicWith
+    (operations: DirectoryOperations)
     (runner: IProcessRunner)
     (archive: string)
     (finalDir: string)
+    (verifyInstalled: string -> Result<unit, DevHostFailure>)
     : Result<string, DevHostFailure> =
-    try
-        if not (Directory.Exists finalDir) then
-            Directory.CreateDirectory(finalDir) |> ignore
-        let tempDir = Path.Combine(finalDir, ".extract-" + Guid.NewGuid().ToString("n"))
-        Directory.CreateDirectory tempDir |> ignore
-        let kind = classifyArchive archive
-        let extractOutcome =
-            match kind with
-            | TarXz -> extractTarXz runner archive tempDir
-            | TarGz -> extractTarGz runner archive tempDir
-            | _ -> Error(ExtractionFailure(archive, sprintf "unsupported archive format %A" kind))
-        match extractOutcome with
-        | Error e ->
-            try Directory.Delete(tempDir, true) with _ -> ()
-            Error e
-        | Ok () ->
-            let mutable succeeded = false
-            if Directory.Exists finalDir then
-                let previousDir = Path.Combine(Path.GetDirectoryName(finalDir), ".previous-" + Guid.NewGuid().ToString("n"))
-                let _ =
-                    try
-                        Directory.Move(finalDir, previousDir)
-                        Directory.Move(tempDir, finalDir)
-                        try Directory.Delete(previousDir, true) with _ -> ()
-                        true
-                    with _ -> false
-                succeeded <- true
+    let absoluteFinal = Path.GetFullPath finalDir
+    let parentValue = Path.GetDirectoryName absoluteFinal
+
+    if String.IsNullOrEmpty parentValue then
+        Error(ExtractionFailure(archive, "destination has no parent directory"))
+    else
+        let parent = parentValue
+
+        let installDir =
+            Path.Combine(parent, ".circus-install-" + Guid.NewGuid().ToString("n"))
+
+        let previousDir =
+            Path.Combine(parent, ".circus-previous-" + Guid.NewGuid().ToString("n"))
+
+        let hadPrevious = operations.Exists absoluteFinal
+
+        let disposeInstallation () =
+            try
+                if operations.Exists installDir then
+                    operations.Delete installDir
+            with _ ->
+                ()
+
+        let disposePrevious () =
+            try
+                if operations.Exists previousDir then
+                    operations.Delete previousDir
+            with _ ->
+                ()
+
+        let moveOrFail (source: string) (destination: string) =
+            try
+                operations.Move source destination
+                Ok()
+            with ex ->
+                Error(
+                    ExtractionFailure(
+                        archive,
+                        sprintf "move '%s' to '%s' failed: %s" source destination ex.Message
+                    )
+                )
+
+        /// Restore the previous install by inspecting the live filesystem.
+        /// Returns a list of recovery problems for the caller to surface.
+        let restorePrevious (errors: ResizeArray<string>) =
+            let previousPresent = operations.Exists previousDir
+
+            if not (hadPrevious && previousPresent) then
+                ()
             else
-                let _ =
-                    try Directory.Move(tempDir, finalDir); true
-                    with _ -> false
-                succeeded <- true
-            if succeeded then Ok finalDir
-            else Error(ExtractionFailure(archive, "atomic swap failed"))
-    with ex ->
-        Error(ExtractionFailure(archive, ex.Message))
+                if operations.Exists absoluteFinal then
+                    try
+                        operations.Delete absoluteFinal
+                    with ex ->
+                        errors.Add(sprintf "delete failed candidate: %s" ex.Message)
 
-let safeExtract
+                if operations.Exists absoluteFinal then
+                    errors.Add("could not delete the failed candidate before restoring the previous install")
+                else
+                    try
+                        operations.Move previousDir absoluteFinal
+                    with ex ->
+                        errors.Add(sprintf "restore previous install: %s" ex.Message)
+
+        let restoreColdStart (errors: ResizeArray<string>) =
+            if operations.Exists absoluteFinal then
+                try
+                    operations.Delete absoluteFinal
+                with ex ->
+                    errors.Add(sprintf "delete failed candidate: %s" ex.Message)
+
+        let performInstall () =
+            try
+                operations.Create parent
+                operations.Create installDir
+
+                match extractionOutcome runner archive installDir with
+                | Error failure -> Error failure
+                | Ok() ->
+                    if hadPrevious then
+                        match moveOrFail absoluteFinal previousDir with
+                        | Error failure -> Error failure
+                        | Ok() ->
+                            match moveOrFail installDir absoluteFinal with
+                            | Error failure -> Error failure
+                            | Ok() -> Ok absoluteFinal
+                    else
+                        match moveOrFail installDir absoluteFinal with
+                        | Error failure -> Error failure
+                        | Ok() -> Ok absoluteFinal
+            with ex ->
+                Error(ExtractionFailure(archive, ex.Message))
+
+        let installOutcome = performInstall ()
+
+        let reportInstallFailure (installFailure: DevHostFailure) : Result<string, DevHostFailure> =
+            if operations.Exists previousDir then
+                if operations.Exists absoluteFinal then
+                    let errors = ResizeArray<string> ()
+                    restorePrevious errors
+
+                    if operations.Exists previousDir then
+                        disposePrevious ()
+
+                    let label = sprintf "install failed: %s" (renderFailure installFailure)
+
+                    if errors.Count > 0 then
+                        Error(
+                            ExtractionFailure(
+                                archive,
+                                label + "; rollback failed: " + String.concat "; " errors
+                            )
+                        )
+                    else
+                        Error(ExtractionFailure(archive, label))
+                else
+                    disposePrevious ()
+                    Error(ExtractionFailure(archive, sprintf "install failed: %s" (renderFailure installFailure)))
+            else
+                Error installFailure
+
+        try
+            match installOutcome with
+            | Ok _ ->
+                match verifyInstalled absoluteFinal with
+                | Ok() -> Ok absoluteFinal
+                | Error verificationFailure ->
+                    let errors = ResizeArray<string> ()
+
+                    if hadPrevious then
+                        restorePrevious errors
+                    else
+                        restoreColdStart errors
+
+                    if operations.Exists previousDir then
+                        disposePrevious ()
+
+                    let label = sprintf "verification failed: %s" (renderFailure verificationFailure)
+
+                    if errors.Count > 0 then
+                        Error(ExtractionFailure(archive, label + "; rollback failed: " + String.concat "; " errors))
+                    else
+                        Error(ExtractionFailure(archive, label))
+            | Error installFailure ->
+                reportInstallFailure installFailure
+        finally
+            // The install-temp is only consumed when the new install is
+            // committed; until then it must be reclaimed so we do not leak
+            // directories. The previous-temp is consumed by the rollback path
+            // above, so we only dispose it if it survives.
+            if operations.Exists installDir then
+                disposeInstallation ()
+
+            if operations.Exists previousDir then
+                disposePrevious ()
+
+let extractAtomic (runner: IProcessRunner) (archive: string) (finalDir: string) : Result<string, DevHostFailure> =
+    extractAtomicWith realDirectoryOperations runner archive finalDir (fun _ -> Ok())
+
+let safeExtractVerified
+    (operations: DirectoryOperations)
     (runner: IProcessRunner)
     (archive: string)
     (finalDir: string)
+    (verifyInstalled: string -> Result<unit, DevHostFailure>)
     : Result<string, DevHostFailure> =
-    let kind = classifyArchive archive
-    let listingResult =
-        match kind with
-        | TarXz -> listTarball runner archive
+    let listingOutcome =
+        match classifyArchive archive with
+        | TarXz
         | TarGz -> listTarball runner archive
         | Zip -> listZip runner archive
         | RawBinary -> Ok { Members = [] }
-    match listingResult with
-    | Error e -> Error e
+
+    match listingOutcome with
+    | Error failure -> Error failure
     | Ok listing ->
-        match rejectIfTraversal finalDir listing with
-        | Error e -> Error e
-        | Ok () ->
-            extractAtomic runner archive finalDir
+        rejectIfTraversal finalDir listing
+        |> Result.bind (fun () -> extractAtomicWith operations runner archive finalDir verifyInstalled)
+
+let safeExtract (runner: IProcessRunner) (archive: string) (finalDir: string) : Result<string, DevHostFailure> =
+    safeExtractVerified realDirectoryOperations runner archive finalDir (fun _ -> Ok())

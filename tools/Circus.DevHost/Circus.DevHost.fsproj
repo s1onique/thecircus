@@ -5,7 +5,8 @@
     <AssemblyName>circus-dev</AssemblyName>
     <RootNamespace>Circus.DevHost</RootNamespace>
     <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>true</SelfContained>
+    <SelfContained>false</SelfContained>
+    <PublishSelfContained>true</PublishSelfContained>
     <PublishTrimmed>false</PublishTrimmed>
     <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
     <InvariantGlobalization>false</InvariantGlobalization>
@@ -27,10 +28,10 @@
     <Compile Include="Repository.fs" />
     <Compile Include="ToolchainManifest.fs" />
     <Compile Include="ProcessRunner.fs" />
-    <Compile Include="Downloads.fs" />
     <Compile Include="Integrity.fs" />
-    <Compile Include="Archives.fs" />
+    <Compile Include="Downloads.fs" />
     <Compile Include="Adapters.fs" />
+    <Compile Include="Archives.fs" />
     <Compile Include="DotNetInstaller.fs" />
     <Compile Include="NodeInstaller.fs" />
     <Compile Include="FrontendInstaller.fs" />

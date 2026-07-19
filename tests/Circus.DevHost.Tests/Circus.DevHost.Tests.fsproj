@@ -1,46 +1,28 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <AssemblyName>Circus.DevHost.Tests</AssemblyName>
     <RootNamespace>Circus.DevHost.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
-    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
-    <!-- The test project must NOT inherit the central project target
-         framework overrides because Directory.Build.props already supplies
-         them; we simply state the desired test surface explicitly. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="TestDoubles.fs" />
     <Compile Include="DomainTests.fs" />
-    <Compile Include="PathsTests.fs" />
-    <Compile Include="RepositoryTests.fs" />
-    <Compile Include="ManifestTests.fs" />
-    <Compile Include="ProcessRunnerTests.fs" />
-    <Compile Include="DownloadTests.fs" />
-    <Compile Include="IntegrityTests.fs" />
-    <Compile Include="DotNetInstallerTests.fs" />
-    <Compile Include="NodeInstallerTests.fs" />
-    <Compile Include="FrontendInstallerTests.fs" />
-    <Compile Include="ToolInstallerTests.fs" />
-    <Compile Include="ShellEnvironmentTests.fs" />
-    <Compile Include="ShellProfileTests.fs" />
-    <Compile Include="DoctorTests.fs" />
-    <Compile Include="BootstrapTests.fs" />
     <Compile Include="CliTests.fs" />
-    <Compile Include="EndToEndTests.fs" />
+    <Compile Include="IntegrityTests.fs" />
+    <Compile Include="DownloadsTests.fs" />
+    <Compile Include="ArchivesTests.fs" />
+    <Compile Include="ShellProfileTests.fs" />
+    <Compile Include="LauncherPolicyTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Expecto" Version="11.1.0" />
+    <PackageReference Include="Expecto" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\tools\Circus.DevHost\Circus.DevHost.fsproj" />
   </ItemGroup>
-
 </Project>

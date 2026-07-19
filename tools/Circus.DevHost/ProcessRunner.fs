@@ -6,185 +6,157 @@ open System.IO
 
 open Domain
 
-/// Full specification of a single subprocess invocation.
-type ProcessSpec = {
-    FileName: string
-    Arguments: string list
-    WorkingDirectory: string
-    Environment: Map<string, string>
-    Timeout: TimeSpan
-    StandardInput: string option
-    RedactedArguments: string list option
-}
+type ProcessSpec =
+    { FileName: string
+      Arguments: string list
+      WorkingDirectory: string
+      Environment: Map<string, string>
+      Timeout: TimeSpan
+      StandardInput: string option
+      RedactedArguments: string list option }
 
-type ProcessResult = {
-    ExitCode: int
-    StandardOutput: string
-    StandardError: string
-    Duration: TimeSpan
-}
+type ProcessResult =
+    { ExitCode: int
+      StandardOutput: string
+      StandardError: string
+      Duration: TimeSpan }
 
-/// Internal helper that captures a string into a `StringWriter`-like
-/// buffer via async callbacks. The .NET `Process.OutputDataReceived`
-/// interface uses `DataReceivedEventArgs`, but we redirect the streams
-/// ourselves so we can guarantee ordering.
-type private BufferRedirector(standardOut: string ref, standardErr: string ref) =
-    let writeBuf (r: string ref) (s: string) =
-        if not (isNull s) then
-            r := (!r) + s + System.Environment.NewLine
-
-    member _.OnStdOut(line: string) = writeBuf standardOut line
-    member _.OnStdErr(line: string) = writeBuf standardErr line
-
-/// The adapter interface used by every installer and doctor. Tests provide
-/// a fake implementation that returns predetermined results without
-/// touching the filesystem.
 type IProcessRunner =
-    abstract Run : ProcessSpec -> Async<Result<ProcessResult, DevHostFailure>>
+    abstract Run: ProcessSpec -> Async<Result<ProcessResult, DevHostFailure>>
 
-/// Default adapter: starts a real `Process` using `ArgumentList` and
-/// captures stdout/stderr without invoking a shell.
+/// Starts a process directly, allowing the operating system to resolve bare
+/// executable names through PATH. Output streams are drained concurrently to
+/// avoid pipe-buffer deadlocks.
 type RealProcessRunner() =
-
     interface IProcessRunner with
-
-        member _.Run (spec: ProcessSpec) =
-
+        member _.Run(spec: ProcessSpec) =
             async {
-                if not (File.Exists spec.FileName) then
-                    return Error(ProcessStartFailure(spec.FileName, "executable not found"))
-                else
-                    let stdout = ref ""
-                    let stderr = ref ""
-                    let psi = ProcessStartInfo()
-                    psi.FileName <- spec.FileName
-                    psi.UseShellExecute <- false
-                    psi.RedirectStandardOutput <- true
-                    psi.RedirectStandardError <- true
-                    psi.RedirectStandardInput <- spec.StandardInput.IsSome
-                    psi.WorkingDirectory <- spec.WorkingDirectory
-                    for arg in spec.Arguments do
-                        psi.ArgumentList.Add arg
-                    for kv in spec.Environment do
-                        psi.Environment.[kv.Key] <- kv.Value
-                    use proc = new Process()
-                    proc.StartInfo <- psi
-                    let exitEvent = new System.Threading.ManualResetEventSlim(false)
-                    let errorBuf = System.Text.StringBuilder()
-                    do
-                        proc.OutputDataReceived.Add(fun e ->
-                            match e.Data with
-                            | null -> ()
-                            | s -> stdout := (!stdout) + s + System.Environment.NewLine)
-                        proc.ErrorDataReceived.Add(fun e ->
-                            match e.Data with
-                            | null -> ()
-                            | s ->
-                                stderr := (!stderr) + s + System.Environment.NewLine
-                                errorBuf.Append(s) |> ignore)
-                        proc.Exited.Add(fun _ -> exitEvent.Set())
+                try
+                    let startInfo = ProcessStartInfo()
+                    startInfo.FileName <- spec.FileName
+                    startInfo.UseShellExecute <- false
+                    startInfo.RedirectStandardOutput <- true
+                    startInfo.RedirectStandardError <- true
+                    startInfo.RedirectStandardInput <- spec.StandardInput.IsSome
+                    startInfo.WorkingDirectory <- spec.WorkingDirectory
 
-                    let started = ref false
-                    let mutable startedOk = false
-                    try
-                        startedOk <- proc.Start()
-                        started := true
-                    with ex ->
-                        return Error(ProcessStartFailure(spec.FileName, ex.Message))
+                    for argument in spec.Arguments do
+                        startInfo.ArgumentList.Add argument
 
-                    if not startedOk then
+                    for pair in spec.Environment do
+                        startInfo.Environment.[pair.Key] <- pair.Value
+
+                    use child = new Process()
+                    child.StartInfo <- startInfo
+                    let stopwatch = Stopwatch.StartNew()
+
+                    if not (child.Start()) then
                         return Error(ProcessStartFailure(spec.FileName, "Process.Start returned false"))
-
-                    proc.BeginOutputReadLine()
-                    proc.BeginErrorReadLine()
-
-                    if spec.StandardInput.IsSome then
-                        proc.StandardInput.Write(spec.StandardInput.Value)
-                        proc.StandardInput.Flush()
-                        proc.StandardInput.Close()
-
-                    let timedOut = not (exitEvent.Wait(spec.Timeout))
-                    if timedOut then
-                        try proc.Kill(true) with _ -> ()
-                        try proc.WaitForExit(5000) with _ -> ()
-                        return Error(ProcessExitFailure(spec.FileName, -1, "timeout"))
                     else
-                        try proc.WaitForExit() with _ -> ()
-                        let rc =
-                            try proc.ExitCode
-                            with _ -> -1
+                        let stdoutTask = child.StandardOutput.ReadToEndAsync()
+                        let stderrTask = child.StandardError.ReadToEndAsync()
 
-                        let result = {
-                            ExitCode = rc
-                            StandardOutput = (!stdout).TrimEnd()
-                            StandardError = (!stderr).TrimEnd()
-                            Duration = TimeSpan.Zero
-                        }
-                        if rc <> 0 then
-                            return Error(ProcessExitFailure(spec.FileName, rc, result.StandardError))
+                        match spec.StandardInput with
+                        | Some input ->
+                            child.StandardInput.Write input
+                            child.StandardInput.Flush()
+                            child.StandardInput.Close()
+                        | None -> ()
+
+                        let timeoutMilliseconds =
+                            if spec.Timeout = System.Threading.Timeout.InfiniteTimeSpan then
+                                -1
+                            else
+                                spec.Timeout.TotalMilliseconds |> max 0.0 |> min (float Int32.MaxValue) |> int
+
+                        if not (child.WaitForExit timeoutMilliseconds) then
+                            try
+                                child.Kill true
+                            with _ ->
+                                ()
+
+                            try
+                                child.WaitForExit()
+                            with _ ->
+                                ()
+
+                            return Error(ProcessExitFailure(spec.FileName, -1, "timeout"))
                         else
-                            return Ok result
+                            let standardOutput = stdoutTask.GetAwaiter().GetResult().TrimEnd()
+                            let standardError = stderrTask.GetAwaiter().GetResult().TrimEnd()
+                            stopwatch.Stop()
+
+                            let result =
+                                { ExitCode = child.ExitCode
+                                  StandardOutput = standardOutput
+                                  StandardError = standardError
+                                  Duration = stopwatch.Elapsed }
+
+                            if result.ExitCode = 0 then
+                                return Ok result
+                            else
+                                return Error(ProcessExitFailure(spec.FileName, result.ExitCode, result.StandardError))
+                with ex ->
+                    return Error(ProcessStartFailure(spec.FileName, ex.Message))
             }
 
-/// Run a process synchronously inside a task. Used by installer flows.
 let runSync (runner: IProcessRunner) (spec: ProcessSpec) : Result<ProcessResult, DevHostFailure> =
-    Async.RunSynchronously (runner.Run spec)
+    Async.RunSynchronously(runner.Run spec)
 
-/// Construct a default `ProcessSpec` builder that has the typical defaults
-/// we want for every invocation (CWD = current, no stdin, no extra env).
-type SpecBuilder(filename: string) =
-    let mutable cwd = Directory.GetCurrentDirectory()
-    let mutable args : string list = []
-    let mutable env : Map<string, string> = Map.empty
-    let mutable timeout = TimeSpan.FromMinutes(30.0)
-    let mutable stdin : string option = None
+type SpecBuilder(filename: string) as this =
+    let mutable workingDirectory = Directory.GetCurrentDirectory()
+    let mutable arguments: string list = []
+    let mutable environment: Map<string, string> = Map.empty
+    let mutable timeout = TimeSpan.FromMinutes 30.0
+    let mutable standardInput: string option = None
 
-    member _.WithArguments (a: string list) =
-        args <- a
-        SpecBuilder filename
+    member _.WithArguments(values: string list) =
+        arguments <- values
+        this
 
-    member _.WithArgument (a: string) =
-        args <- args @ [ a ]
-        SpecBuilder filename
+    member _.WithArgument(value: string) =
+        arguments <- arguments @ [ value ]
+        this
 
-    member _.WithWorkingDirectory (d: string) =
-        cwd <- d
-        SpecBuilder filename
+    member _.WithWorkingDirectory(value: string) =
+        workingDirectory <- value
+        this
 
-    member _.WithEnvironment (k: string, v: string) =
-        env <- Map.add k v env
-        SpecBuilder filename
+    member _.WithEnvironment(key: string, value: string) =
+        environment <- Map.add key value environment
+        this
 
-    member _.WithTimeout (t: TimeSpan) =
-        timeout <- t
-        SpecBuilder filename
+    member _.WithTimeout(value: TimeSpan) =
+        timeout <- value
+        this
 
-    member _.WithStandardInput (s: string) =
-        stdin <- Some s
-        SpecBuilder filename
+    member _.WithStandardInput(value: string) =
+        standardInput <- Some value
+        this
 
-    member _.Build () : ProcessSpec =
-        {
-            FileName = filename
-            Arguments = args
-            WorkingDirectory = cwd
-            Environment = env
-            Timeout = timeout
-            StandardInput = stdin
-            RedactedArguments = None
-        }
+    member _.Build() : ProcessSpec =
+        { FileName = filename
+          Arguments = arguments
+          WorkingDirectory = workingDirectory
+          Environment = environment
+          Timeout = timeout
+          StandardInput = standardInput
+          RedactedArguments = None }
 
 let spec (filename: string) : SpecBuilder = SpecBuilder filename
 
-/// Direct constructor for a `ProcessSpec` record. Used by every installer
-/// and check that needs to bypass the SpecBuilder chain syntax.
-let mkSpec (fileName: string) (args: string list) (cwd: string) (env: Map<string, string>) (timeout: TimeSpan) (stdin: string option) : ProcessSpec =
-    {
-        FileName = fileName
-        Arguments = args
-        WorkingDirectory = cwd
-        Environment = env
-        Timeout = timeout
-        StandardInput = stdin
-        RedactedArguments = None
-    }
+let mkSpec
+    (fileName: string)
+    (arguments: string list)
+    (workingDirectory: string)
+    (environment: Map<string, string>)
+    (timeout: TimeSpan)
+    (standardInput: string option)
+    : ProcessSpec =
+    { FileName = fileName
+      Arguments = arguments
+      WorkingDirectory = workingDirectory
+      Environment = environment
+      Timeout = timeout
+      StandardInput = standardInput
+      RedactedArguments = None }

@@ -5,40 +5,58 @@ open System.IO
 
 open Domain
 open Circus.DevHost.Adapters
+open Circus.DevHost.Paths
 open Circus.DevHost.ProcessRunner
 
-/// Run a docker command silently and report its `Ok`/`Error`.
-let private runDocker
+let private pathValue () =
+    Environment.GetEnvironmentVariable "PATH"
+    |> fun value -> if String.IsNullOrEmpty value then None else Some value
+
+let private dockerFallbacks = [ "/usr/bin/docker"; "/usr/local/bin/docker" ]
+
+let private dockerExecutable () =
+    locateInPath File.Exists (pathValue ()) dockerFallbacks "docker"
+    |> Option.defaultValue "docker"
+
+let private runExecutable
     (runner: IProcessRunner)
-    (args: string list)
+    (executable: string)
+    (arguments: string list)
     (timeout: TimeSpan)
     : Result<string, DevHostFailure> =
-    let dockerPath = "docker"
-    let spec = mkSpec dockerPath args (Directory.GetCurrentDirectory()) Map.empty timeout None
-    match runSync runner spec with
-    | Error e -> Error e
-    | Ok r ->
-        if r.ExitCode = 0 then Ok r.StandardOutput
-        else Error(ProcessExitFailure(dockerPath, r.ExitCode, r.StandardError))
+    mkSpec executable arguments (Directory.GetCurrentDirectory()) Map.empty timeout None
+    |> runSync runner
+    |> Result.map (fun result -> result.StandardOutput)
 
-/// Verify the docker binary exists in PATH.
+let private runDocker
+    (runner: IProcessRunner)
+    (arguments: string list)
+    (timeout: TimeSpan)
+    : Result<string, DevHostFailure> =
+    runExecutable runner (dockerExecutable ()) arguments timeout
+
 let checkDockerBinary (fs: IFilesystem) : Result<string, DevHostFailure> =
-    if not (fs.IsFile "/usr/bin/docker") then Error(MissingTool Docker)
-    else Ok "/usr/bin/docker"
+    match locateInPath fs.IsFile (pathValue ()) dockerFallbacks "docker" with
+    | Some path -> Ok path
+    | None -> Error(MissingTool Docker)
 
-/// Verify docker daemon is *directly* accessible.
 let checkDirectDaemonAccess (runner: IProcessRunner) : Result<string, DevHostFailure> =
-    match runDocker runner [ "info" ] (TimeSpan.FromSeconds(30.0)) with
-    | Ok out -> Ok out
-    | Error _ -> Error(DockerPermissionDenied)
+    match runDocker runner [ "info" ] (TimeSpan.FromSeconds 30.0) with
+    | Ok output -> Ok output
+    | Error _ -> Error DockerPermissionDenied
 
-/// Verify docker buildx is installed and usable.
 let checkBuildx (runner: IProcessRunner) : Result<string, DevHostFailure> =
-    runDocker runner [ "buildx"; "version" ] (TimeSpan.FromSeconds(30.0))
+    runDocker runner [ "buildx"; "version" ] (TimeSpan.FromSeconds 30.0)
 
-/// Verify docker compose is installed and usable.
 let checkCompose (runner: IProcessRunner) : Result<string, DevHostFailure> =
-    match runDocker runner [ "compose"; "version" ] (TimeSpan.FromSeconds(30.0)) with
-    | Ok out -> Ok out
+    match runDocker runner [ "compose"; "version" ] (TimeSpan.FromSeconds 30.0) with
+    | Ok output -> Ok output
     | Error _ ->
-        runDocker runner [ "docker-compose"; "version" ] (TimeSpan.FromSeconds(30.0))
+        let standaloneFallbacks =
+            [ "/usr/bin/docker-compose"; "/usr/local/bin/docker-compose" ]
+
+        let executable =
+            locateInPath File.Exists (pathValue ()) standaloneFallbacks "docker-compose"
+            |> Option.defaultValue "docker-compose"
+
+        runExecutable runner executable [ "version" ] (TimeSpan.FromSeconds 30.0)

@@ -16,7 +16,7 @@
     "pyyaml": "6.0.1"
   },
   "bootstrap_sdk_image": {
-    "reference": "mcr.microsoft.com/dotnet/sdk:10.0.202-bookworm-slim",
-    "digest": "sha256:f3d6c0d9d7d62a1a16b3b1b15d3e5a2e1c2c8d77a7c8d3d2e9b7e2f7b1f0e3a4"
+    "reference": "mcr.microsoft.com/dotnet/sdk:10.0.202-noble",
+    "digest": "sha256:caa1a2d363812eb21df9c56f01fa59d5d81bbb03103cb6a48f32dd7e80855616"
   }
 }

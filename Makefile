@@ -8,6 +8,7 @@ include .factory/generated/factory.mk
 # =============================================================================
 DOTNET  ?= dotnet
 NPM     ?= npm
+DEV_BOOTSTRAP_ARGS ?=
 CONTAINER_CLI ?= docker
 CONTAINER_PLATFORM ?= linux/amd64
 SLN      := Circus.sln
@@ -97,6 +98,10 @@ test-postgres: build-backend
 .PHONY: test-api
 test-api: build-backend
 	$(DOTNET) run --project tests/Circus.Api.Tests -c Release --no-build --no-restore
+
+.PHONY: test-devhost
+test-devhost: build-backend
+	$(DOTNET) run --project tests/Circus.DevHost.Tests -c Release --no-build --no-restore
 
 .PHONY: test-backend
 test-backend: build-backend
@@ -216,10 +221,10 @@ gate: factorize format-check test-backend test-web smoke
 # Linux development environment (ACT-CIRCUS-LINUX-DEV-HOST-BOOTSTRAP01)
 # =============================================================================
 
-# Bootstrap the Linux development environment
+# Bootstrap the Linux development environment through the typed F# authority.
 .PHONY: dev-bootstrap-linux
 dev-bootstrap-linux:
-	./scripts/circus-dev bootstrap
+	./scripts/circus-dev bootstrap $(DEV_BOOTSTRAP_ARGS)
 
 # Check prerequisites only (no installation)
 .PHONY: dev-bootstrap-check-linux
@@ -228,13 +233,7 @@ dev-bootstrap-check-linux:
 
 .PHONY: dev-activate-help
 dev-activate-help:
-	@echo "To activate the development environment:"
-	@echo '  Run: eval "$$(./scripts/circus-dev env --shell auto)"'
-	@echo ""
-	@echo "Or add this line to your ~/.bashrc or ~/.zshrc:"
-	@echo '  eval "$$(./scripts/circus-dev env --shell auto)"'
-	@echo ""
-	@echo "The stable activation block is written by circus-dev install-shell-hook."
+	@echo 'Run: eval "$$(./scripts/circus-dev env)"'
 
 .PHONY: dev-doctor
 dev-doctor:
@@ -254,6 +253,7 @@ dev-test-linux:
 	$(MAKE) test-web
 	$(MAKE) test-postgres
 	$(MAKE) test-api
+	$(MAKE) test-devhost
 
 .PHONY: dev-container-smoke
 dev-container-smoke:

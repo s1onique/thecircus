@@ -10,26 +10,28 @@ open Circus.DevHost.Archives
 open Circus.DevHost.Downloads
 open Circus.DevHost.ProcessRunner
 
-/// Parse the `actionlint -version` output.
+/// Parse actionlint's version from either `1.7.12`, `v1.7.12`, or a
+/// descriptive line such as `actionlint 1.7.12`.
 let normalizeActionlintOutput (text: string) : string =
-    let first = text.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries) |> Array.tryHead
-    match first with
-    | Some s -> ToolVersion.normalize (s.Trim())
-    | None -> ""
+    let version =
+        System.Text.RegularExpressions.Regex.Match(text, "(?:^|[^0-9])v?([0-9]+\\.[0-9]+\\.[0-9]+)(?:$|[^0-9])")
 
-/// Parse the `shellcheck --version` output.
+    if version.Success then version.Groups.[1].Value else ""
+
+/// Parse the explicit `version:` field from ShellCheck's multi-line output.
 let parseShellCheckVersion (text: string) : string =
-    for line in text.Split([| '\n'; '\r' |]) do
-        let parts = line.Split([| ": " |], 2, StringSplitOptions.None)
-        if parts.Length = 2 && parts.[0].Trim() = "version" then
-            return parts.[1].Trim()
-    return ""
+    text.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+    |> Array.tryPick (fun line ->
+        let separator = line.IndexOf ':'
+
+        if separator > 0 && line.Substring(0, separator).Trim() = "version" then
+            Some(line.Substring(separator + 1).Trim())
+        else
+            None)
+    |> Option.defaultValue ""
 
 /// One-target install plan entry.
-type ToolPlanEntry = {
-    Name: string
-    Action: string
-}
+type ToolPlanEntry = { Name: string; Action: string }
 
 /// Verify the actionlint binary reports the expected version.
 let verifyActionlint
@@ -37,15 +39,21 @@ let verifyActionlint
     (binPath: string)
     (expected: ToolVersion)
     : Result<string, DevHostFailure> =
-    if not (File.Exists binPath) then Error(MissingTool Actionlint)
+    if not (File.Exists binPath) then
+        Error(MissingTool Actionlint)
     else
-        let spec = mkSpec binPath [ "-version" ] (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromSeconds(15.0)) None
+        let spec =
+            mkSpec binPath [ "-version" ] (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromSeconds(15.0)) None
+
         match runSync runner spec with
         | Error e -> Error e
         | Ok r ->
             let actual = normalizeActionlintOutput r.StandardOutput
-            if actual = ToolVersion.value expected then Ok actual
-            else Error(WrongToolVersion(Actionlint, ToolVersion.value expected, actual))
+
+            if actual = ToolVersion.value expected then
+                Ok actual
+            else
+                Error(WrongToolVersion(Actionlint, ToolVersion.value expected, actual))
 
 /// Verify the ShellCheck binary reports the expected version.
 let verifyShellCheck
@@ -53,15 +61,21 @@ let verifyShellCheck
     (binPath: string)
     (expected: ToolVersion)
     : Result<string, DevHostFailure> =
-    if not (File.Exists binPath) then Error(MissingTool ShellCheck)
+    if not (File.Exists binPath) then
+        Error(MissingTool ShellCheck)
     else
-        let spec = mkSpec binPath [ "--version" ] (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromSeconds(15.0)) None
+        let spec =
+            mkSpec binPath [ "--version" ] (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromSeconds(15.0)) None
+
         match runSync runner spec with
         | Error e -> Error e
         | Ok r ->
             let actual = parseShellCheckVersion r.StandardOutput
-            if actual = ToolVersion.value expected then Ok actual
-            else Error(WrongToolVersion(ShellCheck, ToolVersion.value expected, actual))
+
+            if actual = ToolVersion.value expected then
+                Ok actual
+            else
+                Error(WrongToolVersion(ShellCheck, ToolVersion.value expected, actual))
 
 /// Generic single-binary installer: download, verify, extract, copy.
 let installSingle
@@ -81,43 +95,61 @@ let installSingle
     async {
         match verify () with
         | Ok actual -> return Ok actual
-        | Error _ -> ()
-        let archiveName = Path.GetFileName(Uri url.OriginalString)
-        let tempPath = Path.Combine(Path.GetTempDirectory(), archiveName)
-        let! dlOutcome = http.Download(url, tempPath, sha256, cancellation)
-        match dlOutcome with
-        | Error e ->
-            (try if File.Exists tempPath then File.Delete tempPath with _ -> ())
-            return Error e
-        | Ok _ ->
-            match cachePlace cacheDir archiveName sha256 tempPath with
-            | Error e ->
-                (try if File.Exists tempPath then File.Delete tempPath with _ -> ())
-                return Error e
-            | Ok cached ->
-                let extractRoot = Path.Combine(tmpDir, toolKind.ToString().ToLowerInvariant())
-                if not (Directory.Exists extractRoot) then
+        | Error _ ->
+            let archiveName = Path.GetFileName((Uri url).AbsolutePath)
+            let tempPath = Path.Combine(Path.GetTempPath(), archiveName)
+            let integrity = Sha256 sha256
+            let! downloadOutcome = http.Download(url, tempPath, integrity, cancellation)
+
+            match downloadOutcome with
+            | Error failure ->
+                try
+                    if File.Exists tempPath then
+                        File.Delete tempPath
+                with _ ->
+                    ()
+
+                return Error failure
+            | Ok _ ->
+                match cachePlace cacheDir archiveName integrity tempPath with
+                | Error failure ->
+                    try
+                        if File.Exists tempPath then
+                            File.Delete tempPath
+                    with _ ->
+                        ()
+
+                    return Error failure
+                | Ok cached ->
+                    let extractRoot = Path.Combine(tmpDir, toolKind.ToString().ToLowerInvariant())
                     Directory.CreateDirectory extractRoot |> ignore
-                let extractResult = safeExtract runner cached extractRoot
-                (try if File.Exists tempPath then File.Delete tempPath with _ -> ())
-                match extractResult with
-                | Error e -> return Error e
-                | Ok _ ->
-                    let candidates =
-                        Directory.GetFiles(extractRoot, binaryName, SearchOption.AllDirectories)
-                    if Array.isEmpty candidates then
-                        return Error(LayoutWrong(extractRoot, sprintf "missing %s" binaryName))
-                    let source = candidates.[0]
-                    fs.CreateDirectory binDir
-                    let dest = Path.Combine(binDir, binaryName)
-                    if File.Exists dest then
-                        try File.Delete dest with _ -> ()
-                    File.Copy(source, dest)
-                    File.SetUnixFileMode(dest,
-                        UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute
-                        ||| UnixFileMode.GroupRead ||| UnixFileMode.GroupExecute
-                        ||| UnixFileMode.OtherRead ||| UnixFileMode.OtherExecute)
-                    verify ()
+                    let extractResult = safeExtract runner cached extractRoot
+
+                    try
+                        if File.Exists tempPath then
+                            File.Delete tempPath
+                    with _ ->
+                        ()
+
+                    match extractResult with
+                    | Error failure -> return Error failure
+                    | Ok _ ->
+                        let candidates =
+                            Directory.GetFiles(extractRoot, binaryName, SearchOption.AllDirectories)
+
+                        if Array.isEmpty candidates then
+                            return Error(LayoutWrong(extractRoot, sprintf "missing %s" binaryName))
+                        else
+                            let source = candidates.[0]
+                            fs.CreateDirectory binDir
+                            let destination = Path.Combine(binDir, binaryName)
+
+                            if File.Exists destination then
+                                File.Delete destination
+
+                            File.Copy(source, destination)
+                            fs.MakeExecutable destination
+                            return verify ()
     }
 
 /// Compose the actionlint installer.
@@ -134,8 +166,16 @@ let installActionlint
     (cancellation: CancellationToken)
     : Async<Result<string, DevHostFailure>> =
     installSingle
-        http runner fs cacheDir tmpDir binDir url sha256
-        "actionlint" Actionlint
+        http
+        runner
+        fs
+        cacheDir
+        tmpDir
+        binDir
+        url
+        sha256
+        "actionlint"
+        Actionlint
         (fun () -> verifyActionlint runner (Path.Combine(binDir, "actionlint")) expected)
         cancellation
 
@@ -153,11 +193,20 @@ let installShellCheck
     (cancellation: CancellationToken)
     : Async<Result<string, DevHostFailure>> =
     installSingle
-        http runner fs cacheDir tmpDir binDir url sha256
-        "shellcheck" ShellCheck
+        http
+        runner
+        fs
+        cacheDir
+        tmpDir
+        binDir
+        url
+        sha256
+        "shellcheck"
+        ShellCheck
         (fun () -> verifyShellCheck runner (Path.Combine(binDir, "shellcheck")) expected)
         cancellation
 
 /// Compose the plan entry for an individual tool used by --dry-run.
 let planToolInstall (binaryName: string) (version: ToolVersion) : ToolPlanEntry =
-    { Name = binaryName; Action = sprintf "install %s v%s" binaryName (ToolVersion.value version) }
+    { Name = binaryName
+      Action = sprintf "install %s v%s" binaryName (ToolVersion.value version) }

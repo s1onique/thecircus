@@ -5,6 +5,7 @@ open System.IO
 
 open Domain
 open Circus.DevHost.Adapters
+open Circus.DevHost.Paths
 open Circus.DevHost.ProcessRunner
 
 /// Verify the policy venv has the expected PyYAML version.
@@ -28,21 +29,26 @@ let verifyPolicyVenv
             else Error(WrongToolVersion(PyYaml, ToolVersion.value expectedPyYaml, actual))
 
 /// Detect the host `python3.12`.
-let detectSystemPython (): string =
-    let direct = "/usr/bin/python3.12"
-    if File.Exists direct then direct
-    else "python3.12"
+let detectSystemPython () : string option =
+    let path = Environment.GetEnvironmentVariable "PATH"
+    let pathValue = if String.IsNullOrEmpty path then None else Some path
+
+    locateInPath
+        File.Exists
+        pathValue
+        [ "/usr/bin/python3.12"; "/usr/local/bin/python3.12" ]
+        "python3.12"
 
 /// Create the policy venv using the system python and install pinned packages.
 let createPolicyVenv
     (runner: IProcessRunner)
     (venvDir: string)
-    (pipVersion: ToolVersion)
+    (pipVersion: string)
     (pyYamlVersion: ToolVersion)
     : Result<string, DevHostFailure> =
-    let python = detectSystemPython ()
-    if not (File.Exists python) then Error(MissingTool PolicyPython)
-    else
+    match detectSystemPython () with
+    | None -> Error(MissingTool PolicyPython)
+    | Some python ->
         let venvSpec =
             mkSpec python [ "-m"; "venv"; venvDir ] (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromSeconds(60.0)) None
         match runSync runner venvSpec with
@@ -50,7 +56,7 @@ let createPolicyVenv
         | Ok _ ->
             let pip = Path.Combine(venvDir, "bin", "pip")
             let pipSpec =
-                mkSpec pip [ "install"; "--upgrade"; "pip==" + ToolVersion.value pipVersion ]
+                mkSpec pip [ "install"; "--upgrade"; "pip==" + pipVersion ]
                     (Directory.GetCurrentDirectory()) Map.empty (TimeSpan.FromSeconds(90.0)) None
             match runSync runner pipSpec with
             | Error e -> Error e
@@ -67,7 +73,7 @@ let createPolicyVenv
 let reconcilePolicyVenv
     (runner: IProcessRunner)
     (venvDir: string)
-    (pipVersion: ToolVersion)
+    (pipVersion: string)
     (pyYamlVersion: ToolVersion)
     (force: bool)
     : Result<string, DevHostFailure> =

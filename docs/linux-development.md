@@ -13,7 +13,7 @@ This guide covers setting up a Linux development environment for the Circus proj
 This project follows strict supply-chain security practices:
 - **Download before execution**: All archives are downloaded to disk first, then verified
 - **Checksum verification**: All downloads are verified against official checksums (parsed from version-specific checksum files)
-- **Repository authority**: Tool versions are derived from repository files (global.json, Dockerfile.frontend, package.json)
+- **Repository authority**: Tool versions are derived from `global.json`, `Dockerfile.frontend`, `web/elm.json`, and `eng/devhost-toolchain.json`
 - **User-local installation**: Tools are installed under `~/.local/share/circus-dev/` to avoid system-wide side effects
 - **Pinned versions**: All tool versions are explicitly pinned and documented
 
@@ -32,7 +32,7 @@ This project follows strict supply-chain security practices:
 
 ```bash
 cd ~/Projects/thecircus
-./scripts/bootstrap-linux-dev.sh
+make dev-bootstrap-linux
 ```
 
 ### Option 2: Manual Setup
@@ -179,23 +179,25 @@ shellcheck --version
 
 ## Environment Activation
 
-### Source the Activation Script
+### Render or Install the Managed Environment
+
+Activate the environment in the current Bash or Zsh session:
 
 ```bash
-source ~/.local/bin/circus-dev-activate
+eval "$(./scripts/circus-dev env)"
 ```
 
-Or add to your `~/.bashrc` for automatic activation:
+To reconcile the managed block in the detected shell profile:
 
 ```bash
-if [[ -f "$HOME/.local/bin/circus-dev-activate" ]]; then
-    source "$HOME/.local/bin/circus-dev-activate"
-fi
+./scripts/circus-dev install-shell-hook
 ```
+
+Use `--shell bash` or `--shell zsh` when explicit selection is required.
 
 ### PATH Components
 
-The activation script sets:
+The generated environment sets:
 - `~/.local/share/circus-dev/bin`
 - `~/.local/share/circus-dev/node/v22.17.0/bin`
 - `~/.local/share/circus-dev/venvs/policy/bin`
@@ -282,7 +284,7 @@ To ensure Docker access after adding your user to the group:
 2. Log back in
 3. Verify: `docker info` (NOT `sg docker -c 'docker info'`)
 
-**Note:** The development doctor (`./scripts/dev-doctor.sh`) tests direct Docker access, not the `sg docker` workaround. A clean login is required for the doctor to pass.
+**Note:** The development doctor (`make dev-doctor`) tests direct Docker access, not the `sg docker` workaround. A clean login is required for the doctor to pass.
 
 ## Troubleshooting
 
@@ -333,13 +335,15 @@ Docker is either not running or misconfigured
 3. **PATH Integrity**: Ensure activation scripts correctly construct PATH.
 4. **Checksum Verification**: Always verify downloaded archives against official checksums.
 
-## Scripts Reference
+## DevHost Command Reference
 
-| Script | Purpose |
-|--------|---------|
-| `bootstrap-linux-dev.sh` | Automated toolchain setup with checksum verification |
-| `dev-doctor.sh` | Environment verification (fail-closed checks) |
-| `activate-linux-dev.sh` | Environment activation helper |
+| Command | Purpose |
+|---------|---------|
+| `make dev-bootstrap-linux` | Reconcile the user-local development toolchain |
+| `make dev-bootstrap-check-linux` | Validate repository authority files without installation |
+| `make dev-doctor` | Run fail-closed host and toolchain diagnostics |
+| `./scripts/circus-dev env` | Render activation exports for the detected shell |
+| `./scripts/circus-dev install-shell-hook` | Reconcile the managed Bash/Zsh profile block |
 
 ## See Also
 
