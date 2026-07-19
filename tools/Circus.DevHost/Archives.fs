@@ -186,12 +186,7 @@ let extractAtomicWith
                 operations.Move source destination
                 Ok()
             with ex ->
-                Error(
-                    ExtractionFailure(
-                        archive,
-                        sprintf "move '%s' to '%s' failed: %s" source destination ex.Message
-                    )
-                )
+                Error(ExtractionFailure(archive, sprintf "move '%s' to '%s' failed: %s" source destination ex.Message))
 
         /// Inspect the live filesystem and bring `absoluteFinal` back to
         /// the previous install. Returns a recovery report that records
@@ -199,7 +194,7 @@ let extractAtomicWith
         /// recovery copy is still in `previousDir`, and any human-readable
         /// problems.
         let restorePrevious () =
-            let mutable notes = ResizeArray<string> ()
+            let mutable notes = ResizeArray<string>()
             let mutable previousRecovered = false
             let mutable previousPreserved = false
 
@@ -217,6 +212,7 @@ let extractAtomicWith
                 else
                     try
                         operations.Move previousDir absoluteFinal
+
                         if not (operations.Exists previousDir) then
                             previousRecovered <- true
                     with ex ->
@@ -228,13 +224,22 @@ let extractAtomicWith
             (notes, previousRecovered, previousPreserved)
 
         let restoreColdStart () =
-            let mutable notes = ResizeArray<string> ()
+            let mutable notes = ResizeArray<string>()
 
             if operations.Exists absoluteFinal then
                 if not (deleteIfPresent absoluteFinal) then
                     notes.Add("could not delete the failed candidate on cold-start install")
 
             notes
+
+        let recoverFailure () =
+            if hadPrevious then
+                let notes, previousRecovered, previousPreserved = restorePrevious ()
+
+                notes, previousRecovered, previousPreserved
+            else
+                let notes = restoreColdStart ()
+                notes, false, false
 
         let performInstall () =
             try
@@ -270,18 +275,23 @@ let extractAtomicWith
             (previousRecovered: bool)
             (previousPreserved: bool)
             : Result<string, DevHostFailure> =
-            if hadPrevious
-               && not previousRecovered
-               && previousPreserved
-               && operations.Exists absoluteFinal then
+            if
+                hadPrevious
+                && not previousRecovered
+                && previousPreserved
+                && operations.Exists absoluteFinal
+            then
                 Error(
                     ExtractionFailure(
                         archive,
-                        labelFor
-                            (sprintf
-                                 "rollback incomplete; previous installation retained at %s"
-                                 previousDir)
-                            notes
+                        labelFor (sprintf "rollback incomplete; previous installation retained at %s" previousDir) notes
+                    )
+                )
+            elif not hadPrevious && operations.Exists absoluteFinal then
+                Error(
+                    ExtractionFailure(
+                        archive,
+                        labelFor (sprintf "rollback incomplete; failed candidate retained at %s" absoluteFinal) notes
                     )
                 )
             else
@@ -301,22 +311,26 @@ let extractAtomicWith
                     canDeleteInstall <- true
                     Ok absoluteFinal
                 | Error verificationFailure ->
-                    let notes, previousRecovered, previousPreserved =
-                        restorePrevious ()
+                    let notes, previousRecovered, previousPreserved = recoverFailure ()
 
-                    if previousRecovered then canDeletePrevious <- true
+                    if previousRecovered then
+                        canDeletePrevious <- true
+
                     canDeleteInstall <- true
+
                     reportOutcome
                         (sprintf "verification failed: %s" (renderFailure verificationFailure))
                         notes
                         previousRecovered
                         previousPreserved
             | Error installFailure ->
-                let notes, previousRecovered, previousPreserved =
-                    restorePrevious ()
+                let notes, previousRecovered, previousPreserved = recoverFailure ()
 
-                if previousRecovered then canDeletePrevious <- true
+                if previousRecovered then
+                    canDeletePrevious <- true
+
                 canDeleteInstall <- true
+
                 reportOutcome
                     (sprintf "install failed: %s" (renderFailure installFailure))
                     notes

@@ -35,6 +35,7 @@ let private assertOld (finalDirectory: string) =
     Expect.isTrue
         (File.Exists(Path.Combine(finalDirectory, "old.txt")))
         "The previous installation's old.txt must be present after recovery"
+
     Expect.isFalse
         (File.Exists(Path.Combine(finalDirectory, "new.txt")))
         "The failed candidate's new.txt must not be visible after recovery"
@@ -86,10 +87,7 @@ let tests =
                   { realDirectoryOperations with
                       Move =
                           fun source destination ->
-                              if
-                                  not injected
-                                  && Path.GetFullPath(source) = Path.GetFullPath(finalDirectory)
-                              then
+                              if not injected && Path.GetFullPath(source) = Path.GetFullPath(finalDirectory) then
                                   injected <- true
                                   raise (IOException "ordinary pre-effect failure (first move)")
                               else
@@ -161,7 +159,7 @@ let tests =
           }
 
           test "a cold-start install with a failed second move does not leak the candidate" {
-              let temp = new TempDirectory ()
+              let temp = new TempDirectory()
               use cleanup = temp
               let archive = Path.Combine(temp.Path, "fixture.tar.gz")
               let finalDirectory = Path.Combine(temp.Path, "installed")
@@ -174,24 +172,97 @@ let tests =
                   { realDirectoryOperations with
                       Move =
                           fun source destination ->
-                          if
-                              not injected
-                              && source.Contains(".circus-install-", StringComparison.Ordinal)
-                              && Path.GetFullPath(destination) = Path.GetFullPath(finalDirectory)
-                          then
-                              injected <- true
-                              Directory.Move(source, destination)
-                              raise (IOException "injected effect-then-throw")
-                          else
-                              Directory.Move(source, destination) }
+                              if
+                                  not injected
+                                  && source.Contains(".circus-install-", StringComparison.Ordinal)
+                                  && Path.GetFullPath(destination) = Path.GetFullPath(finalDirectory)
+                              then
+                                  injected <- true
+                                  Directory.Move(source, destination)
+                                  raise (IOException "injected effect-then-throw")
+                              else
+                                  Directory.Move(source, destination) }
 
               match safeExtractVerified operations runner archive finalDirectory (fun _ -> Ok()) with
               | Error _ ->
                   Expect.isTrue injected "The move seam should have been exercised"
-                  let installDirs =
-                      Directory.GetDirectories(temp.Path, ".circus-install-*")
+
+                  Expect.isFalse
+                      (Directory.Exists finalDirectory)
+                      "A failed cold-start candidate must not remain at the final path"
+
+                  Expect.isFalse
+                      (File.Exists(Path.Combine(finalDirectory, "new.txt")))
+                      "The failed candidate must not remain observable"
+
+                  let installDirs = Directory.GetDirectories(temp.Path, ".circus-install-*")
+
                   Expect.isEmpty installDirs "A cold-start failure must not leak a .circus-install-* directory"
               | Ok path -> failtestf "A failed cold-start must never return Ok %s" path
+          }
+
+          test "a cold-start verification failure removes the unverified candidate" {
+              let temp = new TempDirectory()
+              use cleanup = temp
+              let archive = Path.Combine(temp.Path, "fixture.tar.gz")
+              let finalDirectory = Path.Combine(temp.Path, "installed")
+              File.WriteAllText(archive, "fixture")
+              let runner = successfulArchiveRunner ()
+
+              match
+                  safeExtractVerified realDirectoryOperations runner archive finalDirectory (fun _ ->
+                      Error(VerificationFailure "injected verification failure"))
+              with
+              | Error _ ->
+                  Expect.isFalse
+                      (Directory.Exists finalDirectory)
+                      "An unverified cold-start candidate must not remain at the final path"
+
+                  Expect.isFalse
+                      (File.Exists(Path.Combine(finalDirectory, "new.txt")))
+                      "The unverified candidate must not remain observable"
+
+                  let installDirs = Directory.GetDirectories(temp.Path, ".circus-install-*")
+
+                  Expect.isEmpty installDirs "A verification failure must not leak a .circus-install-* directory"
+              | Ok path -> failtestf "An unverified cold-start must never return Ok %s" path
+          }
+
+          test "a failed cold-start delete reports the retained candidate path" {
+              let temp = new TempDirectory()
+              use cleanup = temp
+              let archive = Path.Combine(temp.Path, "fixture.tar.gz")
+              let finalDirectory = Path.Combine(temp.Path, "installed")
+              File.WriteAllText(archive, "fixture")
+              let runner = successfulArchiveRunner ()
+              let mutable deleteAttempted = false
+
+              let operations =
+                  { realDirectoryOperations with
+                      Delete =
+                          fun path ->
+                              if Path.GetFullPath(path) = Path.GetFullPath(finalDirectory) then
+                                  deleteAttempted <- true
+                                  raise (IOException "injected cold-start delete failure")
+                              elif Directory.Exists path then
+                                  Directory.Delete(path, true) }
+
+              match
+                  safeExtractVerified operations runner archive finalDirectory (fun _ ->
+                      Error(VerificationFailure "injected verification failure"))
+              with
+              | Error detail ->
+                  Expect.isTrue deleteAttempted "Cold-start recovery must attempt to delete the failed candidate"
+
+                  Expect.stringContains
+                      (string detail)
+                      (sprintf "rollback incomplete; failed candidate retained at %s" (Path.GetFullPath finalDirectory))
+                      "The error detail must report the retained candidate's final path"
+
+                  Expect.isTrue
+                      (File.Exists(Path.Combine(finalDirectory, "new.txt")))
+                      "The candidate remains observable only because its deletion failed"
+              | Ok path -> failtestf "A delete-failed cold-start rollback must never return Ok %s" path
           }
 
           test "a failed delete of the candidate leaves the previous installation reachable" {
@@ -209,37 +280,25 @@ let tests =
                   { realDirectoryOperations with
                       Delete =
                           fun path ->
-                              if
-                                  not failDelete
-                                  && Path.GetFullPath(path) = Path.GetFullPath(finalDirectory)
-                              then
+                              if not failDelete && Path.GetFullPath(path) = Path.GetFullPath(finalDirectory) then
                                   failDelete <- true
                                   raise (IOException "injected delete failure")
-                              else
-                                  if Directory.Exists path then
-                                      Directory.Delete(path, true) }
+                              else if Directory.Exists path then
+                                  Directory.Delete(path, true) }
 
               match
-                  safeExtractVerified
-                      operations
-                      runner
-                      archive
-                      finalDirectory
-                      (fun _ -> Error(VerificationFailure "verification failed"))
+                  safeExtractVerified operations runner archive finalDirectory (fun _ ->
+                      Error(VerificationFailure "verification failed"))
               with
               | Error detail ->
                   Expect.stringContains
-                    (string detail)
-                    "rollback incomplete; previous installation retained at"
-                    "The error detail must announce that the previous installation is retained"
+                      (string detail)
+                      "rollback incomplete; previous installation retained at"
+                      "The error detail must announce that the previous installation is retained"
 
-                  let previousDirs =
-                      Directory.GetDirectories(temp.Path, ".circus-previous-*")
+                  let previousDirs = Directory.GetDirectories(temp.Path, ".circus-previous-*")
 
-                  Expect.hasLength
-                    previousDirs
-                    1
-                    "Incomplete rollback must retain exactly one recovery copy"
+                  Expect.hasLength previousDirs 1 "Incomplete rollback must retain exactly one recovery copy"
 
                   Expect.isTrue
                       (File.Exists(Path.Combine(previousDirs.[0], "old.txt")))
