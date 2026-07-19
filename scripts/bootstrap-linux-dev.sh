@@ -145,8 +145,18 @@ while [[ $# -gt 0 ]]; do
             FORCE=true
             shift
             ;;
+        --check)
+            CHECK_MODE=true
+            shift
+            ;;
         -h|--help)
-            echo "Usage: $SCRIPT_NAME [--dry-run] [--force]"
+            echo "Usage: $SCRIPT_NAME [--dry-run] [--force] [--check]"
+            echo ""
+            echo "Options:"
+            echo "  --dry-run  Show what would be installed without making changes"
+            echo "  --force    Force reinstallation of existing components"
+            echo "  --check    Verify prerequisites only (no installation)"
+            echo "  -h, --help Show this help message"
             exit 0
             ;;
         *)
@@ -789,8 +799,90 @@ verify_source() {
 }
 
 # -----------------------------------------------------------------------------
+# Check Mode
+# -----------------------------------------------------------------------------
+
+run_check_mode() {
+    echo "=== Circus Development Prerequisites Check ==="
+    echo ""
+    
+    local check_failed=0
+    
+    # OS check
+    if [[ -f /etc/os-release ]]; then
+        source /etc/os-release
+        if [[ "$ID" == "ubuntu" ]] || [[ "$ID" == "debian" ]] || [[ "$ID" == "linuxmint" ]]; then
+            echo "OK: OS: $PRETTY_NAME ($ID)"
+        else
+            echo "WARN: OS: $PRETTY_NAME (designed for Ubuntu/Debian/Linux Mint)"
+        fi
+    else
+        echo "ERROR: /etc/os-release not found" >&2
+        check_failed=1
+    fi
+    
+    # Architecture check
+    ARCH=$(uname -m)
+    if [[ "$ARCH" == "x86_64" ]]; then
+        echo "OK: Architecture: $ARCH"
+    else
+        echo "ERROR: Architecture: $ARCH (requires x86_64)" >&2
+        check_failed=1
+    fi
+    
+    # Required commands
+    for cmd in curl sha256sum tar xz git; do
+        if command -v "$cmd" &>/dev/null; then
+            echo "OK: Command '$cmd': available"
+        else
+            echo "ERROR: Command '$cmd': not found" >&2
+            check_failed=1
+        fi
+    done
+    
+    # global.json version
+    local global_json="$REPO_ROOT/global.json"
+    if [[ -f "$global_json" ]]; then
+        local version
+        version=$(grep -oP '"version":\s*"\K[^"]+' "$global_json" 2>/dev/null || true)
+        if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "OK: .NET SDK version from global.json: $version"
+        else
+            echo "ERROR: Invalid .NET SDK version in global.json: '$version'" >&2
+            check_failed=1
+        fi
+    else
+        echo "ERROR: global.json not found" >&2
+        check_failed=1
+    fi
+    
+    # Repository
+    if [[ -d "$REPO_ROOT/.git" ]]; then
+        echo "OK: Repository: $REPO_ROOT (git)"
+    else
+        echo "ERROR: Repository .git not found at $REPO_ROOT" >&2
+        check_failed=1
+    fi
+    
+    echo ""
+    if [[ $check_failed -eq 0 ]]; then
+        echo "RESULT: All prerequisites passed"
+        return 0
+    else
+        echo "RESULT: Prerequisites check failed"
+        return 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Main Execution
 # -----------------------------------------------------------------------------
+
+# Run check mode if requested
+if [[ "${CHECK_MODE:-false}" == "true" ]]; then
+    run_check_mode
+    exit $?
+fi
 
 echo ""
 echo "Starting bootstrap..."

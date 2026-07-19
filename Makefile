@@ -218,7 +218,7 @@ gate: factorize format-check test-backend test-web smoke
 
 .PHONY: dev-bootstrap-linux
 dev-bootstrap-linux:
-	./scripts/bootstrap-linux-dev.sh
+	./scripts/bootstrap-linux-dev.sh --check
 
 .PHONY: dev-activate-help
 dev-activate-help:

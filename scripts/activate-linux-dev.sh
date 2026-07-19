@@ -20,6 +20,7 @@ fi
 # Environment configuration
 # ----------------------------------------------------------------------
 export CIRCUS_TOOL_ROOT="${CIRCUS_TOOL_ROOT:-$HOME/.local/share/circus-dev}"
+export CIRCUS_VENVS="${CIRCUS_VENVS:-$CIRCUS_TOOL_ROOT/venvs}"
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 
 # Prepend paths

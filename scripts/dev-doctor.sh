@@ -89,7 +89,7 @@ info "Branch: $local_branch"
 local_head="$(git rev-parse HEAD 2>/dev/null || true)"
 info "HEAD: $local_head"
 
-if ! git status --short | grep -q '^??'; then
+if ! git status --porcelain=v1 | grep -q .; then
   info "Status: clean"
 else
   warn "Status: dirty (untracked files present)"
