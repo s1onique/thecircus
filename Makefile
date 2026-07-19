@@ -216,8 +216,14 @@ gate: factorize format-check test-backend test-web smoke
 # Linux development environment (ACT-CIRCUS-LINUX-DEV-HOST-BOOTSTRAP01)
 # =============================================================================
 
+# Bootstrap the Linux development environment
 .PHONY: dev-bootstrap-linux
 dev-bootstrap-linux:
+	./scripts/bootstrap-linux-dev.sh
+
+# Check prerequisites only (no installation)
+.PHONY: dev-bootstrap-check-linux
+dev-bootstrap-check-linux:
 	./scripts/bootstrap-linux-dev.sh --check
 
 .PHONY: dev-activate-help

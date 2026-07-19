@@ -21,10 +21,12 @@ fi
 # ----------------------------------------------------------------------
 export CIRCUS_TOOL_ROOT="${CIRCUS_TOOL_ROOT:-$HOME/.local/share/circus-dev}"
 export CIRCUS_VENVS="${CIRCUS_VENVS:-$CIRCUS_TOOL_ROOT/venvs}"
-export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
+export CIRCUS_NODE="${CIRCUS_NODE:-$CIRCUS_TOOL_ROOT/node}"
+export DOTNET_ROOT="${DOTNET_ROOT:-$CIRCUS_TOOL_ROOT/dotnet}"
+export CIRCUS_NODE_VERSION="22.17.0"
 
-# Prepend paths
-export PATH="$CIRCUS_TOOL_ROOT/bin:$CIRCUS_TOOL_ROOT/node/v22.17.0/bin:$CIRCUS_VENVS/policy/bin:$PATH"
+# Prepend paths (unified with bootstrap's activation shim)
+export PATH="$CIRCUS_TOOL_ROOT/bin:$CIRCUS_NODE/v${CIRCUS_NODE_VERSION}/bin:$CIRCUS_VENVS/policy/bin:$DOTNET_ROOT:$DOTNET_ROOT/tools:$PATH"
 
 # .NET configuration
 export DOTNET_CLI_TELEMETRY_OPTOUT=1

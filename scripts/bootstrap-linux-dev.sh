@@ -8,7 +8,7 @@
 # This script installs and configures:
 #   - .NET 10 SDK
 #   - Node.js 22.x
-#   - Elm 0.19.2
+#   - Elm 0.19.2 (via locked repository restore)
 #   - Python 3.12 with policy virtualenv
 #   - actionlint and ShellCheck
 #   - Docker and Buildx
@@ -33,6 +33,22 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
+# Logging helpers (fail-closed: all messages go to stderr)
+# -----------------------------------------------------------------------------
+
+log_info() {
+    printf 'INFO: %s\n' "$*" >&2
+}
+
+log_warn() {
+    printf 'WARN: %s\n' "$*" >&2
+}
+
+log_error() {
+    printf 'ERROR: %s\n' "$*" >&2
+}
+
+# -----------------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------------
 
@@ -46,27 +62,46 @@ mkdir -p "$INSTALL_ROOT"
 
 # Version definitions (must match repository authority)
 NODE_VERSION="22.17.0"
-DOTNET_VERSION="10.0.202"
-ELM_VERSION="0.19.2"
 SHELLCHECK_VERSION="0.11.0"
-ACTIONLINT_VERSION="1.7.4"
+ACTIONLINT_VERSION="1.7.12"
+PIP_VERSION="24.0"
+PYYAML_VERSION="6.0.1"
 
 # .NET SDK version from global.json (fail-closed)
 read_global_json_version() {
     local global_json="$REPO_ROOT/global.json"
     if [[ ! -f "$global_json" ]]; then
-        echo "ERROR: global.json not found at $global_json" >&2
+        log_error "global.json not found at $global_json"
         return 2
     fi
-    
+
     local version
     version=$(grep -oP '"version":\s*"\K[^"]+' "$global_json" 2>/dev/null || true)
-    
+
     if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "ERROR: Could not extract valid .NET SDK version from global.json (got: '$version')" >&2
+        log_error "Could not extract valid .NET SDK version from global.json (got: '$version')"
         return 2
     fi
-    
+
+    echo "$version"
+}
+
+# Elm version from web/package.json (fail-closed)
+read_elm_version() {
+    local package_json="$REPO_ROOT/web/package.json"
+    if [[ ! -f "$package_json" ]]; then
+        log_error "web/package.json not found at $package_json"
+        return 2
+    fi
+
+    local version
+    version=$(grep -oP '"elm"\s*:\s*"\K[0-9+\.-]+' "$package_json" 2>/dev/null || true)
+
+    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9-]+$ ]]; then
+        log_error "Could not extract valid Elm version from web/package.json (got: '$version')"
+        return 2
+    fi
+
     echo "$version"
 }
 
@@ -76,32 +111,32 @@ download_if_missing() {
     local dest="$2"
     local expected_sha="$3"
     local description="$4"
-    
+
     # Always verify checksum if file exists
     if [[ -f "$dest" ]]; then
         if ! echo "$expected_sha  $dest" | sha256sum --check --status 2>/dev/null; then
-            echo "WARN: Existing $description checksum mismatch, re-downloading..." >&2
+            log_warn "Existing $description checksum mismatch, re-downloading..."
             rm -f "$dest"
         fi
     fi
-    
+
     # Download if missing or removed
     if [[ ! -f "$dest" ]]; then
-        echo "Downloading $description..."
+        log_info "Downloading $description..."
         if ! curl -fsSL "$url" -o "$dest"; then
-            echo "ERROR: Failed to download $description from $url" >&2
+            log_error "Failed to download $description from $url"
             return 1
         fi
     fi
-    
+
     # Always verify checksum (fail-closed)
     if ! echo "$expected_sha  $dest" | sha256sum --check --status 2>/dev/null; then
-        echo "ERROR: $description checksum verification failed" >&2
+        log_error "$description checksum verification failed"
         rm -f "$dest"
         return 1
     fi
-    
-    echo "OK: $description verified"
+
+    log_info "OK: $description verified"
     return 0
 }
 
@@ -113,9 +148,6 @@ NODE_ARCHIVE_PATH="$INSTALL_ROOT/downloads/${NODE_ARCHIVE}"
 NODE_SHASUM_URL="${NODE_BASE_URL}/SHASUMS256.txt"
 NODE_SHASUM_PATH="$INSTALL_ROOT/downloads/node-v${NODE_VERSION}-SHASUMS256.txt"
 
-# Node SHA256 from SHASUMS256.txt (embedded for v22.17.0)
-NODE_SHA256="8c8403f2cdd0a0c8c2af50b3c8b87f1d4b8a1f2c3d5e6f7a8b9c0d1e2f3a4b5"
-
 # ShellCheck download
 SHELLCHECK_ARCHIVE="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
 SHELLCHECK_URL="https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${SHELLCHECK_ARCHIVE}"
@@ -126,7 +158,7 @@ SHELLCHECK_SHA256="8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227
 ACTIONLINT_ARCHIVE="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
 ACTIONLINT_URL="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${ACTIONLINT_ARCHIVE}"
 ACTIONLINT_ARCHIVE_PATH="$INSTALL_ROOT/downloads/${ACTIONLINT_ARCHIVE}"
-ACTIONLINT_SHA256="d6e6a8e1f6c5d7b4a3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1"
+ACTIONLINT_SHA256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
 
 # -----------------------------------------------------------------------------
 # Options
@@ -134,6 +166,7 @@ ACTIONLINT_SHA256="d6e6a8e1f6c5d7b4a3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f
 
 DRY_RUN=false
 FORCE=false
+CHECK_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -160,7 +193,7 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         *)
-            echo "ERROR: Unknown option: $1" >&2
+            log_error "Unknown option: $1"
             exit 2
             ;;
     esac
@@ -177,27 +210,27 @@ echo ""
 
 # OS check
 if [[ ! -f /etc/os-release ]]; then
-    echo "ERROR: /etc/os-release not found" >&2
+    log_error "/etc/os-release not found"
     exit 1
 fi
 
 source /etc/os-release
 SUPPORTED_IDS="(ubuntu|debian|linuxmint)"
 if [[ ! "$ID $ID_LIKE" =~ $SUPPORTED_IDS ]]; then
-    echo "WARN: This script is designed for Ubuntu/Debian/Linux Mint"
+    log_warn "This script is designed for Ubuntu/Debian/Linux Mint"
 fi
 
-# Architecture check
+# Architecture check (fail-closed)
 ARCH=$(uname -m)
 if [[ "$ARCH" != "x86_64" ]]; then
-    echo "ERROR: This script requires x86_64 architecture (found: $ARCH)" >&2
-    exit 1
+    log_error "This script requires x86_64 architecture (found: $ARCH)"
+    exit 2
 fi
 
-# Required commands
+# Required commands (fail-closed)
 for cmd in curl sha256sum tar xz git; do
     if ! command -v "$cmd" &>/dev/null; then
-        echo "ERROR: Required command '$cmd' not found" >&2
+        log_error "Required command '$cmd' not found"
         exit 1
     fi
 done
@@ -208,147 +241,219 @@ done
 
 install_dotnet() {
     echo "--- Installing .NET SDK ---"
-    
+
     local dotnet_install_root="$INSTALL_ROOT/dotnet"
     local expected_version
     expected_version=$(read_global_json_version) || {
-        echo "ERROR: Failed to get .NET version from global.json" >&2
+        log_error "Failed to get .NET version from global.json"
         return 1
     }
-    
-    echo "Expected .NET version: $expected_version"
-    
+
+    log_info "Expected .NET version: $expected_version"
+
+    # Check if already installed with correct version
     if [[ -x "$dotnet_install_root/dotnet" ]]; then
         local installed_version
         installed_version=$("$dotnet_install_root/dotnet" --version 2>/dev/null || echo "none")
         if [[ "$installed_version" == "$expected_version" ]] && [[ "$FORCE" != "true" ]]; then
-            echo "OK: .NET SDK $installed_version already installed"
+            log_info "OK: .NET SDK $installed_version already installed"
             return 0
         fi
     fi
-    
+
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "DRY-RUN: Would install .NET SDK $expected_version"
         return 0
     fi
-    
+
     # Download .NET install script
     local install_script="$INSTALL_ROOT/downloads/dotnet-install.sh"
     mkdir -p "$(dirname "$install_script")"
-    
+
     if ! curl -fsSL "https://dot.net/v1/dotnet-install.sh" -o "$install_script"; then
-        echo "ERROR: Failed to download .NET install script" >&2
+        log_error "Failed to download .NET install script"
         return 1
     fi
-    
+
     chmod +x "$install_script"
-    
-    # Install .NET SDK
+
+    # Install .NET SDK using --version (exact version as per Microsoft docs)
     if ! "$install_script" \
-        --channel "$expected_version" \
+        --version "$expected_version" \
         --install-dir "$dotnet_install_root" \
         --no-path; then
-        echo "ERROR: .NET SDK installation failed" >&2
+        log_error ".NET SDK installation failed"
         return 1
     fi
-    
-    # Verify installation
-    if ! "$dotnet_install_root/dotnet" --version | grep -q "^$expected_version"; then
-        echo "ERROR: .NET SDK verification failed" >&2
+
+    # Verify installation (fail-closed)
+    local verified_version
+    verified_version=$("$dotnet_install_root/dotnet" --version 2>/dev/null || echo "none")
+    if [[ "$verified_version" != "$expected_version" ]]; then
+        log_error ".NET SDK verification failed: expected $expected_version, got $verified_version"
         return 1
     fi
-    
-    echo "OK: .NET SDK $expected_version installed"
+
+    log_info "OK: .NET SDK $expected_version installed"
     return 0
 }
 
 install_node() {
     echo "--- Installing Node.js ---"
-    
-    if [[ -x "$INSTALL_ROOT/node/v${NODE_VERSION}/bin/node" ]]; then
-        echo "OK: Node.js $NODE_VERSION already installed"
-        return 0
+
+    local node_install_dir="$INSTALL_ROOT/node/v${NODE_VERSION}"
+
+    # Check if already installed with correct version (fail-closed)
+    if [[ -x "$node_install_dir/bin/node" ]]; then
+        local installed_version
+        installed_version=$("$node_install_dir/bin/node" --version 2>/dev/null || echo "none")
+        installed_version="${installed_version#v}"  # Strip 'v' prefix for comparison
+
+        if [[ "$installed_version" == "$NODE_VERSION" ]] && [[ "$FORCE" != "true" ]]; then
+            log_info "OK: Node.js v$installed_version already installed"
+            return 0
+        fi
     fi
-    
+
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "DRY-RUN: Would install Node.js $NODE_VERSION"
         return 0
     fi
-    
+
     local node_dest_dir="$INSTALL_ROOT/downloads/${NODE_ARCHIVE}"
-    
-    # Download Node.js
+
+    # Download SHASUMS256.txt first to get the official checksum from Node.js
+    mkdir -p "$(dirname "$NODE_SHASUM_PATH")"
+    if ! curl -fsSL "$NODE_SHASUM_URL" -o "$NODE_SHASUM_PATH" 2>/dev/null; then
+        log_error "Failed to download Node.js SHASUMS256.txt"
+        return 1
+    fi
+
+    # Extract the expected checksum for our archive from official manifest
+    local expected_sha
+    expected_sha=$(awk -v archive="$NODE_ARCHIVE" '$2 == archive { print $1; exit }' "$NODE_SHASUM_PATH" 2>/dev/null || true)
+
+    if [[ ! "$expected_sha" =~ ^[0-9a-f]{64}$ ]]; then
+        log_error "Checksum missing for $NODE_ARCHIVE in SHASUMS256.txt"
+        return 1
+    fi
+
+    # Download Node.js archive with verification
     if ! download_if_missing \
         "${NODE_BASE_URL}/${NODE_ARCHIVE}" \
         "$node_dest_dir" \
-        "$NODE_SHA256" \
+        "$expected_sha" \
         "Node.js ${NODE_VERSION}"; then
         return 1
     fi
-    
-    # Extract
-    local install_dir="$INSTALL_ROOT/node"
-    mkdir -p "$install_dir"
-    if ! tar -xJf "$node_dest_dir" -C "$install_dir"; then
-        echo "ERROR: Failed to extract Node.js archive" >&2
+
+    # Extract with --strip-components=1 into the canonical directory
+    rm -rf "$node_install_dir"
+    mkdir -p "$node_install_dir"
+    if ! tar -xJf "$node_dest_dir" -C "$node_install_dir" --strip-components=1; then
+        log_error "Failed to extract Node.js archive"
         return 1
     fi
-    
-    # Verify
-    if ! "$install_dir/node-v${NODE_VERSION}-${NODE_ARCH}/bin/node" --version | grep -q "^v${NODE_VERSION}"; then
-        echo "ERROR: Node.js verification failed" >&2
+
+    # Verify installation (fail-closed)
+    local verified_version
+    verified_version=$("$node_install_dir/bin/node" --version 2>/dev/null || echo "none")
+    if [[ "$verified_version" != "v${NODE_VERSION}" ]]; then
+        log_error "Node.js verification failed: expected v${NODE_VERSION}, got $verified_version"
         return 1
     fi
-    
-    echo "OK: Node.js $NODE_VERSION installed"
+
+    log_info "OK: Node.js $NODE_VERSION installed"
     return 0
 }
 
 install_elm() {
-    echo "--- Installing Elm ---"
-    
-    local npm_bin="$INSTALL_ROOT/node/v${NODE_VERSION}/bin"
-    local elm_path="$npm_bin/elm"
-    
-    if [[ -x "$elm_path" ]]; then
-        local installed_version
-        installed_version=$("$elm_path" --version 2>/dev/null || echo "none")
-        if [[ "$installed_version" == "Elm ${ELM_VERSION}" ]] && [[ "$FORCE" != "true" ]]; then
-            echo "OK: Elm $installed_version already installed"
-            return 0
-        fi
-    fi
-    
+    echo "--- Installing Elm (via locked repository restore) ---"
+
     if [[ "$DRY_RUN" == "true" ]]; then
-        echo "DRY-RUN: Would install Elm $ELM_VERSION via npm"
+        echo "DRY-RUN: Would restore Elm via npm ci in web/"
         return 0
     fi
-    
-    # Install Elm globally via npm
-    if ! "$npm_bin/npm" install -g elm@${ELM_VERSION} 2>/dev/null; then
-        echo "WARN: Elm installation via npm failed (may require corporate CA for HTTPS)"
-        return 0  # Non-fatal
+
+    local web_dir="$REPO_ROOT/web"
+    if [[ ! -d "$web_dir" ]]; then
+        log_error "web/ directory not found at $web_dir"
+        return 1
     fi
-    
-    echo "OK: Elm installed"
+
+    # Use locked repository restore instead of global installation
+    cd "$web_dir"
+
+    # Verify package-lock.json exists for locked restoration
+    if [[ ! -f "package-lock.json" ]]; then
+        log_error "package-lock.json not found - Elm installation requires locked dependencies"
+        return 1
+    fi
+
+    # Use npm ci for locked restoration (not global npm install)
+    if ! npm ci --ignore-scripts 2>/dev/null; then
+        log_error "npm ci failed in web/ directory"
+        cd "$REPO_ROOT"
+        return 1
+    fi
+
+    # Explicitly invoke Elm installer (required for elm package)
+    if [[ -x "./node_modules/.bin/elm" ]]; then
+        if ! node ./node_modules/elm/install.js 2>/dev/null; then
+            log_error "Elm platform binary installation failed"
+            cd "$REPO_ROOT"
+            return 1
+        fi
+    else
+        log_error "Elm npm package not properly installed"
+        cd "$REPO_ROOT"
+        return 1
+    fi
+
+    # Verify Elm version matches repository authority (fail-closed)
+    local expected_elm_version
+    expected_elm_version=$(read_elm_version) || {
+        log_error "Failed to get Elm version from web/package.json"
+        cd "$REPO_ROOT"
+        return 1
+    }
+
+    local actual_elm_version
+    actual_elm_version=$("./node_modules/.bin/elm" --version 2>/dev/null || echo "ERROR")
+
+    # Accept both "0.19.2" and "Elm 0.19.2" formats
+    if [[ "$actual_elm_version" != "Elm ${expected_elm_version}" ]] && \
+       [[ "$actual_elm_version" != "${expected_elm_version}" ]]; then
+        log_error "Elm version mismatch: expected Elm $expected_elm_version, got $actual_elm_version"
+        cd "$REPO_ROOT"
+        return 1
+    fi
+
+    cd "$REPO_ROOT"
+    log_info "OK: Elm $actual_elm_version installed via locked repository"
     return 0
 }
 
 install_shellcheck() {
     echo "--- Installing ShellCheck ---"
-    
+
     local dest="$INSTALL_ROOT/bin/shellcheck"
-    
-    if [[ -x "$dest" ]] && [[ "$FORCE" != "true" ]]; then
-        echo "OK: ShellCheck already installed"
-        return 0
+
+    # Check if already installed with correct version (fail-closed)
+    if [[ -x "$dest" ]]; then
+        local installed_version
+        installed_version=$("$dest" --version 2>/dev/null | head -1 || echo "none")
+        if [[ "$installed_version" == *"v${SHELLCHECK_VERSION}"* ]] && [[ "$FORCE" != "true" ]]; then
+            log_info "OK: ShellCheck $SHELLCHECK_VERSION already installed"
+            return 0
+        fi
     fi
-    
+
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "DRY-RUN: Would install ShellCheck $SHELLCHECK_VERSION"
         return 0
     fi
-    
+
     # Download and verify
     if ! download_if_missing \
         "$SHELLCHECK_URL" \
@@ -357,49 +462,56 @@ install_shellcheck() {
         "ShellCheck ${SHELLCHECK_VERSION}"; then
         return 1
     fi
-    
+
     # Extract
     mkdir -p "$INSTALL_ROOT/bin"
     if ! tar -xJf "$SHELLCHECK_ARCHIVE_PATH" -C "$INSTALL_ROOT/bin" 2>/dev/null; then
-        echo "ERROR: Failed to extract ShellCheck archive" >&2
+        log_error "Failed to extract ShellCheck archive"
         return 1
     fi
-    
+
     # Copy binary
     local extracted_dir="$INSTALL_ROOT/bin/shellcheck-v${SHELLCHECK_VERSION}"
     if [[ -x "$extracted_dir/shellcheck" ]]; then
         cp "$extracted_dir/shellcheck" "$dest"
         chmod +x "$dest"
     else
-        echo "ERROR: ShellCheck binary not found after extraction" >&2
+        log_error "ShellCheck binary not found after extraction"
         return 1
     fi
-    
-    # Verify
-    if ! "$dest" --version | grep -q "ShellCheck"; then
-        echo "ERROR: ShellCheck verification failed" >&2
+
+    # Verify installation (fail-closed)
+    local verified_version
+    verified_version=$("$dest" --version 2>/dev/null | head -1 || echo "none")
+    if [[ "$verified_version" != *"ShellCheck"* ]]; then
+        log_error "ShellCheck verification failed"
         return 1
     fi
-    
-    echo "OK: ShellCheck $SHELLCHECK_VERSION installed"
+
+    log_info "OK: ShellCheck $SHELLCHECK_VERSION installed"
     return 0
 }
 
 install_actionlint() {
     echo "--- Installing actionlint ---"
-    
+
     local dest="$INSTALL_ROOT/bin/actionlint"
-    
-    if [[ -x "$dest" ]] && [[ "$FORCE" != "true" ]]; then
-        echo "OK: actionlint already installed"
-        return 0
+
+    # Check if already installed with correct version (fail-closed)
+    if [[ -x "$dest" ]]; then
+        local installed_version
+        installed_version=$("$dest" --version 2>/dev/null | head -1 || echo "none")
+        if [[ "$installed_version" == *"v${ACTIONLINT_VERSION}"* ]] && [[ "$FORCE" != "true" ]]; then
+            log_info "OK: actionlint $ACTIONLINT_VERSION already installed"
+            return 0
+        fi
     fi
-    
+
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "DRY-RUN: Would install actionlint $ACTIONLINT_VERSION"
         return 0
     fi
-    
+
     # Download and verify
     if ! download_if_missing \
         "$ACTIONLINT_URL" \
@@ -408,78 +520,109 @@ install_actionlint() {
         "actionlint ${ACTIONLINT_VERSION}"; then
         return 1
     fi
-    
+
     # Extract
     mkdir -p "$INSTALL_ROOT/bin"
     if ! tar -xzf "$ACTIONLINT_ARCHIVE_PATH" -C "$INSTALL_ROOT/bin" 2>/dev/null; then
-        echo "ERROR: Failed to extract actionlint archive" >&2
+        log_error "Failed to extract actionlint archive"
         return 1
     fi
-    
-    # Verify
-    if ! "$dest" --version | grep -q "actionlint"; then
-        echo "ERROR: actionlint verification failed" >&2
+
+    # Verify installation (fail-closed)
+    local verified_version
+    verified_version=$("$dest" --version 2>/dev/null | head -1 || echo "none")
+    if [[ "$verified_version" != *"actionlint"* ]]; then
+        log_error "actionlint verification failed"
         return 1
     fi
-    
-    echo "OK: actionlint $ACTIONLINT_VERSION installed"
+
+    log_info "OK: actionlint $ACTIONLINT_VERSION installed"
     return 0
 }
 
 install_policy_venv() {
     echo "--- Installing Python Policy Virtualenv ---"
-    
+
     local venv_dir="$INSTALL_ROOT/venvs/policy"
-    
-    if [[ -d "$venv_dir" ]] && [[ "$FORCE" != "true" ]]; then
-        echo "OK: Policy virtualenv already exists"
-        return 0
-    fi
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        echo "DRY-RUN: Would create Python policy virtualenv"
-        return 0
-    fi
-    
-    # Check Python 3.12
+
+    # Check if Python 3.12 is available (fail-closed)
     if ! command -v python3.12 &>/dev/null; then
-        echo "WARN: Python 3.12 not found"
-        return 0  # Non-fatal
-    fi
-    
-    # Create virtualenv
-    mkdir -p "$(dirname "$venv_dir")"
-    if ! python3.12 -m venv "$venv_dir"; then
-        echo "ERROR: Failed to create policy virtualenv" >&2
+        log_error "Python 3.12 not found - policy virtualenv requires Python 3.12"
         return 1
     fi
-    
-    # Install packages
-    if ! "$venv_dir/bin/pip" install --upgrade pip pyyaml requests 2>/dev/null; then
-        echo "WARN: Failed to install policy packages (may require corporate CA for PyPI)"
-        return 0  # Non-fatal
+
+    # Check if virtualenv already exists with correct packages (fail-closed)
+    if [[ -d "$venv_dir" ]] && [[ "$FORCE" != "true" ]]; then
+        local actual_pyyaml_version
+        actual_pyyaml_version=$("$venv_dir/bin/python" -c "import yaml; print(yaml.__version__)" 2>/dev/null || echo "none")
+
+        if [[ "$actual_pyyaml_version" == "$PYYAML_VERSION" ]]; then
+            log_info "OK: Policy virtualenv already exists with correct PyYAML $actual_pyyaml_version"
+            return 0
+        fi
     fi
-    
-    echo "OK: Policy virtualenv created"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "DRY-RUN: Would create Python policy virtualenv with PyYAML $PYYAML_VERSION"
+        return 0
+    fi
+
+    # Create virtualenv (fail-closed)
+    mkdir -p "$(dirname "$venv_dir")"
+    if ! python3.12 -m venv "$venv_dir"; then
+        log_error "Failed to create policy virtualenv"
+        return 1
+    fi
+
+    # Install pinned packages (fail-closed)
+    if ! "$venv_dir/bin/pip" install "pip==${PIP_VERSION}" 2>/dev/null; then
+        log_error "Failed to install pip ${PIP_VERSION}"
+        return 1
+    fi
+
+    if ! "$venv_dir/bin/pip" install "PyYAML==${PYYAML_VERSION}" 2>/dev/null; then
+        log_error "Failed to install PyYAML ${PYYAML_VERSION}"
+        return 1
+    fi
+
+    # Verify PyYAML version (fail-closed)
+    local actual_pyyaml_version
+    actual_pyyaml_version=$("$venv_dir/bin/python" -c "import yaml; print(yaml.__version__)" 2>/dev/null || echo "none")
+
+    if [[ "$actual_pyyaml_version" != "$PYYAML_VERSION" ]]; then
+        log_error "PyYAML version mismatch: expected $PYYAML_VERSION, got $actual_pyyaml_version"
+        return 1
+    fi
+
+    log_info "OK: Policy virtualenv created with PyYAML $PYYAML_VERSION"
     return 0
 }
 
 setup_shell_integration() {
     echo "--- Setting up Shell Integration ---"
-    
+
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "DRY-RUN: Would create shell integration scripts"
         return 0
     fi
-    
-    # Create user-local activation script
+
+    # Determine actual login shell for profile configuration
+    local profile_file
+    case "${SHELL:-}" in
+        */zsh)  profile_file="$HOME/.zshrc" ;;
+        */bash) profile_file="$HOME/.bashrc" ;;
+        *)      profile_file="$HOME/.profile" ;;
+    esac
+
+    # Create user-local activation script (silent - no output on source)
     local activate_shim="$HOME/.local/bin/circus-dev-activate"
     mkdir -p "$(dirname "$activate_shim")"
-    
+
     cat > "$activate_shim" << 'ACTIVATESCRIPT'
 #!/usr/bin/env bash
 # Circus development environment activation shim
 # Generated by bootstrap-linux-dev.sh
+# Silent activation - sets environment without output
 
 CIRCUS_TOOL_ROOT="${CIRCUS_TOOL_ROOT:-$HOME/.local/share/circus-dev}"
 CIRCUS_VENVS="${CIRCUS_VENVS:-$CIRCUS_TOOL_ROOT/venvs}"
@@ -489,312 +632,98 @@ DOTNET_ROOT="$CIRCUS_TOOL_ROOT/dotnet"
 export CIRCUS_TOOL_ROOT
 export CIRCUS_VENVS
 export DOTNET_ROOT
-export DOTNET_ROOT
 export PATH="$CIRCUS_TOOL_ROOT/bin:$CIRCUS_TOOL_ROOT/node/v${NODE_VERSION}/bin:$CIRCUS_VENVS/policy/bin:$DOTNET_ROOT:$DOTNET_ROOT/tools:$PATH"
-
-echo "Circus development environment activated"
-echo "  TOOL_ROOT: $CIRCUS_TOOL_ROOT"
-echo "  DOTNET: $("$DOTNET_ROOT/dotnet" --version 2>/dev/null || echo 'not installed')"
-echo "  NODE: $(node --version 2>/dev/null || echo 'not installed')"
-echo "  ELM: $(elm --version 2>/dev/null || echo 'not installed')"
 ACTIVATESCRIPT
 
     chmod +x "$activate_shim"
-    echo "OK: Created $activate_shim"
-    
-    # Create doctor script
-    local doctor_script="$SCRIPT_DIR/dev-doctor.sh"
-    cat > "$doctor_script" << 'DOCTORSCRIPT'
+    log_info "OK: Created $activate_shim"
+
+    # Create user-local doctor shim (executes the repository's dev-doctor.sh)
+    local doctor_shim="$HOME/.local/bin/circus-dev-doctor"
+    cat > "$doctor_shim" << DOCTORSHIM
 #!/usr/bin/env bash
-# =============================================================================
-# dev-doctor.sh — Circus Development Environment Diagnostic
-# =============================================================================
-# Verifies all required toolchain components for Circus development.
-#
-# Exit codes:
-#   0 - All checks passed
-#   1 - One or more checks failed
-# =============================================================================
+# Circus development doctor shim
+# Executes the repository's dev-doctor.sh
 
-set -euo pipefail
+exec "$REPO_ROOT/scripts/dev-doctor.sh" "\$@"
+DOCTORSHIM
 
-INSTALL_ROOT="${CIRCUS_TOOL_ROOT:-$HOME/.local/share/circus-dev}"
-NODE_VERSION="22.17.0"
+    chmod +x "$doctor_shim"
+    log_info "OK: Created $doctor_shim"
 
-failed=0
-passed=0
-
-info() { echo "INFO: $*"; }
-warn() { echo "WARN: $*" >&2; }
-error() { echo "ERROR: $*" >&2; failed=1; }
-success() { echo "OK: $*"; ((passed++)); }
-
-echo "=== Circus Development Environment Doctor ==="
-echo ""
-
-# Repository
-if [[ -d "$HOME/Projects/thecircus" ]] || git -C "${0%/*}/.." rev-parse --git-dir &>/dev/null; then
-    success "Repository accessible"
-else
-    warn "Repository not found at ~/Projects/thecircus"
-fi
-
-# Worktree status (porcelain)
-info "Checking worktree status..."
-status="$(git status --porcelain=v1 2>/dev/null || true)"
-if [[ -z "$status" ]]; then
-    success "Worktree: clean"
-else
-    warn "Worktree: dirty"
-    printf '%s\n' "$status" >&2
-fi
-
-# .NET SDK
-info "Checking .NET SDK..."
-if [[ -x "$INSTALL_ROOT/dotnet/dotnet" ]]; then
-    dotnet_version=$("$INSTALL_ROOT/dotnet/dotnet" --version 2>/dev/null || echo "unknown")
-    if [[ "$dotnet_version" == "10.0.202" ]]; then
-        success ".NET SDK: $dotnet_version"
-    else
-        warn ".NET SDK: $dotnet_version (expected 10.0.202)"
-    fi
-else
-    error ".NET SDK not installed"
-fi
-
-# F# Interactive
-info "Checking F# Interactive..."
-if command -v fsi &>/dev/null || [[ -x "$INSTALL_ROOT/dotnet/dotnet-fsi" ]]; then
-    success "F# Interactive: available"
-else
-    error "F# Interactive: not found"
-fi
-
-# Node.js
-info "Checking Node.js..."
-if [[ -x "$INSTALL_ROOT/node/v${NODE_VERSION}/bin/node" ]]; then
-    node_version=$("$INSTALL_ROOT/node/v${NODE_VERSION}/bin/node" --version 2>/dev/null || echo "unknown")
-    if [[ "$node_version" == "v${NODE_VERSION}" ]]; then
-        success "Node.js: $node_version"
-    else
-        warn "Node.js: $node_version (expected v${NODE_VERSION})"
-    fi
-else
-    error "Node.js not installed"
-fi
-
-# Elm
-info "Checking Elm..."
-if [[ -x "$INSTALL_ROOT/node/v${NODE_VERSION}/bin/elm" ]]; then
-    elm_version=$("$INSTALL_ROOT/node/v${NODE_VERSION}/bin/elm" --version 2>/dev/null || echo "unknown")
-    if [[ "$elm_version" == "Elm ${ELM_VERSION}" ]]; then
-        success "Elm: $elm_version"
-    else
-        warn "Elm: $elm_version (expected Elm ${ELM_VERSION})"
-    fi
-else
-    error "Elm not installed"
-fi
-
-# elm-test
-info "Checking elm-test..."
-if [[ -x "$INSTALL_ROOT/node/v${NODE_VERSION}/bin/elm-test" ]]; then
-    success "elm-test: available"
-else
-    error "elm-test not installed"
-fi
-
-# Python policy venv
-info "Checking Python policy virtualenv..."
-if [[ -x "$INSTALL_ROOT/venvs/policy/bin/python" ]]; then
-    py_version=$("$INSTALL_ROOT/venvs/policy/bin/python" --version 2>&1 || echo "unknown")
-    success "Policy venv: $py_version"
-else
-    error "Policy virtualenv not installed"
-fi
-
-# actionlint
-info "Checking actionlint..."
-if command -v actionlint &>/dev/null; then
-    actionlint_version=$(actionlint --version 2>/dev/null | head -1 || echo "unknown")
-    success "actionlint: $actionlint_version"
-else
-    error "actionlint not installed"
-fi
-
-# ShellCheck
-info "Checking ShellCheck..."
-if command -v shellcheck &>/dev/null; then
-    shellcheck_version=$(shellcheck --version 2>/dev/null | head -1 || echo "unknown")
-    success "ShellCheck: $shellcheck_version"
-else
-    error "ShellCheck not installed"
-fi
-
-# Docker
-info "Checking Docker..."
-if command -v docker &>/dev/null; then
-    docker_version=$(docker --version 2>/dev/null | head -1 || echo "unknown")
-    if docker info &>/dev/null; then
-        success "Docker: $docker_version (accessible)"
-    else
-        warn "Docker: $docker_version (not accessible - may need 'sg docker' or new login shell)"
-    fi
-else
-    error "Docker not installed"
-fi
-
-# Docker Buildx
-info "Checking Docker Buildx..."
-if docker buildx version &>/dev/null; then
-    buildx_version=$(docker buildx version 2>/dev/null | head -1 || echo "unknown")
-    success "Docker Buildx: $buildx_version"
-else
-    error "Docker Buildx not available"
-fi
-
-# Docker Compose
-info "Checking Docker Compose..."
-if docker compose version &>/dev/null; then
-    compose_version=$(docker compose version 2>/dev/null | head -1 || echo "unknown")
-    success "Docker Compose: $compose_version"
-else
-    error "Docker Compose not available"
-fi
-
-# Leamas CLI
-info "Checking Leamas CLI..."
-if command -v leamas &>/dev/null; then
-    success "Leamas CLI: available"
-else
-    error "Leamas CLI not installed"
-fi
-
-# Leamas factory digest
-info "Checking Leamas factory digest..."
-if command -v leamas &>/dev/null && [[ -f "${0%/*}/../.factory/gate-summary.json" ]]; then
-    gate_status=$(leamas digest --mode=auto --output=/dev/null 2>&1 || echo "failed")
-    if [[ "$gate_status" == *"OK"* ]]; then
-        success "Leamas factory digest: functional"
-    else
-        warn "Leamas factory digest: may need regeneration"
-    fi
-else
-    warn "Leamas factory digest: not verifiable"
-fi
-
-# Make targets
-info "Checking Make targets..."
-for target in build-backend test-backend build-frontend; do
-    if grep -q "^${target}:" "${0%/*}/../Makefile" 2>/dev/null; then
-        success "Make target '$target': exists"
-    else
-        error "Make target '$target': missing"
-    fi
-done
-
-# Corporate CA note
-info "Checking corporate CA configuration..."
-if [[ -n "${SSL_CERT_FILE:-}" ]] && [[ -f "$SSL_CERT_FILE" ]]; then
-    success "Corporate CA: configured"
-elif [[ -f /etc/ssl/certs/thecircus-corporate-chain.pem ]]; then
-    success "Corporate CA: configured"
-else
-    warn "Corporate CA: not configured (may affect npm/elm package fetching)"
-fi
-
-echo ""
-echo "=== Summary ==="
-echo "Passed: $passed"
-echo "Failed: $failed"
-echo ""
-
-if [[ $failed -gt 0 ]]; then
-    echo "RESULT: FAILED (run 'source ~/.local/bin/circus-dev-activate' or bootstrap)"
-    exit 1
-else
-    echo "RESULT: PASSED"
-    exit 0
-fi
-DOCTORSCRIPT
-
-    chmod +x "$doctor_script"
-    echo "OK: Created $doctor_script"
-    
-    # Add to shell profile (if not already present)
+    # Add to shell profile (idempotent - only adds if marker not present)
     local profile_marker="# Circus development environment"
-    local profile_file="$HOME/.bashrc"
-    
+
     if [[ -f "$profile_file" ]] && ! grep -q "$profile_marker" "$profile_file"; then
         cat >> "$profile_file" << PROFILE_BLOCK
 
 $profile_marker
-if [[ -f "$HOME/.local/bin/circus-dev-activate" ]]; then
-    source "$HOME/.local/bin/circus-dev-activate"
+if [[ -f "\$HOME/.local/bin/circus-dev-activate" ]]; then
+    source "\$HOME/.local/bin/circus-dev-activate"
 fi
 PROFILE_BLOCK
-        echo "OK: Added activation to $profile_file"
+        log_info "OK: Added activation to $profile_file"
     fi
-    
+
     return 0
 }
 
 # Docker verification
 verify_docker() {
     echo "--- Verifying Docker Access ---"
-    
+
     if ! command -v docker &>/dev/null; then
-        error "Docker not installed"
+        log_error "Docker not installed"
         return 1
     fi
-    
+
     if ! docker info &>/dev/null; then
-        echo "WARN: Docker daemon not accessible"
+        log_warn "Docker daemon not accessible"
         echo "      Try: sg docker -c 'docker info'"
         echo "      Or:  Log out and log back in"
         echo ""
         echo "NOTE: Docker group membership grants root-level privileges."
         echo "      See: https://docs.docker.com/engine/install/linux-postinstall/"
-        return 0  # Non-fatal
+        return 0  # Non-fatal for bootstrap
     fi
-    
-    echo "OK: Docker accessible"
+
+    log_info "OK: Docker accessible"
     return 0
 }
 
-# Source compilation check
+# Source compilation check (fail-closed)
 verify_source() {
     echo "--- Verifying Source Compilation ---"
-    
+
     local repo="${REPO_ROOT:-$(pwd)}"
     cd "$repo"
-    
+
     if [[ ! -f "Circus.sln" ]]; then
-        warn "Circus.sln not found - skipping source verification"
-        return 0
+        log_error "Circus.sln not found - cannot verify source compilation"
+        return 1
     fi
-    
+
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "DRY-RUN: Would verify source compilation"
         return 0
     fi
-    
+
     # Set up PATH for dotnet
     export PATH="$INSTALL_ROOT/dotnet:$INSTALL_ROOT/node/v${NODE_VERSION}/bin:$PATH"
-    
-    # Restore
-    if ! dotnet restore Circus.sln --locked-mode &>/dev/null; then
-        warn "dotnet restore failed (may be a network or configuration issue)"
-        return 0  # Non-fatal for bootstrap
+
+    # Restore (fail-closed)
+    if ! dotnet restore Circus.sln --locked-mode >/dev/null 2>&1; then
+        log_error "dotnet restore failed"
+        return 1
     fi
-    
-    # Build
-    if dotnet build Circus.sln -c Release --no-restore &>/dev/null; then
-        success "Source compilation: successful"
-    else
-        warn "Source compilation: failed"
+
+    # Build (fail-closed)
+    if ! dotnet build Circus.sln -c Release --no-restore >/dev/null 2>&1; then
+        log_error "Source compilation failed"
+        return 1
     fi
-    
+
+    log_info "OK: Source compilation successful"
     return 0
 }
 
@@ -805,41 +734,41 @@ verify_source() {
 run_check_mode() {
     echo "=== Circus Development Prerequisites Check ==="
     echo ""
-    
+
     local check_failed=0
-    
+
     # OS check
     if [[ -f /etc/os-release ]]; then
         source /etc/os-release
         if [[ "$ID" == "ubuntu" ]] || [[ "$ID" == "debian" ]] || [[ "$ID" == "linuxmint" ]]; then
             echo "OK: OS: $PRETTY_NAME ($ID)"
         else
-            echo "WARN: OS: $PRETTY_NAME (designed for Ubuntu/Debian/Linux Mint)"
+            log_warn "OS: $PRETTY_NAME (designed for Ubuntu/Debian/Linux Mint)"
         fi
     else
-        echo "ERROR: /etc/os-release not found" >&2
+        log_error "/etc/os-release not found"
         check_failed=1
     fi
-    
+
     # Architecture check
     ARCH=$(uname -m)
     if [[ "$ARCH" == "x86_64" ]]; then
         echo "OK: Architecture: $ARCH"
     else
-        echo "ERROR: Architecture: $ARCH (requires x86_64)" >&2
+        log_error "Architecture: $ARCH (requires x86_64)"
         check_failed=1
     fi
-    
+
     # Required commands
     for cmd in curl sha256sum tar xz git; do
         if command -v "$cmd" &>/dev/null; then
             echo "OK: Command '$cmd': available"
         else
-            echo "ERROR: Command '$cmd': not found" >&2
+            log_error "Command '$cmd': not found"
             check_failed=1
         fi
     done
-    
+
     # global.json version
     local global_json="$REPO_ROOT/global.json"
     if [[ -f "$global_json" ]]; then
@@ -848,22 +777,22 @@ run_check_mode() {
         if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "OK: .NET SDK version from global.json: $version"
         else
-            echo "ERROR: Invalid .NET SDK version in global.json: '$version'" >&2
+            log_error "Invalid .NET SDK version in global.json: '$version'"
             check_failed=1
         fi
     else
-        echo "ERROR: global.json not found" >&2
+        log_error "global.json not found"
         check_failed=1
     fi
-    
+
     # Repository
     if [[ -d "$REPO_ROOT/.git" ]]; then
         echo "OK: Repository: $REPO_ROOT (git)"
     else
-        echo "ERROR: Repository .git not found at $REPO_ROOT" >&2
+        log_error "Repository .git not found at $REPO_ROOT"
         check_failed=1
     fi
-    
+
     echo ""
     if [[ $check_failed -eq 0 ]]; then
         echo "RESULT: All prerequisites passed"

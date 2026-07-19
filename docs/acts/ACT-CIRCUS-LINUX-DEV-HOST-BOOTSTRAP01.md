@@ -4,7 +4,8 @@
 **Bootstrap Linux Development Host for Circus Project**
 
 ## Status
-OPEN
+PARTIAL — local bootstrap correctness and evidence defects remain;
+the ACT is not yet externally blocked only.
 
 ## Created
 2026-07-16

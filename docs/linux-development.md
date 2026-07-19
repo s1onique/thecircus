@@ -8,6 +8,15 @@ This guide covers setting up a Linux development environment for the Circus proj
 - **Database**: PostgreSQL (via Docker)
 - **Containers**: Docker with Buildx
 
+## Security and Reproducibility Policy
+
+This project follows strict supply-chain security practices:
+- **Download before execution**: All archives are downloaded to disk first, then verified
+- **Checksum verification**: All downloads are verified against official checksums (parsed from version-specific checksum files)
+- **Repository authority**: Tool versions are derived from repository files (global.json, Dockerfile.frontend, package.json)
+- **User-local installation**: Tools are installed under `~/.local/share/circus-dev/` to avoid system-wide side effects
+- **Pinned versions**: All tool versions are explicitly pinned and documented
+
 ## Prerequisites
 
 - Linux Mint 22.3, Ubuntu 24.04, or Debian 12 (x86_64)
@@ -37,33 +46,69 @@ Follow the sections below for manual installation.
 The .NET SDK version is pinned in `global.json` and must match the repository version.
 
 **Installation:**
+
 ```bash
-curl -fsSL https://dot.net/v1/dotnet-install.sh | bash -s -- \
-    --channel 10.0.202 \
+# Download install script
+curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+chmod +x /tmp/dotnet-install.sh
+
+# Install (using --version for exact version)
+/tmp/dotnet-install.sh \
+    --version "$(grep -oP '"version":\s*"\K[0-9]+\.[0-9]+\.[0-9]+' global.json)" \
     --install-dir ~/.local/share/circus-dev/dotnet
+
+# Clean up
+rm /tmp/dotnet-install.sh
 ```
 
 **Verification:**
+
 ```bash
 ~/.local/share/circus-dev/dotnet/dotnet --version
 ```
 
 ### Node.js 22.x
 
+Node.js versions are verified against the official SHASUMS256.txt file from nodejs.org.
+
 **Installation:**
+
 ```bash
-curl -fsSL https://nodejs.org/dist/v22.17.0/node-v22.17.0-linux-x64.tar.xz | tar -xJ
-mv node-v22.17.0-linux-x64 ~/.local/share/circus-dev/node/v22.17.0
+NODE_VERSION="22.17.0"
+NODE_ARCHIVE="node-v${NODE_VERSION}-linux-x64.tar.xz"
+INSTALL_DIR="$HOME/.local/share/circus-dev/node/v${NODE_VERSION}"
+
+# Download official SHASUMS256.txt
+curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
+    -o /tmp/SHASUMS256.txt
+
+# Extract checksum for our archive
+EXPECTED_SHA=$(awk -v archive="$NODE_ARCHIVE" '$2 == archive { print $1 }' /tmp/SHASUMS256.txt)
+
+# Download archive
+curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_ARCHIVE}" \
+    -o /tmp/"$NODE_ARCHIVE"
+
+# Verify checksum
+echo "$EXPECTED_SHA  /tmp/$NODE_ARCHIVE" | sha256sum -c
+
+# Extract
+mkdir -p "$INSTALL_DIR"
+tar -xJf /tmp/"$NODE_ARCHIVE" -C "$INSTALL_DIR" --strip-components=1
+
+# Clean up
+rm -f /tmp/SHASUMS256.txt /tmp/"$NODE_ARCHIVE"
 ```
 
 **Verification:**
+
 ```bash
 ~/.local/share/circus-dev/node/v22.17.0/bin/node --version
 ```
 
 ### Elm 0.19.2
 
-Elm is installed via npm:
+Elm is installed via npm using the version from package.json:
 
 ```bash
 ~/.local/share/circus-dev/node/v22.17.0/bin/npm install -g elm@0.19.2
@@ -72,6 +117,7 @@ Elm is installed via npm:
 **Note:** If npm fails due to SSL certificate issues, see [Corporate SSL](#corporate-ssl) below.
 
 **Verification:**
+
 ```bash
 ~/.local/share/circus-dev/node/v22.17.0/bin/elm --version
 ```
@@ -79,30 +125,53 @@ Elm is installed via npm:
 ### Python 3.12 with Policy Virtualenv
 
 **Installation:**
+
 ```bash
 python3.12 -m venv ~/.local/share/circus-dev/venvs/policy
 ~/.local/share/circus-dev/venvs/policy/bin/pip install --upgrade pip pyyaml requests
 ```
 
 **Verification:**
+
 ```bash
 ~/.local/share/circus-dev/venvs/policy/bin/python --version
 ```
 
 ### actionlint and ShellCheck
 
-**actionlint:**
+**actionlint (v1.7.12):**
+
 ```bash
-curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz | tar -xz -C ~/.local/bin
+# Download official release
+curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+    -o /tmp/actionlint.tar.gz
+
+# Verify checksum (from GitHub release page)
+echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" \
+    | sha256sum -c
+
+# Extract to user bin
+tar -xzf /tmp/actionlint.tar.gz -C ~/.local/bin
+rm /tmp/actionlint.tar.gz
 ```
 
-**ShellCheck:**
+**ShellCheck (v0.11.0):**
+
 ```bash
-curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ
-cp shellcheck-v0.11.0/shellcheck ~/.local/bin/
+curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz \
+    -o /tmp/shellcheck.tar.xz
+
+# Verify checksum
+echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/shellcheck.tar.xz" \
+    | sha256sum -c
+
+tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+cp /tmp/shellcheck-v0.11.0/shellcheck ~/.local/bin/
+rm -rf /tmp/shellcheck*
 ```
 
 **Verification:**
+
 ```bash
 actionlint --version
 shellcheck --version
@@ -164,12 +233,14 @@ cd web
 ### Docker Containers
 
 **Backend:**
+
 ```bash
 make container-build-backend
 make container-smoke
 ```
 
 **Frontend:**
+
 ```bash
 # Requires corporate CA certificate
 docker build --secret id=spbnix-ca,src=/path/to/corporate-ca.pem \
@@ -209,19 +280,16 @@ To ensure Docker access after adding your user to the group:
 
 1. Log out completely
 2. Log back in
-3. Verify: `docker info`
+3. Verify: `docker info` (NOT `sg docker -c 'docker info'`)
 
-Or use `sg` for a temporary group activation:
-
-```bash
-sg docker -c 'docker info'
-```
+**Note:** The development doctor (`./scripts/dev-doctor.sh`) tests direct Docker access, not the `sg docker` workaround. A clean login is required for the doctor to pass.
 
 ## Troubleshooting
 
 ### Elm Package Fetching Fails
 
 **Symptom:**
+
 ```
 InternalException (HandshakeFailed (Error_Protocol "certificate has unknown CA" UnknownCa))
 ```
@@ -231,18 +299,17 @@ InternalException (HandshakeFailed (Error_Protocol "certificate has unknown CA" 
 ### Docker Not Accessible
 
 **Symptom:**
+
 ```
 permission denied while trying to connect to the Docker daemon socket
 ```
 
-**Solution:** Add your user to the `docker` group and log out/in, or use:
-```bash
-sg docker -c 'docker info'
-```
+**Solution:** Add your user to the `docker` group and log out/in. The `sg docker` workaround will not satisfy the doctor check because it masks the underlying permission issue.
 
 ### dotnet Restore Fails
 
 **Symptom:**
+
 ```
 Unable to load the service layer for source
 ```
@@ -252,6 +319,7 @@ Unable to load the service layer for source
 ### Testcontainers Fails
 
 **Symptom:**
+
 ```
 Docker is either not running or misconfigured
 ```
@@ -263,17 +331,18 @@ Docker is either not running or misconfigured
 1. **Docker Group**: Membership grants root privileges. Use cautiously.
 2. **Corporate SSL Inspection**: Certificate chains should be from trusted sources only.
 3. **PATH Integrity**: Ensure activation scripts correctly construct PATH.
+4. **Checksum Verification**: Always verify downloaded archives against official checksums.
 
 ## Scripts Reference
 
 | Script | Purpose |
 |--------|---------|
-| `bootstrap-linux-dev.sh` | Automated toolchain setup |
-| `dev-doctor.sh` | Environment verification |
+| `bootstrap-linux-dev.sh` | Automated toolchain setup with checksum verification |
+| `dev-doctor.sh` | Environment verification (fail-closed checks) |
 | `activate-linux-dev.sh` | Environment activation helper |
 
 ## See Also
 
-- [ACT-CIRCUS-LINUX-DEV-HOST-BOOTSTRAP01](../acts/ACT-CIRCUS-LINUX-DEV-HOST-BOOTSTRAP01.md)
+- [ACT-CIRCUS-LINUX-DEV-HOST-BOOTSTRAP01](./acts/ACT-CIRCUS-LINUX-DEV-HOST-BOOTSTRAP01.md)
 - [Factory Documentation](../factory/README.md)
 - [Architecture](../architecture.md)
