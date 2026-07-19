@@ -223,18 +223,18 @@ dev-bootstrap-linux:
 
 # Check prerequisites only (no installation)
 .PHONY: dev-bootstrap-check-linux
-dev-check-linux:
+dev-bootstrap-check-linux:
 	./scripts/circus-dev check
 
 .PHONY: dev-activate-help
 dev-activate-help:
 	@echo "To activate the development environment:"
-	@echo "  Run: eval "$(./scripts/circus-dev env)""
+	@echo '  Run: eval "$$(./scripts/circus-dev env --shell auto)"'
 	@echo ""
 	@echo "Or add this line to your ~/.bashrc or ~/.zshrc:"
-	@echo '  [ -f "$$HOME/.local/bin/circus-dev-activate" ] && source "$$HOME/.local/bin/circus-dev-activate"'
+	@echo '  eval "$$(./scripts/circus-dev env --shell auto)"'
 	@echo ""
-	@echo "The stable activation shim is managed by scripts/circus-dev install-shell-hook"
+	@echo "The stable activation block is written by circus-dev install-shell-hook."
 
 .PHONY: dev-doctor
 dev-doctor:
