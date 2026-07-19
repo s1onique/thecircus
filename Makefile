@@ -211,3 +211,52 @@ clean:
 .PHONY: gate
 gate: factorize format-check test-backend test-web smoke
 	@echo "=== Native gate passed ==="
+
+# =============================================================================
+# Linux development environment (ACT-CIRCUS-LINUX-DEV-HOST-BOOTSTRAP01)
+# =============================================================================
+
+.PHONY: dev-bootstrap-linux
+dev-bootstrap-linux:
+	./scripts/bootstrap-linux-dev.sh
+
+.PHONY: dev-activate-help
+dev-activate-help:
+	@echo "To activate the development environment:"
+	@echo "  Run: source ~/.local/bin/circus-dev-activate"
+	@echo ""
+	@echo "Or add this line to your ~/.bashrc or ~/.zshrc:"
+	@echo '  [ -f "$$HOME/.local/bin/circus-dev-activate" ] && source "$$HOME/.local/bin/circus-dev-activate"'
+	@echo ""
+	@echo "The stable activation shim is installed by scripts/bootstrap-linux-dev.sh"
+
+.PHONY: dev-doctor
+dev-doctor:
+	./scripts/dev-doctor.sh
+
+.PHONY: dev-restore
+dev-restore:
+	$(DOTNET) restore $(SLN) --locked-mode
+	cd $(WEB_DIR) && $(NPM) ci
+
+.PHONY: dev-test-linux
+dev-test-linux:
+	$(MAKE) format-check
+	$(MAKE) test-domain
+	$(MAKE) test-contracts
+	$(MAKE) test-application
+	$(MAKE) test-web
+	$(MAKE) test-postgres
+	$(MAKE) test-api
+
+.PHONY: dev-container-smoke
+dev-container-smoke:
+	$(MAKE) CONTAINER_CLI=docker CONTAINER_PLATFORM=linux/amd64 container-smoke
+
+.PHONY: dev-gate-linux
+dev-gate-linux:
+	python3 scripts/verify_container_policy.py
+	bash tests/ci/test_build_publish_shell.sh
+	bash tests/ci/test_action_pin_mutation.sh
+	python3 .factory/regenerate_gate_summary.py
+	bash tests/ci/test_gate_summary_acceptance.sh
