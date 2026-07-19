@@ -287,23 +287,25 @@ let extractAtomicWith
             else
                 Error(ExtractionFailure(archive, labelFor label notes))
 
+        let mutable canDeletePrevious = false
+        let mutable canDeleteInstall = false
+
         try
             match performInstall () with
             | Ok _ ->
                 match verifyInstalled absoluteFinal with
                 | Ok() ->
                     // Successful verification: the new install is committed
-                    // and the previous-temp can be released unconditionally.
-                    if hadPrevious then
-                        ignore (deleteIfPresent previousDir)
-
-                    ignore (deleteIfPresent installDir)
+                    // and the previous-temp is safe to release.
+                    canDeletePrevious <- hadPrevious
+                    canDeleteInstall <- true
                     Ok absoluteFinal
                 | Error verificationFailure ->
                     let notes, previousRecovered, previousPreserved =
                         restorePrevious ()
 
-                    ignore (deleteIfPresent installDir)
+                    if previousRecovered then canDeletePrevious <- true
+                    canDeleteInstall <- true
                     reportOutcome
                         (sprintf "verification failed: %s" (renderFailure verificationFailure))
                         notes
@@ -313,6 +315,8 @@ let extractAtomicWith
                 let notes, previousRecovered, previousPreserved =
                     restorePrevious ()
 
+                if previousRecovered then canDeletePrevious <- true
+                canDeleteInstall <- true
                 reportOutcome
                     (sprintf "install failed: %s" (renderFailure installFailure))
                     notes
@@ -321,16 +325,15 @@ let extractAtomicWith
         finally
             // The install-temp is only consumed when the new install is
             // committed; until then it must be reclaimed so we do not leak
-            // directories.
-            if operations.Exists installDir then
+            // directories. The previous-temp is consumed only when
+            // recovery is conclusive (the new install was committed, or the
+            // previous install was observably restored). On a partial
+            // rollback we leave it in place so a human operator can finish
+            // the recovery.
+            if canDeleteInstall && operations.Exists installDir then
                 ignore (deleteIfPresent installDir)
 
-            // The previous-temp is the only recovery copy on disk after a
-            // failed install. It is safe to release only when the new
-            // install is committed or when the cold-start path was taken.
-            if operations.Exists previousDir
-               && ((operations.Exists absoluteFinal && hadPrevious)
-                   || not hadPrevious) then
+            if canDeletePrevious && operations.Exists previousDir then
                 ignore (deleteIfPresent previousDir)
 
 let extractAtomic (runner: IProcessRunner) (archive: string) (finalDir: string) : Result<string, DevHostFailure> =

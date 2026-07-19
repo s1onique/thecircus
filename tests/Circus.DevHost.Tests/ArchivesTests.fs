@@ -198,7 +198,8 @@ let tests =
               // When the candidate is already in `absoluteFinal` and the
               // restore path tries (and fails) to delete it, the previous
               // installation must remain on disk for a human operator to
-              // recover.
+              // recover. This test inspects the recovery-copy directory
+              // directly, not just the failed candidate.
               let temp, archive, finalDirectory = createFixture ()
               use cleanup = temp
               let runner = successfulArchiveRunner ()
@@ -231,8 +232,25 @@ let tests =
                     (string detail)
                     "rollback incomplete; previous installation retained at"
                     "The error detail must announce that the previous installation is retained"
+
+                  let previousDirs =
+                      Directory.GetDirectories(temp.Path, ".circus-previous-*")
+
+                  Expect.hasLength
+                    previousDirs
+                    1
+                    "Incomplete rollback must retain exactly one recovery copy"
+
+                  Expect.isTrue
+                      (File.Exists(Path.Combine(previousDirs.[0], "old.txt")))
+                      "The retained recovery copy must contain the previous installation"
+
                   Expect.isTrue
                       (Directory.Exists finalDirectory)
                       "The final directory must still exist on disk after a failed candidate delete"
+
+                  Expect.isTrue
+                      (File.Exists(Path.Combine(finalDirectory, "new.txt")))
+                      "The failed candidate remains live because its deletion failed"
               | Ok path -> failtestf "A delete-failed rollback must never return Ok %s" path
           } ]

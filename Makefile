@@ -214,7 +214,7 @@ clean:
 # =============================================================================
 
 .PHONY: gate
-gate: factorize format-check test-backend test-web smoke
+gate: factorize format-check test-backend test-devhost test-web smoke
 	@echo "=== Native gate passed ==="
 
 # =============================================================================
