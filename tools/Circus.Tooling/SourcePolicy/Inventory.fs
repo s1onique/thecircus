@@ -48,6 +48,7 @@ type InventoryFailure =
     | GitCancelled of detail: string
     | GitCleanupFailure of detail: string
     | GitOutputFailure of detail: string
+    | GitBodyFailure of detail: string
     | NulDecodeFailure of NulInventory.DecodeDiagnostic
 
 let renderInventoryFailure (f: InventoryFailure) : string =
@@ -57,6 +58,7 @@ let renderInventoryFailure (f: InventoryFailure) : string =
     | GitCancelled d -> sprintf "git cancelled: %s" d
     | GitCleanupFailure d -> sprintf "git cleanup failure: %s" d
     | GitOutputFailure d -> sprintf "git output failure: %s" d
+    | GitBodyFailure d -> sprintf "git runner body failure: %s" d
     | NulDecodeFailure d -> NulInventory.renderDiagnostic d
 
 /// Outcome of ``git ls-files`` capture.
@@ -74,7 +76,7 @@ let private fromOutcome (outcome: ProcessOutcome) (stderr: string) : InventoryFa
     | Cancelled d -> GitCancelled d
     | CleanupFailure d -> GitCleanupFailure d
     | OutputFailure (d, _) -> GitOutputFailure d
-    | BodyFailure (d, _) -> GitCleanupFailure (sprintf "body exception: %s" d)
+    | BodyFailure (d, _) -> GitBodyFailure d
     | Exited (n, _) -> GitNonzeroExit (n, stderr)
 
 let private runGitBytes (repoRoot: string) (args: string list) : InventoryParse =

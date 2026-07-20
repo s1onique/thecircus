@@ -35,6 +35,10 @@ type TextResult = {
 }
 
 let internal CleanupTimeout : TimeSpan = TimeSpan.FromSeconds(5.0)
+/// Bounded time the cleanup bracket waits for in-flight drain tasks to
+/// settle.  Must be finite so a damaged stream cannot make cleanup
+/// indefinite.
+let internal DrainSettleTimeout : TimeSpan = TimeSpan.FromSeconds(2.0)
 
 let private appendNote (note: string ref) (msg: string) : unit =
     if msg = "" then ()
@@ -58,6 +62,14 @@ let mutable internal InjectWaitFailure : (unit -> exn option) = fun () -> None
 let mutable internal InjectDrainFailure : (unit -> exn option) = fun () -> None
 let mutable internal InjectDisposeFailure : (unit -> exn option) = fun () -> None
 
+/// Test-only observation hook fired immediately after a started process
+/// has been assigned a PID.  Production code never installs anything
+/// other than ``ignore``.  Tests use this to capture the PID of a
+/// process that was started and then immediately released by the
+/// context-construction cleanup bracket, so they can assert the OS
+/// reaped it (rather than accepting ``None`` and silently passing).
+let mutable internal ObserveStartedPid : int -> unit = fun _ -> ()
+
 let private killTree (proc: Process) (note: string ref) : unit =
     try
         if not (isNull proc) && not proc.HasExited then
@@ -74,11 +86,43 @@ let private waitBounded (proc: Process) (note: string ref) : bool =
         appendNote note (sprintf "wait bounded failed: %s" ex.Message)
         false
 
+/// Dispose the process.  Honours the ``InjectDisposeFailure`` hook so a
+/// test can exercise the real catch-and-record branch instead of merely
+/// appending a synthetic note and then calling the real dispose.  When
+/// the injection is active the real ``Process.Dispose`` call is skipped
+/// to faithfully reproduce a dispose-time exception.
 let private disposeProc (proc: Process) (note: string ref) : unit =
-    try
-        if not (isNull proc) then proc.Dispose()
-    with ex ->
-        appendNote note (sprintf "dispose failed: %s" ex.Message)
+    match InjectDisposeFailure() with
+    | Some ex ->
+        appendNote note (sprintf "dispose injected failure: %s" ex.Message)
+    | None ->
+        try
+            if not (isNull proc) then proc.Dispose()
+        with ex ->
+            appendNote note (sprintf "dispose failed: %s" ex.Message)
+
+/// Boundedly settle a single drain task.  Returns ``true`` when the
+/// task completed inside the bound; ``false`` when the wait timed out
+/// or the task threw while being awaited.  Either way, cleanup is
+/// guaranteed to finish inside ``DrainSettleTimeout`` so a damaged
+/// stream cannot make the cleanup bracket indefinite.
+let private settleDrain (t: Task<Result<'a, exn>> option) (label: string) (note: string ref) : bool =
+    match t with
+    | None -> true
+    | Some task ->
+        try
+            if task.Wait(DrainSettleTimeout) then
+                match task.Result with
+                | Result.Ok _ -> true
+                | Result.Error e ->
+                    appendNote note (sprintf "%s drain settled with error: %s" label e.Message)
+                    false
+            else
+                appendNote note (sprintf "%s drain did not settle within %O" label DrainSettleTimeout)
+                false
+        with ex ->
+            appendNote note (sprintf "%s drain settle exception: %s" label ex.Message)
+            false
 
 let private drainBytesAsync (stream: Stream) (cancellationToken: CancellationToken) : Task<Result<byte[], exn>> =
     task {
@@ -179,6 +223,11 @@ let private startAsync (argv: string list) (workingDir: string option) (ct: Canc
                 // the error to the caller.
                 try
                     let pid = proc.Id
+                    // Publish the started PID so a focused test can
+                    // observe and assert reaping — the owned context is
+                    // never returned in this branch, so ``r.Pid``
+                    // would otherwise be ``None``.
+                    ObserveStartedPid pid
                     // Failure injection for the post-Start context
                     // construction window.  Throwing here exercises the
                     // ownership-bracket cleanup path.
@@ -269,8 +318,8 @@ let private finalize (verdict: Result<int, string>) (stdoutOk: bool) (stderrOk: 
 /// Run the child process with exception-safe ownership.
 ///
 /// The lifecycle is bracketed by ``try``/``finally`` so that every
-/// process that ``runCore`` causes to be created is released (killed,
-/// boundedly reaped, and disposed) BEFORE the public outcome is
+/// process that ``runCore`` causes to be created is released (drained,
+/// killed, boundedly reaped, and disposed) BEFORE the public outcome is
 /// constructed.  No cleanup runs after the outcome exists.  Exceptions
 /// raised inside the body are captured into the cleanup note and reported
 /// as ``BodyFailure``; the runner itself never propagates an exception to
@@ -281,6 +330,13 @@ let private finalize (verdict: Result<int, string>) (stdoutOk: bool) (stderrOk: 
 /// expression, so the bracket is structured as nested
 /// ``try ( try <body> with capture ) finally <cleanup>`` so that cleanup
 /// runs after the body has settled regardless of whether it threw.
+///
+/// Cleanup order on every exit path:
+///   1. Boundedly settle stdout drain (drainSettleTimeout).
+///   2. Boundedly settle stderr drain (drainSettleTimeout).
+///   3. Kill the process tree (kill-tree).
+///   4. Boundedly wait for process exit (cleanupTimeout).
+///   5. Dispose the process (honours InjectDisposeFailure).
 let private runCore
     (argv: string list)
     (workingDir: string option)
@@ -371,20 +427,24 @@ let private runCore
             bodyResult <- BodyUnexpected ex.Message
     finally
         // Cleanup runs BEFORE the public outcome is constructed.
-        // killTree / waitBounded / disposeProc are null-safe, so the
-        // finally block is also safe when startAsync never produced a
-        // process.
-        let _ = killTree proc cleanupNote
+        //
+        // The order is:
+        //   1. Boundedly settle stdout drain (records settle errors).
+        //   2. Boundedly settle stderr drain (records settle errors).
+        //   3. Kill the process tree.
+        //   4. Boundedly wait for the process to exit.
+        //   5. Dispose the process (honours InjectDisposeFailure).
+        //
+        // Steps 1 and 2 ensure that any drain task still responding to
+        // stream closure has either finished or been recorded as
+        // timed-out before the process is killed.  Without this, the
+        // exceptional path could return a ``BodyFailure`` outcome while
+        // drain tasks were still observing stream closure.
+        let _ = settleDrain stdoutDrain "stdout" cleanupNote
+        let _ = settleDrain stderrDrain "stderr" cleanupNote
+        killTree proc cleanupNote
         let _ = waitBounded proc cleanupNote
-        // Failure injection for the dispose stage: record the injected
-        // note but still attempt the real dispose so the runtime
-        // resources are released.
-        match InjectDisposeFailure() with
-        | Some ex ->
-            appendNote cleanupNote (sprintf "dispose injected failure: %s" ex.Message)
-            disposeProc proc cleanupNote
-        | None ->
-            disposeProc proc cleanupNote
+        disposeProc proc cleanupNote
 
     // Post-finally outcome construction.  The outcome is built from
     // the captured body result and the now-final cleanup note.  No

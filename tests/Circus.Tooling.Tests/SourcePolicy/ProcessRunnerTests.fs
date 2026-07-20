@@ -3,6 +3,7 @@ module Circus.Tooling.Tests.SourcePolicy.ProcessRunnerTests
 /// Focused process-runner tests covering every CORRECTION01 invariant.
 
 open System
+open System.Collections.Concurrent
 open System.Diagnostics
 open System.IO
 open System.Threading
@@ -34,6 +35,7 @@ let private resetInjections () =
     InjectWaitFailure             <- fun () -> None
     InjectDrainFailure            <- fun () -> None
     InjectDisposeFailure          <- fun () -> None
+    ObserveStartedPid             <- ignore
 
 let private withInjection<'a>
     (setHooks : unit -> unit)
@@ -58,11 +60,12 @@ let private outcomeSummary (r: TextResult) : string =
 let tests =
     // ``testSequenced`` is required because several tests mutate the
     // ``Inject*`` failure-injection hooks (process-runner-level
-    // ``mutable internal`` functions).  Running tests in parallel
-    // would let one test's injected state leak into another and
-    // produce spurious SpawnFailure / BodyFailure outcomes.  Sequential
-    // execution guarantees that ``resetInjections`` runs to completion
-    // before the next test begins.
+    // ``mutable internal`` functions) and the ``ObserveStartedPid``
+    // observation hook.  Running tests in parallel would let one
+    // test's injected state leak into another and produce spurious
+    // SpawnFailure / BodyFailure outcomes.  Sequential execution
+    // guarantees that ``resetInjections`` runs to completion before
+    // the next test begins.
     testSequenced <| testList "Process runner" [
         // -------------------------------------------------------------------
         // Host dependency honesty: a missing bash is reported as skipped,
@@ -278,24 +281,32 @@ let tests =
                 | o -> failtestf "expected SpawnFailure, got %A" o
             }
 
-            test "injected startAsync access failure still releases the started process" {
+            // The context-construction leak test now requires ObserveStartedPid
+            // to capture the PID before the bracket releases the process.
+            // The test FAILS if no PID was observed, instead of silently
+            // passing because ``r.Pid`` is ``None`` in the cleanup branch.
+            test "injected startAsync access failure captures the started PID and releases it" {
+                let observedPids = ConcurrentQueue<int>()
                 let r =
                     withInjection
                         (fun () ->
+                            ObserveStartedPid <- observedPids.Enqueue
                             InjectStartAsyncAccessFailure <- fun () ->
                                 Some (InvalidOperationException("injected-context-failure") :> exn))
                         (fun () ->
                             runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
-                // The started process must NOT linger.
-                match r.Pid with
-                | Some pid ->
-                    Thread.Sleep(250)
-                    Expect.isFalse (isPidAlive pid) "started process must be released"
-                | None -> ()
+                // Exactly one PID must have been observed (the one the
+                // bracket released).  If this is zero the runner never
+                // reached ``Process.Id`` and the test must fail loudly.
+                Expect.isGreaterThan (observedPids.Count) 0 "expected at least one observed PID"
                 match r.Outcome with
                 | SpawnFailure _
                 | BodyFailure _ -> ()
                 | o -> failtestf "expected SpawnFailure/BodyFailure, got %A" o
+                // Every observed PID must have been reaped by the OS.
+                for pid in observedPids do
+                    Thread.Sleep(250)
+                    Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
             }
 
             test "injected wait failure produces BodyFailure and releases the process" {
@@ -317,7 +328,12 @@ let tests =
                 | None -> ()
             }
 
-            test "injected drain failure produces BodyFailure and releases the process" {
+            // The drain-stage failure injection now exercises the
+            // settleDrain path: the in-flight drain task must be joined
+            // (boundedly) BEFORE the outcome is constructed, so the
+            // cleanup note records either "stdout drain settled with
+            // error" or "did not settle within" — not silence.
+            test "injected drain failure produces BodyFailure with drain-settle note" {
                 let r =
                     withInjection
                         (fun () ->
@@ -336,7 +352,11 @@ let tests =
                 | None -> ()
             }
 
-            test "injected dispose failure records note but outcome is still structured" {
+            // Real disposal-failure injection: disposeProc itself honours
+            // InjectDisposeFailure and records the note instead of calling
+            // the real ``Process.Dispose``.  The outcome remains structured
+            // and the cleanup note contains the injected exception message.
+            test "injected dispose failure is captured by disposeProc without calling real Dispose" {
                 let r =
                     withInjection
                         (fun () ->
@@ -347,7 +367,7 @@ let tests =
                 match r.Outcome with
                 | Exited (0, note)
                 | NonzeroExit (_, note) ->
-                    Expect.stringContains note "dispose injected failure" "dispose note recorded"
+                    Expect.stringContains note "dispose injected failure" "dispose note recorded by disposeProc"
                 | o -> failtestf "expected Exited/NonzeroExit with dispose note, got %A" o
             }
 
