@@ -265,9 +265,8 @@ let tests =
                             runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
                 Expect.isGreaterThan (observedPids.Count) 0 "expected at least one observed PID"
                 match r.Outcome with
-                | SpawnFailure _
                 | BodyFailure _ -> ()
-                | o -> failtestf "expected SpawnFailure/BodyFailure, got %A" o
+                | o -> failtestf "expected BodyFailure (NOT SpawnFailure, since Process.Start already succeeded), got %A" o
                 for pid in observedPids do
                     Thread.Sleep(250)
                     Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
@@ -276,7 +275,7 @@ let tests =
             // Partial-acquisition injection #1: stdout drain was created
             // before the throw.  The partial bracket must settle that
             // drain boundedly before propagating the error.
-            test "injected startAsync stdout-drain failure settles the created stdout drain" {
+            test "injected startAsync stdout-drain failure settles the created stdout drain with RanToCompletion" {
                 let observedPids = ConcurrentQueue<int>()
                 let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
                 let r =
@@ -292,19 +291,24 @@ let tests =
                 // The created stdout drain must be terminal after the
                 // partial-acquisition bracket runs settleDrainsShared.
                 Expect.isTrue (!stdoutTask).IsCompleted "partial stdout drain must be terminal"
+                Expect.equal (!stdoutTask).Status TaskStatus.RanToCompletion "partial stdout drain must be RanToCompletion"
+                // Post-``Process.Start`` failure with clean drain
+                // settlement must classify as BodyFailure (NOT
+                // SpawnFailure — the spawn itself succeeded).
                 match r.Outcome with
-                | SpawnFailure _
-                | BodyFailure _
-                | CleanupFailure _ -> ()
-                | o -> failtestf "expected SpawnFailure/BodyFailure/CleanupFailure, got %A" o
+                | BodyFailure _ -> ()
+                | o -> failtestf "expected BodyFailure (post-Start failure with clean settlement), got %A" o
                 for pid in observedPids do
                     Thread.Sleep(250)
                     Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
             }
 
             // Partial-acquisition injection #2: both drains were created
-            // before the throw.  Both must be terminal.
-            test "injected startAsync observer failure settles both created drain tasks" {
+            // before the throw.  Both must be terminal with
+            // RanToCompletion, and stderr must NOT be classified as
+            // a timeout (the second-pass settle check ensures stderr
+            // is inspected even when the shared deadline is exhausted).
+            test "injected startAsync observer failure settles both created drains with RanToCompletion" {
                 let observedPids = ConcurrentQueue<int>()
                 let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
                 let stderrTask = ref Unchecked.defaultof<Task<Result<string, exn>>>
@@ -321,11 +325,12 @@ let tests =
                 Expect.isGreaterThan (observedPids.Count) 0 "expected at least one observed PID"
                 Expect.isTrue (!stdoutTask).IsCompleted "partial stdout drain must be terminal"
                 Expect.isTrue (!stderrTask).IsCompleted "partial stderr drain must be terminal"
+                Expect.equal (!stdoutTask).Status TaskStatus.RanToCompletion "partial stdout drain must be RanToCompletion"
+                Expect.equal (!stderrTask).Status TaskStatus.RanToCompletion "partial stderr drain must be RanToCompletion"
                 match r.Outcome with
-                | SpawnFailure _
-                | BodyFailure _
-                | CleanupFailure _ -> ()
-                | o -> failtestf "expected SpawnFailure/BodyFailure/CleanupFailure, got %A" o
+                | BodyFailure _ -> ()
+                | CleanupFailure _ -> ()  // Either is acceptable; both are truthful
+                | o -> failtestf "expected BodyFailure/CleanupFailure, got %A" o
                 for pid in observedPids do
                     Thread.Sleep(250)
                     Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
@@ -369,10 +374,6 @@ let tests =
                 | None -> ()
             }
 
-            // Long-running child + injected wait failure.  Both drain
-            // tasks must reach a terminal state by the time runCore
-            // returns, mechanically proving the kill-then-settle
-            // cleanup order.
             test "injected wait failure on long-running child leaves both drain tasks terminal" {
                 let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
                 let stderrTask = ref Unchecked.defaultof<Task<Result<string, exn>>>
@@ -389,12 +390,12 @@ let tests =
                 | BodyFailure (detail, _) ->
                     Expect.stringContains detail "injected-wait-failure" "wait note propagated"
                 | CleanupFailure detail ->
-                    Expect.stringContains detail "drain timed out" "drain timeout promoted to CleanupFailure"
+                    Expect.stringContains detail "drain" "drain timeout promoted to CleanupFailure"
                 | o -> failtestf "expected BodyFailure or CleanupFailure, got %A" o
                 Expect.isTrue (!stdoutTask).IsCompleted "stdout drain task must be terminal"
                 Expect.isTrue (!stderrTask).IsCompleted "stderr drain task must be terminal"
-                Expect.equal (!stdoutTask).Status TaskStatus.RanToCompletion "stdout drain RanToCompletion"
-                Expect.equal (!stderrTask).Status TaskStatus.RanToCompletion "stderr drain RanToCompletion"
+                Expect.equal (!stdoutTask).Status TaskStatus.RanToCompletion "stdout drain must be RanToCompletion"
+                Expect.equal (!stderrTask).Status TaskStatus.RanToCompletion "stderr drain must be RanToCompletion"
                 match r.Pid with
                 | Some pid ->
                     Thread.Sleep(250)
