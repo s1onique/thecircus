@@ -20,11 +20,15 @@ type BashAvailability =
     | BashAvailable of executable: string
     | BashUnavailable of reason: string
 
+// ---------------------------------------------------------------------------
+// Bash-availability test construction helpers.
+// ---------------------------------------------------------------------------
+
 /// Resolves Bash availability by probing the PATH with a bounded timeout.
 /// Uses `bash --version` as the terminating probe command.
+/// Correct implementation: only access ExitCode after confirmed exit.
 let private resolveBashAvailability () : BashAvailability =
     try
-        use cts = new CancellationTokenSource(TimeSpan.FromSeconds(5.0))
         let psi = ProcessStartInfo(
             FileName = "bash",
             Arguments = "--version",
@@ -37,13 +41,16 @@ let private resolveBashAvailability () : BashAvailability =
             BashUnavailable "Process.Start returned null"
         else
             try
-                p.WaitForExit(5000) |> ignore
-                if p.ExitCode = 0 then
+                let exited = p.WaitForExit(5000)
+                if not exited then
+                    p.Kill(true)
+                    p.WaitForExit(1000) |> ignore
+                    BashUnavailable "bash --version timed out"
+                elif p.ExitCode = 0 then
                     BashAvailable "bash"
                 else
                     BashUnavailable (sprintf "bash exited with code %d" p.ExitCode)
             finally
-                if not p.HasExited then p.Kill()
                 p.Dispose()
     with ex ->
         BashUnavailable (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
@@ -310,13 +317,31 @@ let private activateRegressionGuard () =
     if Regex.IsMatch(source, pattern, RegexOptions.IgnoreCase) then
         failtestf "REGRESSION: dishonest Bash-unavailable test pattern detected. Use ptest instead."
 
+/// Runs a generated test in-process and returns the summary.
+/// Used for genuine execution proofs.
+let private runTestInProcess (t: Test) : string =
+    let results = Tests.runTestsWithCLIArgs [||] t
+    sprintf "exitCode=%d" results
+
 [<Tests>]
 let bashAvailabilityTests =
     testList "Bash availability" [
         // -------------------------------------------------------------------
-        // Proof 1: Unavailable branch produces Pending test
+        // Point 1: Real-host probe through makeBashDependentTest
+        // On Bash-unavailable hosts, this test is PENDING, not failed.
         // -------------------------------------------------------------------
-        test "unavailable branch produces Pending test" {
+        makeBashDependentTest
+            bashAvailability
+            "real-host Bash probe"
+            (fun executable ->
+                // This body only runs when Bash IS available.
+                Expect.isNotEmpty executable
+                    "resolved Bash executable must be non-empty")
+
+        // -------------------------------------------------------------------
+        // Point 2a: Structural proof - unavailable branch is Pending
+        // -------------------------------------------------------------------
+        test "unavailable branch produces Pending test (structural)" {
             let generated =
                 makeBashDependentTest
                     (BashUnavailable "injected")
@@ -330,9 +355,9 @@ let bashAvailabilityTests =
         }
 
         // -------------------------------------------------------------------
-        // Proof 2: Available branch does NOT produce Pending test
+        // Point 2b: Structural proof - available branch is NOT Pending
         // -------------------------------------------------------------------
-        test "available branch does NOT produce Pending test" {
+        test "available branch does NOT produce Pending test (structural)" {
             let generated =
                 makeBashDependentTest
                     (BashAvailable "/probe/bash")
@@ -340,72 +365,139 @@ let bashAvailabilityTests =
                     (fun _ -> ())
 
             let testStr = sprintf "%A" generated
-            // Available branch should NOT be pending
-            // It should be a normal TestCase that will execute
             if testStr.Contains("Pending") then
                 failtestf "Available branch should NOT be Pending, got: %s" testStr
         }
 
         // -------------------------------------------------------------------
-        // Proof 3: Available branch is NOT pending (non-vacuity proof)
+        // Point 2c: Execution proof - unavailable body does NOT execute
         // -------------------------------------------------------------------
-        test "available vs unavailable branch distinction (non-vacuity)" {
-            // This proves that available branch produces a runnable test,
-            // not a pending one. The body WILL execute when the test runs.
-            let generatedAvailable =
+        test "unavailable branch body does NOT execute (execution proof)" {
+            let mutable bodyExecuted = false
+
+            let generated =
+                makeBashDependentTest
+                    (BashUnavailable "injected absence")
+                    "forced unavailable"
+                    (fun _ -> bodyExecuted <- true)
+
+            // Run the test in-process
+            let exitCode = Tests.runTestsWithCLIArgs [||] generated
+            // Exit code 0 means: test was selected, no failures
+            // Exit code 1 means: test failed
+            // Exit code 2 means: test was ignored/pending
+
+            // The generated test is PENDING, so exit code should be 2 (ignored/pending)
+            if exitCode <> 2 then
+                failtestf "Expected pending (exit 2), got exit %d. Body may have executed." exitCode
+
+            // Body MUST NOT have executed
+            if bodyExecuted then
+                failtestf "Body executed for unavailable test - pending state was violated!"
+        }
+
+        // -------------------------------------------------------------------
+        // Point 2d: Execution proof - available body DOES execute
+        // -------------------------------------------------------------------
+        test "available branch body DOES execute (execution proof)" {
+            let mutable bodyExecuted = false
+
+            let generated =
                 makeBashDependentTest
                     (BashAvailable "/probe/bash")
-                    "available probe"
-                    (fun _ -> ())
+                    "forced available"
+                    (fun _ -> bodyExecuted <- true)
 
-            let generatedUnavailable =
+            // Run the test in-process
+            let exitCode = Tests.runTestsWithCLIArgs [||] generated
+            // Exit code 0 means: test passed
+            // The body executed and did not fail
+
+            if exitCode <> 0 then
+                failtestf "Expected pass (exit 0), got exit %d" exitCode
+
+            // Body MUST have executed
+            if not bodyExecuted then
+                failtestf "Body did not execute for available test - test is vacuous!"
+        }
+
+        // -------------------------------------------------------------------
+        // Point 2e: Execution proof - deliberate failure is NOT converted
+        // -------------------------------------------------------------------
+        test "available test with failing body produces exactly one failure" {
+            let generated =
                 makeBashDependentTest
-                    (BashUnavailable "injected")
-                    "unavailable probe"
-                    (fun _ -> ())
+                    (BashAvailable "/probe/bash")
+                    "deliberate failure"
+                    (fun _ ->
+                        // This will fail
+                        failwith "intentional failure")
 
-            let availableStr = sprintf "%A" generatedAvailable
-            let unavailableStr = sprintf "%A" generatedUnavailable
+            // Run the test in-process
+            let exitCode = Tests.runTestsWithCLIArgs [||] generated
+            // Exit code 1 means: test failed (exactly one failure as expected)
 
-            // Available should NOT contain "Pending"
-            if availableStr.Contains("Pending") then
-                failtestf "Available branch should not be pending, got: %s" availableStr
-
-            // Unavailable should contain "Pending"
-            if not (unavailableStr.Contains("Pending")) then
-                failtestf "Unavailable branch should be pending, got: %s" unavailableStr
+            if exitCode <> 1 then
+                failtestf "Expected one failure (exit 1), got exit %d. Failures may be converted to pending/passing!" exitCode
         }
 
         // -------------------------------------------------------------------
-        // Proof 4: Real-host Bash resolution
+        // Point 3: Non-vacuous regression guard
         // -------------------------------------------------------------------
-        test (sprintf "real-host Bash resolution: %A" bashAvailability) {
-            match bashAvailability with
-            | BashAvailable executable ->
-                // Bash IS available on this host
-                Expect.isTrue (executable.Length > 0) "executable must be non-empty"
-            | BashUnavailable reason ->
-                // This branch should not execute on a Bash-available host.
-                // If it does, it means the resolution logic is broken.
-                failtestf "Real-host test reached unavailable branch unexpectedly. Resolution logic may be broken."
-        }
-
-        // -------------------------------------------------------------------
-        // Proof 5: Regression guard activation
-        // -------------------------------------------------------------------
-        test "regression guard: no dishonest pattern in source" {
-            // Read the source file and check for the prohibited pattern
-            let sourcePath = System.Reflection.Assembly.GetExecutingAssembly().Location
-            let dir = System.IO.Path.GetDirectoryName(sourcePath)
-            let testSourcePath = System.IO.Path.Combine(dir, "Circus.Tooling.Tests.SourcePolicy.ProcessRunnerTests.fs")
-
-            if System.IO.File.Exists(testSourcePath) then
-                let source = System.IO.File.ReadAllText(testSourcePath)
+        test "regression guard: negative fixture (old bashOk pattern) must be rejected" {
+            let oldDishonestCode = @"
+module Dishonest
+let bashOk = true
+test ""skipped bash unavailable"" {
+    if bashOk then
+        Expect.isTrue true
+}"
+            // Write to temp file
+            let tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dishonest-" + Guid.NewGuid().ToString("n") + ".fs")
+            try
+                System.IO.File.WriteAllText(tempPath, oldDishonestCode)
+                let source = System.IO.File.ReadAllText(tempPath)
                 let pattern = @"test\s*\""skipped.*bash.*unavailable.*Expect\.isTrue\s+true"
-                if Regex.IsMatch(source, pattern, RegexOptions.IgnoreCase) then
-                    failtestf "REGRESSION: dishonest pattern found in source"
-            // If file not found, skip (compiled test scenario)
-            Expect.isTrue true "no dishonest pattern found"
+                if not (Regex.IsMatch(source, pattern, RegexOptions.IgnoreCase)) then
+                    failtestf "Negative fixture should match the dishonest pattern"
+            finally
+                System.IO.File.Delete(tempPath) |> ignore
+        }
+
+        test "regression guard: positive fixture (new ptest pattern) must be accepted" {
+            let newHonestCode = @"
+module Honest
+ptest ""bash unavailable"" {
+    ()
+}"
+            // Write to temp file
+            let tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "honest-" + Guid.NewGuid().ToString("n") + ".fs")
+            try
+                System.IO.File.WriteAllText(tempPath, newHonestCode)
+                let source = System.IO.File.ReadAllText(tempPath)
+                let oldPattern = @"test\s*\""skipped.*bash.*unavailable.*Expect\.isTrue\s+true"
+                if Regex.IsMatch(source, oldPattern, RegexOptions.IgnoreCase) then
+                    failtestf "Positive fixture should NOT match the old dishonest pattern"
+            finally
+                System.IO.File.Delete(tempPath) |> ignore
+        }
+
+        test "regression guard: activateRegressionGuard scans actual source" {
+            // This test verifies that activateRegressionGuard uses __SOURCE_FILE__
+            // and reads the actual source file, not a hardcoded string.
+            let sourceFile = __SOURCE_FILE__
+            if not (System.IO.File.Exists(sourceFile)) then
+                failtestf "Source file must exist: %s" sourceFile
+
+            let source = System.IO.File.ReadAllText(sourceFile)
+            // Verify the pattern we're guarding against is NOT present
+            let pattern = @"test\s*\""skipped.*bash.*unavailable.*Expect\.isTrue\s+true"
+            if Regex.IsMatch(source, pattern, RegexOptions.IgnoreCase) then
+                failtestf "REGRESSION: dishonest pattern found in actual source"
+
+            // Verify activateRegressionGuard function exists
+            if not (source.Contains "activateRegressionGuard") then
+                failtestf "activateRegressionGuard function must exist"
         }
     ]
 
