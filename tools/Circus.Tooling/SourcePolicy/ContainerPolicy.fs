@@ -14,7 +14,7 @@ open System
 open System.IO
 open System.Text.RegularExpressions
 
-open Circus.Tooling.SourcePolicy.GateSummary
+open Circus.Tooling.SourcePolicy.Inventory
 
 exception CheckFailed of string
 
@@ -59,19 +59,6 @@ let private isExecutable (root: string) (relative: string) : bool =
         (info.UnixFileMode &&& UnixFileMode.UserExecute) <> UnixFileMode.None
     with _ -> false
 
-let private requireContains (root: string) (relative: string) (id: string) (marker: string) (msg: string) : Violation list =
-    match readTextOpt root relative with
-    | None -> [ { Check = id; Id = id; Path = relative; Detail = sprintf "%s (file missing)" msg } ]
-    | Some text when not (text.Contains marker) ->
-        [ { Check = id; Id = id; Path = relative; Detail = sprintf "%s (missing marker: %s)" msg marker } ]
-    | _ -> []
-
-let private requireAbsent (root: string) (relative: string) (id: string) (marker: string) (msg: string) : Violation list =
-    match readTextOpt root relative with
-    | Some text when text.Contains marker ->
-        [ { Check = id; Id = id; Path = relative; Detail = sprintf "%s (forbidden marker present: %s)" msg marker } ]
-    | _ -> []
-
 let private requireFile (root: string) (relative: string) (id: string) : Violation list =
     if pathExists root relative then []
     else [ { Check = id; Id = id; Path = relative; Detail = sprintf "required file missing: %s" relative } ]
@@ -82,24 +69,6 @@ let private requireExecutable (root: string) (relative: string) (id: string) : V
     elif not (isExecutable root relative) then
         [ { Check = id; Id = id; Path = relative; Detail = sprintf "required shell script is not executable: %s" relative } ]
     else []
-
-/// Outcome of enumerating the tracked file inventory.  ``Ok`` carries
-/// the relative paths; ``Error`` carries the git exit code (which
-/// the policy runner must treat as an operational failure, not a
-/// policy pass — see CP-29).
-type TrackedInventory =
-    | TrackedFiles of string list
-    | TrackedInventoryFailed of exitCode: int
-
-/// Tracked-file inventory used by container-policy (CP-29).  The
-/// underlying helper in ``GateSummary.fs`` is the single source of
-/// truth: it uses NUL-delimited ``git ls-files -z`` so file paths
-/// with newlines are handled correctly, and it surfaces Git
-/// failures as ``Error`` rather than an empty list.
-let gitTrackedFiles (root: string) : TrackedInventory =
-    match gitTrackedFilesResult root with
-    | Ok files -> TrackedFiles files
-    | Error code -> TrackedInventoryFailed code
 
 /// CP-01: required files must exist
 let private checkRequiredFiles (root: string) : Violation list =
@@ -165,7 +134,6 @@ let private checkWorkflowTriggers (root: string) : Violation list =
     let text = readText root ".github/workflows/harbor.yml"
     let mutable violations : Violation list = []
     for trigger in required do
-        // Match both `  trigger:` and the YAML 1.1 boolean-on quirk
         let pattern = sprintf "^\s*%s\s*:" trigger
         if not (Regex(pattern, RegexOptions.Multiline).IsMatch text) then
             violations <- { Check = "CP-04_workflow_triggers"
@@ -715,7 +683,6 @@ let private checkTrackedSecrets (root: string) : Violation list =
 /// CP-30: final-stage runtime-material exclusions
 let private checkFinalStageExclusions (root: string) : Violation list =
     let frontend = readText root "Dockerfile.frontend"
-    // Find the last `FROM ... AS runtime` (or the last unaliased `FROM`).
     let matches = Regex.Matches(frontend, "^FROM\\s+\\S+(?:\\s+AS\\s+runtime)?\\s*$", RegexOptions.Multiline ||| RegexOptions.IgnoreCase)
     let finalStage =
         if matches.Count > 0 then
@@ -748,14 +715,12 @@ let private checkGateSummaryAcceptance (root: string) : Violation list =
                             Id = "CP-31_acceptance_marker"
                             Path = "tests/ci/test_gate_summary_acceptance.sh"
                             Detail = sprintf "gate-summary acceptance test is missing required marker: %s" marker } :: violations
-    // Canonical Leamas v1 vocabulary must appear in the acceptance test.
     for vocab in [ "pass"; "fail"; "skip"; "unavailable" ] do
         if not (acceptanceText.Contains vocab) then
             violations <- { Check = "CP-31_acceptance_vocab"
                             Id = "CP-31_acceptance_vocab"
                             Path = "tests/ci/test_gate_summary_acceptance.sh"
                             Detail = sprintf "gate-summary acceptance test must reference canonical status: %s" vocab } :: violations
-    // The acceptance test must exercise both PUBLISH=true and PUBLISH=false branches
     let shellTest = readText root "tests/ci/test_build_publish_shell.sh"
     if not (shellTest.Contains "PUBLISH=true") || not (shellTest.Contains "PUBLISH=false") then
         violations <- { Check = "CP-31_publish_branch_coverage"
@@ -836,8 +801,6 @@ let verify (root: string) : ContainerPolicyReport =
             passed <- passed + 1
         else
             failedChecks <- failedChecks + 1
-            // Treat CP-29 Git inventory failure as an operational
-            // error that the runner must surface as exit 2.
             if id = "CP-29_tracked_secrets" &&
                List.exists (fun x -> x.Detail.Contains "git ls-files failed") v then
                 operational <- "CP-29 git inventory failed (cannot prove the secret scan is complete)" :: operational
@@ -852,8 +815,6 @@ let verify (root: string) : ContainerPolicyReport =
 let runVerify (root: string) : int =
     try
         let report = verify root
-        // Operational failures (e.g. git inventory failure) are
-        // exit 2: they cannot be proved safe by the policy itself.
         if not (List.isEmpty report.OperationalFailures) then
             stderr.WriteLine(sprintf "container-policy verify: FAIL (operational: %d)" (List.length report.OperationalFailures))
             for op in report.OperationalFailures do

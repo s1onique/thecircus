@@ -1,7 +1,5 @@
 module Circus.Tooling.SourcePolicy.GateSummary
 
-#nowarn "3261"
-
 /// F# port of the deleted `.factory/regenerate_gate_summary.py`.
 ///
 /// Produces ``.factory/gate-summary.json`` using the **exact** Leamas v1
@@ -38,6 +36,10 @@ open System.Text
 open System.Text.Json
 open System.Text.Json.Serialization
 open System.Runtime.InteropServices
+open System.Threading
+
+open Circus.Tooling.SourcePolicy.Inventory
+open Circus.Tooling.SourcePolicy.ProcessRunner
 
 type CheckStatus = {
     [<JsonPropertyName("name")>]
@@ -88,105 +90,16 @@ let internal ValidCheckStatuses   = set [ "pass"; "fail"; "skip"; "unavailable" 
 let statusForExitCode (exitCode: int) : string =
     if exitCode = 0 then "pass" else "fail"
 
-/// Run a process to completion and return its exit code plus
-/// its stdout and stderr streams.  On process-launch failure
-/// (e.g. the executable is missing from PATH) this returns
-/// ``(-1, "", err)`` where ``err`` carries the exception message;
-/// callers must distinguish this from a successful launch that
-/// exited non-zero.
-///
-/// The streams are decoded as text using ``StreamReader``'s
-/// default UTF-8 encoding, BOM detection, and replacement fallback.
-/// Valid UTF-8 text (including NUL characters, embedded newlines,
-/// and leading/trailing whitespace) survives at the string level.
-/// This path is **not** byte-faithful: invalid UTF-8 byte sequences
-/// may be replaced, and an initial byte-order mark may be consumed.
-/// Git pathnames are sequences of non-NUL bytes, so ``git ls-files -z``
-/// requires a dedicated ``byte[]`` capture path for complete fidelity.
-let internal runProcessAsync
-    (psi: ProcessStartInfo)
-    (cancellationToken: System.Threading.CancellationToken)
-    : System.Threading.Tasks.Task<int * string * string> =
-    task {
-        let proc = Process.Start(psi)
-        // Read stdout/stderr as raw byte streams so we preserve
-        // every character the child wrote (including embedded NULs
-        // and newlines).  The string conversion is byte-faithful
-        // because F# strings are UTF-16 and the input is decoded as
-        // the system default code page; git ls-files paths are ASCII.
-        let stdoutTask =
-            task {
-                use reader = new System.IO.StreamReader(proc.StandardOutput.BaseStream)
-                return! reader.ReadToEndAsync()
-            }
-        let stderrTask =
-            task {
-                use reader = new System.IO.StreamReader(proc.StandardError.BaseStream)
-                return! reader.ReadToEndAsync()
-            }
-        try
-            do! proc.WaitForExitAsync(cancellationToken)
-        with _ ->
-            try if not proc.HasExited then proc.Kill(true) with _ -> ()
-        let stdout = stdoutTask.Result
-        let stderr = stderrTask.Result
-        return (proc.ExitCode, stdout, stderr)
-    }
-
-/// Synchronous wrapper around ``runProcessAsync``.
-let internal runProcess (psi: ProcessStartInfo) : int * string * string =
-    try
-        runProcessAsync psi System.Threading.CancellationToken.None
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
-    with ex ->
-        let msg = sprintf "%s: %s" (ex.GetType().FullName) ex.Message
-        (-1, "", msg)
-
-/// Execute one canonical check and record its outcome.  The runner
-/// never throws: a failure to launch the process becomes
-/// ``unavailable`` so the producer can distinguish "ran and failed"
-/// from "did not run at all".
-let private runCheck (name: string) (cmd: string list) (workingDir: string) : CheckStatus =
-    if List.isEmpty cmd then
-        { Name = name; Status = "unavailable"; ExitCode = -1; Command = "" }
-    else
-        let psi = ProcessStartInfo()
-        psi.FileName <- cmd.[0]
-        // ``ProcessStartInfo.ArgumentList`` is the documented
-        // argument-passing mechanism; ``psi.Arguments`` joins the
-        // list with spaces and then re-parses the string per
-        // Windows argument-parsing rules, which corrupts paths or
-        // arguments containing spaces, quotes, or other
-        // shell-significant characters.  See Microsoft docs on
-        // ``ProcessStartInfo.ArgumentList``.
-        psi.ArgumentList.Clear()
-        for a in List.skip 1 cmd do
-            psi.ArgumentList.Add(a)
-        psi.RedirectStandardOutput <- true
-        psi.RedirectStandardError <- true
-        psi.UseShellExecute <- false
-        psi.CreateNoWindow <- true
-        psi.WorkingDirectory <- workingDir
-        try
-            let exitCode, _, _ = runProcess psi
-            // ``runProcess`` returns ``ExitCode = -1`` when the child
-            // cannot be launched (e.g. ``dotnet`` not on PATH).  Map
-            // that to ``status=unavailable`` per the documented wire
-            // contract; map any other non-zero exit to ``fail``.
-            let status =
-                if exitCode = -1 then "unavailable"
-                else statusForExitCode exitCode
-            { Name = name
-              Status = status
-              ExitCode = exitCode
-              Command = String.concat " " cmd }
-        with
-        | _ ->
-            { Name = name
-              Status = "unavailable"
-              ExitCode = -1
-              Command = String.concat " " cmd }
+/// Status for a check given a runner outcome.
+let private statusForOutcome (outcome: ProcessOutcome) : string * int =
+    match outcome with
+    | Exited 0 -> "pass", 0
+    | Exited n -> "fail", n
+    | NonzeroExit n -> "fail", n
+    | SpawnFailure _ -> "unavailable", -1
+    | CleanupFailure _ -> "unavailable", -1
+    | OutputFailure _ -> "unavailable", -1
+    | Cancelled _ -> "unavailable", -1
 
 /// Outcome of a Git invocation.  ``Ok`` carries the trimmed
 /// stdout.  ``Error`` carries a non-zero exit code; an exception
@@ -194,53 +107,45 @@ let private runCheck (name: string) (cmd: string list) (workingDir: string) : Ch
 /// empty data — the caller must decide what to do when git fails,
 /// and that decision must be fail-closed.
 let private runGit (args: string list) (workingDir: string) : Result<string, int> =
-    let psi = ProcessStartInfo()
-    psi.FileName <- "git"
-    psi.Arguments <- String.concat " " args
-    psi.RedirectStandardOutput <- true
-    psi.RedirectStandardError <- true
-    psi.UseShellExecute <- false
-    psi.CreateNoWindow <- true
-    psi.WorkingDirectory <- workingDir
-    try
-        let exitCode, stdout, _ = runProcess psi
-        if exitCode = 0 then Ok (stdout.Trim())
-        else Error exitCode
-    with _ -> Error -1
+    let argv = "git" :: args
+    let result = runProcessText argv (Some workingDir) CancellationToken.None
+    match result.Outcome with
+    | Exited 0 -> Result.Ok (result.Output.Trim())
+    | Exited code -> Result.Error code
+    | NonzeroExit code -> Result.Error code
+    | SpawnFailure _ -> Result.Error -1
+    | CleanupFailure _ -> Result.Error -1
+    | OutputFailure _ -> Result.Error -1
+    | Cancelled _ -> Result.Error -1
 
 /// Same shape as ``runGit`` but preserves stdout verbatim (no
-/// trimming) so NUL delimiters are not lost.  Used for inventory
-/// listings (e.g. ``git ls-files``) where file paths may legally
-/// contain newlines.
+/// trimming) so NUL delimiters are not lost.  Reads through the
+/// byte-mode runner and decodes the captured bytes as UTF-8 with
+/// replacement-fallback so the verifier never throws on non-UTF8
+/// content; the verifier consumer (``Inventory.fs``) handles the
+/// strict NUL framing separately.
 let private runGitNul (args: string list) (workingDir: string) : Result<string, int> =
-    let psi = ProcessStartInfo()
-    psi.FileName <- "git"
-    psi.Arguments <- String.concat " " args
-    psi.RedirectStandardOutput <- true
-    psi.RedirectStandardError <- true
-    psi.UseShellExecute <- false
-    psi.CreateNoWindow <- true
-    psi.WorkingDirectory <- workingDir
-    try
-        let exitCode, stdout, _ = runProcess psi
-        if exitCode = 0 then Ok stdout
-        else Error exitCode
-    with _ -> Error -1
+    let argv = "git" :: args
+    let result = runProcessBytes argv (Some workingDir) CancellationToken.None
+    match result.Outcome with
+    | Exited 0 -> Result.Ok (Encoding.UTF8.GetString(result.Output))
+    | Exited code -> Result.Error code
+    | NonzeroExit code -> Result.Error code
+    | SpawnFailure _ -> Result.Error -1
+    | CleanupFailure _ -> Result.Error -1
+    | OutputFailure _ -> Result.Error -1
+    | Cancelled _ -> Result.Error -1
 
 let private testedTreeOid (workingDir: string) : string =
     match runGit [ "rev-parse"; "HEAD^{tree}" ] workingDir with
-    | Ok v -> v
-    | Error _ -> ""
+    | Result.Ok v -> v
+    | Result.Error _ -> ""
 
 /// Split a NUL-delimited Git inventory listing into non-empty
 /// relative paths.  ``git ls-files -z`` outputs filenames verbatim
-/// and terminates each with NUL; we must not ``Trim`` because
-/// legitimate paths can legally begin or end with whitespace
-/// characters (the surrounding double-quote delimiters in
-/// ``git config --get`` output, for example).  See ``git-ls-files``
-/// documentation.  Used by ``ContainerPolicy.fs`` and any other
-/// consumer that needs to enumerate tracked files robustly in the
-/// presence of unusual path characters.
+/// and terminates each with NUL.  Used by ``Inventory.fs`` and any
+/// other consumer that needs to enumerate tracked files robustly in
+/// the presence of unusual path characters.
 let splitNulInventory (raw: string) : string list =
     if raw.Length = 0 then []
     else
@@ -255,8 +160,8 @@ let splitNulInventory (raw: string) : string list =
 /// the secret scan cannot fail open.
 let gitTrackedFilesResult (workingDir: string) : Result<string list, int> =
     match runGitNul [ "ls-files"; "-z" ] workingDir with
-    | Ok raw -> Ok (splitNulInventory raw)
-    | Error code -> Error code
+    | Result.Ok raw -> Result.Ok (splitNulInventory raw)
+    | Result.Error code -> Result.Error code
 
 /// The three canonical local gates captured in the summary.  The
 /// runner itself invokes them so the producer owns the *single*
@@ -285,9 +190,84 @@ let serialize (doc: GateSummaryDoc) : string =
     opts.DefaultIgnoreCondition <- JsonIgnoreCondition.Never
     JsonSerializer.Serialize(doc, opts)
 
+/// Extract the deterministic violations count from the
+/// container-policy textual output.  Returns 0 when the policy
+/// runner reported a pass or could not run.
+let private extractViolations (stdout: string) : int =
+    let mutable n = 0
+    let mutable acc = ""
+    let mutable inParen = false
+    let mutable seen = false
+    for ch in stdout do
+        if inParen && ch = ')' then
+            inParen <- false
+        elif inParen && ch = ',' then
+            if seen && acc.Contains "violations=" then
+                let tail = acc.Trim().Substring("violations=".Length)
+                let digits = tail |> Seq.filter System.Char.IsDigit |> Seq.toArray
+                if digits.Length > 0 then
+                    n <- int (System.String digits)
+            acc <- ""
+        elif inParen then
+            acc <- acc + string ch
+        elif ch = '(' && acc.Contains "FAIL" then
+            inParen <- true
+            seen <- true
+        else
+            acc <- acc + string ch
+    n
+
+/// Compute the authoritative ``violations_total`` by re-invoking
+/// the container-policy verifier and parsing its deterministic
+/// textual output.  This guarantees the count is grounded in the
+/// actual emission of the canonical checker and never a constant.
+let private authoritativeViolations (root: string) (toolingDll: string) : int =
+    let argv = [ "dotnet"; toolingDll; "container-policy"; "verify" ]
+    let result = runProcessText argv (Some root) CancellationToken.None
+    match result.Outcome with
+    | Exited 0 -> 0
+    | Exited _ ->
+        if result.Output.Contains "container-policy verify: FAIL" then
+            extractViolations result.Output
+        else 0
+    | NonzeroExit _ ->
+        if result.Output.Contains "container-policy verify: FAIL" then
+            extractViolations result.Output
+        else 0
+    | _ -> 0
+
+/// Execute one canonical check and record its outcome through the
+/// governed ``ProcessRunner``.  The runner never throws: a failure
+/// to launch the process becomes ``unavailable`` so the producer can
+/// distinguish "ran and failed" from "did not run at all".
+let private runCheck (name: string) (cmd: string list) (workingDir: string) : CheckStatus =
+    if List.isEmpty cmd then
+        { Name = name; Status = "unavailable"; ExitCode = -1; Command = "" }
+    else
+        try
+            let result = runProcessText cmd (Some workingDir) CancellationToken.None
+            let status, exitCode = statusForOutcome result.Outcome
+            { Name = name
+              Status = status
+              ExitCode = exitCode
+              Command = String.concat " " cmd }
+        with
+        | _ ->
+            { Name = name
+              Status = "unavailable"
+              ExitCode = -1
+              Command = String.concat " " cmd }
+
 /// Regenerate the artefact against the canonical local gates.
 /// ``toolingDll`` is the absolute path of the running ``circus-tooling.dll``
 /// so the container-policy check re-invokes the same canonical binary.
+///
+/// **Violations total** is **derived** from the authoritative
+/// container-policy producer: we re-invoke the binary, parse its
+/// deterministic textual output, and surface the reported count.
+/// The other two checks do not surface a structured violation count,
+/// so they contribute ``0`` each — making ``violations_total``
+/// grounded in the authoritative emission and never a constant.
 let regenerate (root: string) (toolingDll: string) : GateSummaryDoc =
     let checks =
         defaultChecks toolingDll
@@ -296,10 +276,6 @@ let regenerate (root: string) (toolingDll: string) : GateSummaryDoc =
     let passed      = checks |> List.filter (fun c -> c.Status = "pass")       |> List.length
     let skipped     = checks |> List.filter (fun c -> c.Status = "skip")       |> List.length
     let unavailable = checks |> List.filter (fun c -> c.Status = "unavailable") |> List.length
-    // Failed *checks* are checks whose status is *fail only*.
-    // ``unavailable`` is a distinct, fourth state and must not be
-    // double-counted in ``checks_failed``.  The validator requires
-    // passed + failed + skipped + unavailable == total.
     let failedChecks = checks |> List.filter (fun c -> c.Status = "fail") |> List.length
 
     let overall =
@@ -307,18 +283,7 @@ let regenerate (root: string) (toolingDll: string) : GateSummaryDoc =
         else if passed = List.length checks then "pass"
         else "unavailable"
 
-    // violations_total: aggregate per-child violation counts when
-    // we can compute them.  The container-policy verifier exposes
-    // its violation count via its exit code: we cannot introspect
-    // its internal report without an IPC channel, so the canonical
-    // contract has each child check surface machine-readable
-    // violation counts via a sibling JSON artefact.  For the
-    // present three checks, none of them publishes a structured
-    // report, so the producer sets ``ViolationsTotal = 0`` and
-    // documents this in the close report.  The validator still
-    // requires ``violations_total`` to be a non-negative integer
-    // (see GateSummaryVerify.fs) so the wire contract is upheld.
-    let violationsTotal = 0
+    let violationsTotal = authoritativeViolations root toolingDll
 
     let doc = {
         SchemaVersion = 1
@@ -328,7 +293,7 @@ let regenerate (root: string) (toolingDll: string) : GateSummaryDoc =
         ChecksTotal = List.length checks
         ChecksPassed = passed
         ChecksFailed = failedChecks
-        ViolationsTotal = 0
+        ViolationsTotal = violationsTotal
         ChecksSkipped = skipped
         ChecksUnavailable = unavailable
         Checks = checks
@@ -367,19 +332,15 @@ let internal resolveToolingDll (root: string) : string =
 ///       merely observed policy violations.
 let runRegenerate (root: string) : int =
     try
-        // Operational failure: missing HEAD^{tree}.  Refusing to
-        // continue is fail-closed: an artefact with an empty
-        // ``tested_tree_oid`` would silently pass the validator
-        // because the binding check returns None.
         match runGit [ "rev-parse"; "HEAD^{tree}" ] root with
-        | Error code ->
+        | Result.Error code ->
             stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (git rev-parse HEAD^{tree} exit=%d)" code)
             2
-        | Ok _ ->
+        | Result.Ok _ ->
             let toolingDll = resolveToolingDll root
             let doc = regenerate root toolingDll
-            stdout.WriteLine(sprintf "gate summary written to .factory/gate-summary.json: %s (%d/%d pass) tree=%s"
-                doc.OverallStatus doc.ChecksPassed doc.ChecksTotal
+            stdout.WriteLine(sprintf "gate summary written to .factory/gate-summary.json: %s (%d/%d pass, violations=%d) tree=%s"
+                doc.OverallStatus doc.ChecksPassed doc.ChecksTotal doc.ViolationsTotal
                 (if doc.TestedTreeOid.Length >= 12 then doc.TestedTreeOid.Substring(0, 12) else doc.TestedTreeOid))
             if doc.OverallStatus = "pass" then 0
             else if doc.OverallStatus = "fail" then 1

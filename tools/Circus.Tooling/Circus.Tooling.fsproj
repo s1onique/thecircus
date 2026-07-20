@@ -24,6 +24,8 @@
     <Compile Include="SourcePolicy\Language.fs" />
     <Compile Include="SourcePolicy\Domain.fs" />
     <Compile Include="SourcePolicy\Paths.fs" />
+    <Compile Include="SourcePolicy\ProcessRunner.fs" />
+    <Compile Include="SourcePolicy\NulInventory.fs" />
     <Compile Include="SourcePolicy\Inventory.fs" />
     <Compile Include="SourcePolicy\LineCounting.fs" />
     <Compile Include="SourcePolicy\Shebang.fs" />
@@ -33,9 +35,10 @@
     <Compile Include="SourcePolicy\Baseline.fs" />
     <Compile Include="SourcePolicy\Verification.fs" />
     <Compile Include="SourcePolicy\JsonReport.fs" />
+    <Compile Include="SourcePolicy\ContainerPolicy.fs" />
+    <Compile Include="SourcePolicy\Parity.fs" />
     <Compile Include="SourcePolicy\GateSummary.fs" />
     <Compile Include="SourcePolicy\GateSummaryVerify.fs" />
-    <Compile Include="SourcePolicy\ContainerPolicy.fs" />
     <Compile Include="SourcePolicy\HumanReport.fs" />
     <Compile Include="SourcePolicy\Cli.fs" />
     <Compile Include="Program.fs" />
