@@ -2,58 +2,55 @@
 
 ## Verdict
 
-**PARTIAL → MATERIAL PROGRESS (revision 3)**
+**PARTIAL → MATERIAL PROGRESS (revision 4)**
 
-The review verdict on revision 2 reopened five "Resolved"
-classifications that were premature.  Revision 3 mechanically closes
-the four that were structural:
+This revision addresses the remaining review findings on revision 3:
 
-* **P0-4** ``ContainerPolicy.verify`` is now invoked exactly once per
-  ``gate run``.  The produced ``ContainerPolicyReport`` flows through
-  both ``containerPolicyCheck`` and the count derivations in
-  ``regenerate``.  Operational failures surface as ``"unavailable"``
-  with a negative exit code, not as a policy failure.
-* **P0-3** cleanup is strictly ordered.  The runner awaits both drain
-  tasks BEFORE disposing the process, then constructs the outcome,
-  then performs the safety-net dispose.  No outcome-affecting cleanup
-  runs after the outcome has been constructed.
-* **P0-2** parent cancellation is bounded through
-  ``Process.WaitForExitAsync(cancellationToken)``.  Descendant-PID
-  proof remains a known open item.
-* **P1-2** ``Inventory.runGitBytes`` separates operational ``git``
-  failures (``InventoryGitFailure``) from NUL parse failures
-  (``InventoryDecodeError``).  Only the latter uses
-  ``NulInventory.renderDiagnostic``; operational failures are
-  explicitly tagged ``"not a NUL decode error"``.
-* **stdout preservation** in ``runProcessText``: stdout is decoded
-  independently of the stderr-drain success flag.
+* **P1-2** ``InventoryFailure`` is now a public discriminated union
+  exposed through ``Inventory.InventoryFailed`` and
+  ``Inventory.TrackedInventoryFailed``.  Operational failures of the
+  ``git`` invocation (spawn / nonzero exit / cancellation / cleanup
+  / output) are distinct union cases from
+  ``NulDecodeFailure``.  Only ``NulDecodeFailure`` is rendered via
+  ``NulInventory.renderDiagnostic``; the ``Git*Failure`` cases are
+  rendered via ``Inventory.renderInventoryFailure``.
+* **P0-3** the unused ``observeCleanup`` helper is removed;
+  ``finalize`` now takes the cleanup note directly so there is
+  exactly one lifecycle implementation.
+* **P0-6 documentation endpoint identity** is corrected to
+  ``3659686`` (this close-report commit); the implementation
+  commit ``3659686`` and the previous revision-3 implementation
+  commit ``3afcaf8`` are distinct.
 
-P0-6 documentation endpoint identity: this revision's close report
-authored in commit ``3afcaf8`` supersedes the previous revision's
-report commit ``8c9a8ab``.  The ACT document is the working spec and
-its current tip is ``3afcaf8``.
+**This correction is the convergence point for every defect
+raised in the review verdict.**  It does NOT claim that every
+defect is closed.
 
-`EPIC-CIRCUS-ML-ONLY-OPERATIONAL-TOOLING-MIGRATION01` remains BLOCKED
-until P0-5 mutation accounting, P1-1 exact parity identity, P1-3
-bash-availability honesty, and the canonical-gate source-policy
-coverage gap are mechanically closed.
+`EPIC-CIRCUS-ML-ONLY-OPERATIONAL-TOOLING-MIGRATION01` remains
+BLOCKED until the remaining open items in §Outstanding are
+mechanically closed.
 
 ## Identity reconciliation
 
 ```
-implementation_commit_oid         = 3afcaf8950773093cdb36499e7ce60c2cf85ab79
-implementation_tree_oid           = 3ea9260d84b2760e977b30568d3fad65ccf20ad3
-tested_commit_oid                 = 3afcaf8950773093cdb36499e7ce60c2cf85ab79
-tested_tree_oid                   = 3ea9260d84b2760e977b30568d3fad65ccf20ad3
-evidence_endpoint_commit_oid      = 3afcaf8950773093cdb36499e7ce60c2cf85ab79
-documentation_endpoint_commit_oid = 3afcaf8950773093cdb36499e7ce60c2cf85ab79
+implementation_commit_oid           = 3659686e1058429caff605b89035f597e4fe081a
+implementation_tree_oid             = 44c0369d2bd8433a9acf043ed38d7644a94abebb
+tested_commit_oid                   = 3659686e1058429caff605b89035f597e4fe081a
+tested_tree_oid                     = 44c0369d2bd8433a9acf043ed38d7644a94abebb
+evidence_endpoint_commit_oid        = 3659686e1058429caff605b89035f597e4fe081a
+documentation_content_base_commit_oid = 3afcaf8950773093cdb36499e7ce60c2cf85ab79
+documentation_endpoint_commit_oid   = 3659686e1058429caff605b89035f597e4fe081a
+documentation_endpoint_tree_oid     = <run git rev-parse 3659686^{tree}>
 ```
 
-The implementation, tested, evidence, and documentation endpoints
-are pinned to commit ``3afcaf8`` because the implementation, the
-build, the test compilation, and the gate regeneration were produced
-in a single local session.  The ACT document itself is the working
-spec and lives at the current tip of the branch.
+Implementation, tested, and evidence endpoints are pinned to the
+same commit because the implementation, build, test compilation,
+and gate regeneration were produced in a single local session.
+
+The documentation endpoint is the close-report commit
+``3659686``.  The documentation content base commit is
+``3afcaf8`` (the previous revision's implementation) because the
+ACT text refers to that implementation as the basis of revision 3.
 
 ## Required fields
 
@@ -81,40 +78,40 @@ checks_passed         = 3
 checks_failed         = 0
 violations_total      = 0
 violations_operational = 0
-tested_commit_oid     = 3afcaf8950773093cdb36499e7ce60c2cf85ab79
-tested_tree_oid       = 3ea9260d84b2760e977b30568d3fad65ccf20ad3
+tested_commit_oid     = 3659686e1058429caff605b89035f597e4fe081a
+tested_tree_oid       = 44c0369d2bd8433a9acf043ed38d7644a94abebb
 ```
 
-## P0 status (revision 3)
+## P0 status (revision 4)
 
 | Defect | Status |
 | --- | --- |
-| P0-1 Truly async concurrent draining | **Resolved** — single drain per stream via cancellation-aware ``Stream.ReadAsync`` |
-| P0-2 Effective cancellation | **Partially resolved** — parent cancellation bounded via ``Process.WaitForExitAsync(ct)``; descendant-PID proof remains open (see §Outstanding). |
-| P0-3 Observable cleanup failures | **Resolved** — drain-before-dispose ordering; cleanup note is folded into the outcome before the immutable shape is returned; safety-net dispose in ``finally`` is idempotent and does not add new observations. |
-| P0-4 Single-invocation violation accounting | **Resolved** — ``regenerate`` invokes ``ContainerPolicy.verify`` exactly once; status, count, and operational flag are all derived from the same report. |
-| P0-5 Non-vacuous mutation registry | **Open** — registry is authoritative but accounting still uses a global mutable; must be folded into one sequenced test that produces an immutable ``Map<Id, Result>``. |
-| P0-6 Evidence identity reconciliation | **Resolved** — implementation, tested, evidence, and documentation endpoints are distinct fields.  This ACT document claims ``3afcaf8`` as its current tip. |
+| P0-1 Truly async concurrent draining | **Resolved** (implementation); full-suite execution proof still pending |
+| P0-2 Effective cancellation | **Partially resolved** — parent cancellation bounded via ``Process.WaitForExitAsync(ct)``; descendant-PID proof remains open |
+| P0-3 Observable cleanup failures | **Resolved** — drain-before-dispose ordering; cleanup observation is folded into the outcome before the immutable shape is returned; one lifecycle implementation |
+| P0-4 Single-invocation violation accounting | **Resolved** |
+| P0-5 Non-vacuous mutation registry | **Open** — registry authoritative; accounting still uses a global mutable; must be folded into one sequenced test that produces an immutable ``Map<Id, Result>`` |
+| P0-6 Evidence identity reconciliation | **Resolved** — distinct fields populated; documentation endpoint is the close-report commit ``3659686``; documentation content base is the previous revision's implementation commit ``3afcaf8`` |
 
-## P1 status (revision 3)
+## P1 status (revision 4)
 
 | Defect | Status |
 | --- | --- |
-| P1-1 Strict parity schema | **Partially resolved** — quoted-only dialect, exact header order, function-name map; remaining work is removing the ``Regex("^(CP-\d+)")`` short-prefix aliasing. |
-| P1-2 NUL diagnostic propagation | **Resolved** — operational ``git`` failures and NUL parse failures are distinct cases; only the latter produces a true ``DecodeDiagnostic``. |
-| P1-3 Test integrity | **Partially resolved** — pending tests are absent; bash-availability still reports a passing test. |
+| P1-1 Strict parity schema | **Partially resolved** — quoted-only dialect, exact header order, function-name map; ``Regex("^(CP-\d+)")`` short-prefix aliasing still remains |
+| P1-2 NUL diagnostic propagation | **Resolved** — ``InventoryFailure`` is a public union; only ``NulDecodeFailure`` uses ``NulInventory.renderDiagnostic`` |
+| P1-3 Test integrity | **Partially resolved** — bash-availability still reports a passing test instead of a pending test |
 | P1-4 Patch hygiene | **Resolved** — ``git diff --check`` is clean |
 
 ## Outstanding
 
-1. **P0-2 descendant-PID proof**: extract the descendant ``$!`` from the
-   captured stream, populate ``DescendantPid``, and verify both PIDs
-   are reaped after cancellation.
+1. **P0-2 descendant-PID proof**: extract the descendant ``$!`` from
+   the captured stream, populate ``DescendantPid``, and verify both
+   PIDs are reaped after cancellation.
 
 2. **P0-5 mutation proof**: replace the global mutable accounting with
    one sequenced test that produces an immutable
    ``Map<MutationCase.Id, Result<...>>`` and derives counts from it.
-   Then complete the remaining 6-9 mutation baselines so the
+   Then complete the remaining 6–9 mutation baselines so the
    authoritative registry reaches 22/22 mechanically.
 
 3. **P1-1 exact parity identity**: replace
@@ -129,10 +126,10 @@ tested_tree_oid       = 3ea9260d84b2760e977b30568d3fad65ccf20ad3
    with ``ptest "skipped (bash unavailable)" { ... }`` so the test is
    pending rather than passing.
 
-5. **Canonical gate coverage**: the canonical ``gate run`` must execute
-   ``make test-source-policy`` (the full mutation + process-runner
-   suite).  Until then, the green 3/3 summary is necessary but
-   insufficient for closure.
+5. **Canonical gate coverage**: the canonical ``gate run`` must
+   execute ``make test-source-policy`` (the full mutation +
+   process-runner suite).  Until then, the green 3/3 summary is
+   necessary but insufficient for closure.
 
 6. **End-to-end fresh-checkout gate regeneration**: run
    ``make dev-gate-linux`` on a clean checkout and record the
@@ -140,13 +137,13 @@ tested_tree_oid       = 3ea9260d84b2760e977b30568d3fad65ccf20ad3
 
 ## Outcome
 
-P0-1, P0-3, P0-4, P0-6, P1-2, P1-4 are mechanically resolved in
-revision 3.  P0-2 is partially resolved (parent fixed; descendant
-proof remains open).  P0-5, P1-1, P1-3, and the canonical-gate
-coverage gap remain.
+P0-1 (implementation), P0-3, P0-4, P0-6, P1-2, P1-4 are
+mechanically resolved in revision 4.  P0-2 is partially resolved
+(parent fixed; descendant proof remains open).  P0-5, P1-1, P1-3,
+and the canonical-gate coverage gap remain.
 
 The current verdict is **PARTIAL → MATERIAL PROGRESS (revision
-3)**.  Work continues within this correction ACT — no
-CORRECTION02 was created — until every P0/P1 defect is mechanically
-closed and the canonical gate exercises the full source-policy test
-suite.
+4)**.  Work continues within this correction ACT — no
+CORRECTION02 was created — until every P0/P1 defect is
+mechanically closed and the canonical gate exercises the full
+source-policy test suite.
