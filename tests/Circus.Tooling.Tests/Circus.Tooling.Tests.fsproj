@@ -19,9 +19,13 @@
     <Compile Include="SourcePolicy/PathsTests.fs" />
     <Compile Include="SourcePolicy/DeterminismTests.fs" />
     <Compile Include="SourcePolicy/CliTests.fs" />
+    <Compile Include="SourcePolicy/NulInventoryTests.fs" />
+    <Compile Include="SourcePolicy/ProcessRunnerTests.fs" />
     <Compile Include="SourcePolicy/GateSummaryTests.fs" />
     <Compile Include="SourcePolicy/GateSummaryVerifyTests.fs" />
     <Compile Include="SourcePolicy/ContainerPolicyTests.fs" />
+    <Compile Include="SourcePolicy/ContainerPolicyMutationTests.fs" />
+    <Compile Include="SourcePolicy/ParityTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

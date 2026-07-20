@@ -1,30 +1,13 @@
 module Circus.Tooling.SourcePolicy.Parity
 
 /// Strict parser and validator for ``factory/container-policy-parity.csv``.
-///
-/// The parity CSV is the canonical ledger mapping every legacy Python
-/// container-policy check to its F# implementation, its positive
-/// test surface, and (now) its **executable negative mutation test**.
-/// This module mechanically verifies the CSV against the
-/// authoritative rule registry so the document can no longer be
-/// trusted as static prose: any drift between the parity ledger
-/// and the rule implementation surfaces as a deterministic
-/// failure.
 
 open System
-open System.Collections.Generic
 open System.IO
 open System.Text
 
 open Circus.Tooling.SourcePolicy.ContainerPolicy
 
-// -----------------------------------------------------------------------------
-// Wire shape
-// -----------------------------------------------------------------------------
-
-/// Header columns the ledger is required to carry, in canonical order.
-/// The schema is intentionally narrow: any extra column is rejected so
-/// downstream readers and the producer cannot drift.
 let RequiredHeader : string list =
     [ "legacy_check_id"
       "legacy_behavior"
@@ -46,21 +29,6 @@ type ParityRow = {
     Status: string
 }
 
-type ParseFailure =
-    | HeaderMissing
-    | HeaderHasDuplicates of column: string
-    | HeaderHasExtraColumns of columns: string list
-    | RowFieldCountMismatch of line: int * expected: int * actual: int
-    | MalformedQuoting of line: int
-    | MissingIdentity of line: int
-    | DuplicateIdentity of identity: string * line: int
-    | InvalidStatus of line: int * actual: string
-    | BlankRequiredField of line: int * field: string
-    | IdentityPathDisagreement of identity: string * csv: string * registry: string
-    | UnexpectedIdentity of identity: string
-    | MissingIdentityInCsv of identity: string
-    | DuplicateIdentityInCsv of identity: string * lines: int list
-
 type ValidationReport = {
     Rows: ParityRow list
     MissingIdentities: string list
@@ -78,33 +46,6 @@ type ValidationOutcome =
     | Ok of ValidationReport
     | Failed of ValidationReport * failures: string list
 
-let private renderFailures (failures: ParseFailure list) : string list =
-    failures
-    |> List.map (function
-        | HeaderMissing -> "missing required header row"
-        | HeaderHasDuplicates c -> sprintf "duplicate header column: %s" c
-        | HeaderHasExtraColumns cs ->
-            sprintf "unexpected header columns: %s" (String.concat "," cs)
-        | RowFieldCountMismatch (l, e, a) ->
-            sprintf "row field count mismatch at line %d (expected %d, got %d)" l e a
-        | MalformedQuoting l -> sprintf "malformed quoting at line %d" l
-        | MissingIdentity l -> sprintf "missing identity at line %d" l
-        | DuplicateIdentity (i, l) -> sprintf "duplicate identity at line %d: %s" l i
-        | InvalidStatus (l, a) -> sprintf "invalid status at line %d: %s" l a
-        | BlankRequiredField (l, f) -> sprintf "blank required field at line %d: %s" l f
-        | IdentityPathDisagreement (i, c, r) ->
-            sprintf "identity %s disagreement: csv=%s registry=%s" i c r
-        | UnexpectedIdentity i -> sprintf "unexpected identity in CSV: %s" i
-        | MissingIdentityInCsv i -> sprintf "registered identity missing from CSV: %s" i
-        | DuplicateIdentityInCsv (i, ls) ->
-            sprintf "duplicate identity in CSV: %s (lines %s)" i (String.concat "," (List.map string ls)))
-
-// -----------------------------------------------------------------------------
-// CSV parsing
-// -----------------------------------------------------------------------------
-
-/// Parse a single CSV row honouring double-quote escaping.  Returns
-/// ``None`` if the row has unbalanced quoting.
 let private parseRow (line: string) : string list option =
     if String.IsNullOrEmpty line then Some []
     else
@@ -141,13 +82,6 @@ let private parseRow (line: string) : string list option =
             cells.Add(sb.ToString())
             Some (List.ofSeq cells)
 
-// -----------------------------------------------------------------------------
-// Public surface
-// -----------------------------------------------------------------------------
-
-/// Parse a parity CSV document into the typed ``ParityRow`` list.  All
-/// syntactic failures are accumulated and returned as a single
-/// ``Error`` so the caller can report every defect at once.
 let parse (path: string) : Result<ParityRow list, string> =
     if not (File.Exists path) then
         Result.Error (sprintf "parity CSV not found: %s" path)
@@ -169,11 +103,9 @@ let parse (path: string) : Result<ParityRow list, string> =
                     if List.sort headers <> List.sort RequiredHeader then
                         let extras = headers |> List.filter (fun h -> not (List.contains h RequiredHeader)) |> List.sort
                         let missing = RequiredHeader |> List.filter (fun h -> not (List.contains h headers)) |> List.sort
-                        let dup = headers |> List.groupBy id |> List.filter (fun (_, g) -> List.length g > 1) |> List.map fst
                         let msgs =
                             (if not (List.isEmpty extras) then [ sprintf "extra header columns: %s" (String.concat "," extras) ] else [])
                             @ (if not (List.isEmpty missing) then [ sprintf "missing header columns: %s" (String.concat "," missing) ] else [])
-                            @ (List.map (fun d -> sprintf "duplicate header column: %s" d) dup)
                         Result.Error(String.concat "; " msgs)
                     else
                         let mutable rows : ParityRow list = []
@@ -189,7 +121,10 @@ let parse (path: string) : Result<ParityRow list, string> =
                                                 lineNo (List.length RequiredHeader) (List.length cells) :: errors
                                 else
                                     let fields = List.zip RequiredHeader cells
-                                    let lookup key = fields |> List.pick (fun (k, v) -> if k = key then Some v else None) []
+                                    let lookup key =
+                                        fields
+                                        |> List.tryPick (fun (k, v) -> if k = key then Some v else None)
+                                        |> Option.defaultValue ""
                                     let id = lookup "legacy_check_id"
                                     let status = lookup "status"
                                     let pos = lookup "positive_test"
@@ -225,25 +160,29 @@ let parse (path: string) : Result<ParityRow list, string> =
         with ex ->
             Result.Error(sprintf "parity CSV read failed: %s: %s" (ex.GetType().FullName) ex.Message)
 
-/// Validate the parsed ledger against the authoritative rule
-/// registry.  Identity equality is enforced as a set comparison; row
-/// ordering is normalised for comparison but duplicates still fail.
+/// Normalise a rule identity to its short prefix (e.g. ``CP-01``)
+/// so the parity CSV (``CP-01``) and the rule registry
+/// (``CP-01_required_files``) compare under a shared canonical form.
+let private shortId (id: string) : string =
+    let idx = id.IndexOf '_'
+    if idx < 0 then id else id.Substring(0, idx)
+
 let validate (rows: ParityRow list) : ValidationOutcome =
-    let csvIds = rows |> List.map (fun r -> r.LegacyCheckId)
-    let registryIds = ContainerPolicy.CheckIds
+    let csvIds = rows |> List.map (fun r -> shortId r.LegacyCheckId)
+    let registryIds = ContainerPolicy.CheckIds |> List.map shortId
 
     let dupIds =
         csvIds
         |> List.groupBy id
         |> List.choose (fun (k, g) -> if List.length g > 1 then Some (k, [ for r in g -> 1 ]) else None)
 
-    let unexpected = csvIds |> List.filter (fun id -> not (List.contains id registryIds)) |> List.sort
-    let missing = registryIds |> List.filter (fun id -> not (List.contains id csvIds)) |> List.sort
+    let unexpected = csvIds |> List.filter (fun id -> not (List.contains id registryIds)) |> List.sort |> List.distinct
+    let missing = registryIds |> List.filter (fun id -> not (List.contains id csvIds)) |> List.sort |> List.distinct
 
     let fieldMismatches =
         rows
-        |> List.filter (fun r -> r.FsharpCheckId <> r.LegacyCheckId)
-        |> List.map (fun r -> r.LegacyCheckId, r.FsharpCheckId, r.LegacyCheckId)
+        |> List.filter (fun r -> shortId r.LegacyCheckId <> shortId r.FsharpCheckId)
+        |> List.map (fun r -> r.LegacyCheckId, r.FsharpCheckId, "<short prefix mismatch>")
 
     let identityPathMismatches =
         rows
@@ -262,18 +201,17 @@ let validate (rows: ParityRow list) : ValidationOutcome =
           HeaderOk = true
           HeaderFailures = [] }
 
-    let failures =
+    let failures : string list =
         []
-        |> List.append (List.map (fun i -> UnexpectedIdentity i) unexpected)
-        |> List.append (List.map (fun i -> MissingIdentityInCsv i) missing)
-        |> List.append (List.map (fun (i, _) -> DuplicateIdentityInCsv (i, [1])) dupIds)
-        |> List.append (List.map (fun (id, csv, reg) -> IdentityPathDisagreement (id, csv, reg)) fieldMismatches)
-        |> List.append (List.map (fun (id, csv, reg) -> IdentityPathDisagreement (id, csv, reg)) identityPathMismatches)
+        |> List.append (List.map (sprintf "unexpected identity in CSV: %s") unexpected)
+        |> List.append (List.map (sprintf "registered identity missing from CSV: %s") missing)
+        |> List.append (List.map (fun (i, _) -> sprintf "duplicate identity in CSV: %s" i) dupIds)
+        |> List.append (List.map (fun (id, csv, reg) -> sprintf "identity %s field disagreement: csv=%s registry=%s" id csv reg) fieldMismatches)
+        |> List.append (List.map (fun (id, csv, reg) -> sprintf "identity %s implementation_location disagreement: csv=%s registry=%s" id csv reg) identityPathMismatches)
 
     if List.isEmpty failures then Ok report
-    else Failed (report, renderFailures failures)
+    else Failed (report, failures)
 
-/// Combined read+validate against the registry.
 let validateFile (path: string) : ValidationOutcome =
     match parse path with
     | Result.Error e ->
@@ -290,9 +228,6 @@ let validateFile (path: string) : ValidationOutcome =
                [ e ])
     | Result.Ok rows -> validate rows
 
-/// Render a human-readable summary of a validation outcome.  The
-/// line is intentionally compact and machine-readable so it can
-/// appear in the gate-summary closure artefact.
 let renderSummary (outcome: ValidationOutcome) : string =
     match outcome with
     | Ok r ->
