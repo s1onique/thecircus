@@ -95,14 +95,14 @@ let statusForExitCode (exitCode: int) : string =
 /// callers must distinguish this from a successful launch that
 /// exited non-zero.
 ///
-/// The streams are read via ``StreamReader.ReadToEndAsync()``
-/// which returns ``string`` after UTF-8 decoding; invalid UTF-8
-/// sequences are replaced per the .NET default.  Git
-/// ``ls-files -z`` paths are normally ASCII and decode cleanly,
-/// but arbitrary binary filenames (which Git permits on POSIX
-/// filesystems) are not byte-faithfully preserved.  A future ACT
-/// should switch the NUL-inventory path to a dedicated ``byte[]``
-/// capture to support arbitrary filenames.
+/// The streams are decoded as text using ``StreamReader``'s
+/// default UTF-8 encoding, BOM detection, and replacement fallback.
+/// Valid UTF-8 text (including NUL characters, embedded newlines,
+/// and leading/trailing whitespace) survives at the string level.
+/// This path is **not** byte-faithful: invalid UTF-8 byte sequences
+/// may be replaced, and an initial byte-order mark may be consumed.
+/// Git pathnames are sequences of non-NUL bytes, so ``git ls-files -z``
+/// requires a dedicated ``byte[]`` capture path for complete fidelity.
 let internal runProcessAsync
     (psi: ProcessStartInfo)
     (cancellationToken: System.Threading.CancellationToken)
