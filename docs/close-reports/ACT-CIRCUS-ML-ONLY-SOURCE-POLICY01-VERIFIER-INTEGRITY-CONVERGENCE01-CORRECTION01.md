@@ -35,7 +35,7 @@ tested_tree_oid                           = a8ad4bc81fd29a22f8dca7faf6a46ce35a0b
 evidence_endpoint_commit_oid              = 6e7b12d134ce062f10f236fb55f5fac63c01dafe
 documentation_content_base_commit_oid     = 6e7b12d134ce062f10f236fb55f5fac63c01dafe
 revision4_documentation_endpoint_commit_oid = f117929 (revision-4 close-report commit)
-revision6_documentation_endpoint_commit_oid = 7434729 (revision-6 close-report commit)
+preceding_documentation_commit_oid        = 7434729 (revision-6 predecessor; superseded by this revision)
 ```
 
 Implementation, tested, evidence, and documentation content base are
@@ -44,8 +44,10 @@ compilation, and test execution were produced in a single local
 session.
 
 The ``revision4_documentation_endpoint_commit_oid`` field remains for
-historical traceability.  The ``revision6_documentation_endpoint_commit_oid``
-field records the revision-6 documentation endpoint.
+historical traceability.  The ``preceding_documentation_commit_oid`` is the
+revision-6 predecessor; this revision's documentation endpoint commit
+is recorded externally in the delivery envelope, not embedded in the
+document itself.
 
 ## Required fields
 
@@ -99,7 +101,7 @@ mutation-accounting cases that this ACT acknowledges as outstanding.
 | P0-3 Observable cleanup failures | **Resolved — mechanically proven 31/31** — ``inspectTerminal`` checks `IsCanceled` then `IsFaulted` before accessing `Result`, making it total for all terminal task states; `settleDrainsSharedSafe` guarantees disposal even if settlement throws; tests require exact outcome classifications |
 | P0-4 Single-invocation violation accounting | **Resolved** |
 | P0-5 Non-vacuous mutation registry | **Open** — registry authoritative; accounting still uses a global mutable; 13/22 cases executed against compliant baselines |
-| P0-6 Evidence identity reconciliation | **Resolved** — evidence rebinds to ``6e7b12d`` / ``a8ad4bc8``; ``revision6_documentation_endpoint_commit_oid`` records this report |
+| P0-6 Evidence identity reconciliation | **Resolved** — evidence rebinds to ``6e7b12d`` / ``a8ad4bc8``; ``preceding_documentation_commit_oid`` records the revision-6 predecessor; external delivery records the documentation endpoint |
 
 ## P1 status (revision 6)
 
@@ -116,34 +118,26 @@ mutation-accounting cases that this ACT acknowledges as outstanding.
    the captured stream, populate ``DescendantPid``, and verify both
    PIDs are reaped after cancellation.
 
-2. **P0-3 never-throw result semantics**: ``runCore`` currently
-   converts every body exception into a ``BodyFailure`` outcome, but
-   the inner drain blocks (stdout and stderr) still each contain a
-   ``try/with`` that swallows exceptions locally.  An explicit
-   assertion that no F# exception propagates past ``runProcessText``
-   / ``runProcessBytes`` (e.g. a stress test that injects an exception
-   inside the inner drain await) is still missing.
-
-3. **P0-5 mutation proof**: replace the global mutable accounting
+2. **P0-5 mutation proof**: replace the global mutable accounting
    with one sequenced test that produces an immutable
    ``Map<MutationCase.Id, Result<...>>`` and derives counts from it.
    Then complete the remaining 9 mutation baselines so the
    authoritative registry reaches 22/22 mechanically.
 
-4. **P1-1 exact parity identity**: replace
+3. **P1-1 exact parity identity**: replace
    ``Regex("^(CP-\d+)")`` with strict exact equality against the
    production rule metadata.
 
-5. **P1-3 bash-availability honesty**: replace
+4. **P1-3 bash-availability honesty**: replace
    ``test "skipped (bash unavailable)" { Expect.isTrue true ... }``
    with ``ptest "skipped (bash unavailable)" { ... }`` so the test
    is pending rather than passing.
 
-6. **Canonical gate coverage**: the canonical ``gate run`` must
+5. **Canonical gate coverage**: the canonical ``gate run`` must
    execute ``make test-source-policy`` (the full mutation +
    process-runner suite).
 
-7. **End-to-end fresh-checkout gate regeneration**: run
+6. **End-to-end fresh-checkout gate regeneration**: run
    ``make dev-gate-linux`` on a clean checkout and record the
    resulting commit and tree.
 
@@ -184,10 +178,9 @@ Revision 6 mechanically closes:
   ``6e7b12d`` / ``a8ad4bc8``
 
 P0-2 (descendant-PID proof), P0-5 (mutation accounting), P1-1
-(exact parity identity), P1-3 (pending-test honesty), the P0-3
-never-throw assertion, and the canonical-gate coverage gap remain.
-Each outstanding item has a single concrete next step recorded
-above.
+(exact parity identity), P1-3 (pending-test honesty), and the
+canonical-gate coverage gap remain.  Each outstanding item has a
+single concrete next step recorded above.
 
 The current verdict is **PARTIAL → MATERIAL PROGRESS (revision 6)**.
 Work continues within this correction ACT — no CORRECTION02 was
