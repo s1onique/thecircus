@@ -35,6 +35,8 @@ let private resetInjections () =
     ObserveStartedPid                     <- ignore
     ObserveStdoutDrainTask                <- ignore
     ObserveStderrDrainTask                <- ignore
+    SubstituteStdoutDrainTask             <- id
+    SubstituteStderrDrainTask             <- id
 
 let private withInjection<'a>
     (setHooks : unit -> unit)
@@ -54,6 +56,18 @@ let private noCwd : string option = None
 
 let private outcomeSummary (r: TextResult) : string =
     sprintf "Outcome=%A Stdout=%d bytes Stderr=%d bytes Pid=%A" r.Outcome r.Output.Length r.Stderr.Length r.Pid
+
+/// Build a faulted ``Task<Result<byte[], exn>>`` directly via the
+/// .NET ``Task`` constructor.  This bypasses the ``TaskCompletionSource``
+/// type inference problem and produces a task with the exact status we
+/// need (``Faulted``) for the ``inspectTerminal`` ``IsFaulted`` branch.
+let private faultedStdoutTask (msg: string) : Task<Result<byte[], exn>> =
+    Task.FromException<Result<byte[], exn>> (IOException(msg))
+
+/// Build a cancelled ``Task<Result<byte[], exn>>`` for the
+/// ``inspectTerminal`` ``IsCanceled`` branch.
+let private cancelledStdoutTask () : Task<Result<byte[], exn>> =
+    Task.FromCanceled<Result<byte[], exn>> (new CancellationToken(true))
 
 [<Tests>]
 let tests =
@@ -251,8 +265,6 @@ let tests =
                 | o -> failtestf "expected SpawnFailure, got %A" o
             }
 
-            // Access-failure injection fires BEFORE any drain task is
-            // created.  The bracket still releases the started process.
             test "injected startAsync access failure captures the started PID and releases it" {
                 let observedPids = ConcurrentQueue<int>()
                 let r =
@@ -272,9 +284,6 @@ let tests =
                     Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
             }
 
-            // Partial-acquisition injection #1: stdout drain was created
-            // before the throw.  The partial bracket must settle that
-            // drain boundedly before propagating the error.
             test "injected startAsync stdout-drain failure settles the created stdout drain with RanToCompletion" {
                 let observedPids = ConcurrentQueue<int>()
                 let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
@@ -288,13 +297,8 @@ let tests =
                         (fun () ->
                             runProcessText (bashArgs "sleep 60") noCwd CancellationToken.None)
                 Expect.isGreaterThan (observedPids.Count) 0 "expected at least one observed PID"
-                // The created stdout drain must be terminal after the
-                // partial-acquisition bracket runs settleDrainsShared.
                 Expect.isTrue (!stdoutTask).IsCompleted "partial stdout drain must be terminal"
                 Expect.equal (!stdoutTask).Status TaskStatus.RanToCompletion "partial stdout drain must be RanToCompletion"
-                // Post-``Process.Start`` failure with clean drain
-                // settlement must classify as BodyFailure (NOT
-                // SpawnFailure — the spawn itself succeeded).
                 match r.Outcome with
                 | BodyFailure _ -> ()
                 | o -> failtestf "expected BodyFailure (post-Start failure with clean settlement), got %A" o
@@ -303,11 +307,6 @@ let tests =
                     Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
             }
 
-            // Partial-acquisition injection #2: both drains were created
-            // before the throw.  Both must be terminal with
-            // RanToCompletion, and stderr must NOT be classified as
-            // a timeout (the second-pass settle check ensures stderr
-            // is inspected even when the shared deadline is exhausted).
             test "injected startAsync observer failure settles both created drains with RanToCompletion" {
                 let observedPids = ConcurrentQueue<int>()
                 let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
@@ -329,11 +328,162 @@ let tests =
                 Expect.equal (!stderrTask).Status TaskStatus.RanToCompletion "partial stderr drain must be RanToCompletion"
                 match r.Outcome with
                 | BodyFailure _ -> ()
-                | CleanupFailure _ -> ()  // Either is acceptable; both are truthful
+                | CleanupFailure _ -> ()
                 | o -> failtestf "expected BodyFailure/CleanupFailure, got %A" o
                 for pid in observedPids do
                     Thread.Sleep(250)
                     Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
+            }
+
+            // -------------------------------------------------------------------
+            // Mechanical proof of the new settlement semantics.
+            // -------------------------------------------------------------------
+
+            // ``ContextCleanupFailure`` is exercised by substituting a
+            // never-completing stdout drain via
+            // ``SubstituteStdoutDrainTask``.  The catch branch must
+            // classify the timeout as ``ContextCleanupFailure`` (not
+            // ``ContextConstructionFailure``).  The outcome surfaces
+            // as ``CleanupFailure`` (NOT ``SpawnFailure`` — Process.Start
+            // succeeded), with the exact timed-out label.
+            test "ContextCleanupFailure: stdout never completes inside startAsync -> CleanupFailure" {
+                let observedPids = ConcurrentQueue<int>()
+                let neverCompletes = TaskCompletionSource<Result<byte[], exn>>()
+                let r =
+                    withInjection
+                        (fun () ->
+                            ObserveStartedPid <- observedPids.Enqueue
+                            SubstituteStdoutDrainTask <- fun _ -> neverCompletes.Task
+                            InjectStartAsyncStdoutDrainFailure <- fun () ->
+                                Some (InvalidOperationException("injected-stdout-drain-failure") :> exn))
+                        (fun () ->
+                            runProcessText (bashArgs "sleep 60") noCwd CancellationToken.None)
+                Expect.isGreaterThan (observedPids.Count) 0 "expected at least one observed PID"
+                match r.Outcome with
+                | CleanupFailure detail ->
+                    Expect.stringContains detail "context construction failed" "post-Start detail"
+                    Expect.stringContains detail "stdout" "stdout label in detail"
+                | o -> failtestf "expected CleanupFailure (NOT SpawnFailure) for ContextCleanupFailure path, got %A" o
+                for pid in observedPids do
+                    Thread.Sleep(250)
+                    Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
+            }
+
+            // The exhausted-deadline / already-terminal-stderr path.
+            // We use ``InjectWaitFailure`` to force a body exception
+            // so the post-finally outcome constructor runs, and we
+            // substitute stdout with a never-completing task and
+            // stderr with an already-terminal task.  We then verify
+            // stdout ends up ``WaitingForChildrenToComplete`` (never
+            // settled) and stderr ends up ``RanToCompletion`` (the
+            // IsCompleted-first path classified it truthfully).
+            test "exhausted deadline: stdout never completes, stderr is already terminal" {
+                let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
+                let stderrTask = ref Unchecked.defaultof<Task<Result<string, exn>>>
+                let neverCompletes = TaskCompletionSource<Result<byte[], exn>>()
+                let alreadyTerminalStdout : Task<Result<byte[], exn>> =
+                    Task.FromResult (Result.Ok [||])
+                let alreadyTerminalStderr : Task<Result<string, exn>> =
+                    Task.FromResult (Result.Ok "")
+                let r =
+                    withInjection
+                        (fun () ->
+                            ObserveStdoutDrainTask <- (fun t -> stdoutTask := t)
+                            ObserveStderrDrainTask <- (fun t -> stderrTask := t)
+                            SubstituteStdoutDrainTask <- fun _ -> neverCompletes.Task
+                            SubstituteStderrDrainTask <- fun _ -> alreadyTerminalStderr
+                            InjectWaitFailure <- fun () ->
+                                Some (TimeoutException("injected-wait-failure") :> exn))
+                        (fun () ->
+                            runProcessText (bashArgs "sleep 60") noCwd CancellationToken.None)
+                // After settleDrainsShared: stdout remains in a non-terminal
+                // state because the completion source never completes;
+                // stderr was already terminal (RanToCompletion) so the
+                // IsCompleted-first path classified it as SettledOk.
+                // Note: a TCS task that never has SetResult called remains
+                // non-completed even after Wait times out. The TaskStatus
+                // is WaitingForActivation (not WaitingForChildrenToComplete).
+                Expect.equal (!stdoutTask).Status TaskStatus.WaitingForActivation "stdout is waiting for completion source (never completed)"
+                Expect.isTrue (!stderrTask).IsCompleted "stderr task must be terminal"
+                Expect.equal (!stderrTask).Status TaskStatus.RanToCompletion "stderr is RanToCompletion"
+                let _ = alreadyTerminalStdout
+                // Cleanup note must record stdout timeout but NOT stderr.
+                // The contract requires CleanupFailure (not BodyFailure) when
+                // a drain timeout is detected during cleanup.
+                match r.Outcome with
+                | CleanupFailure detail ->
+                    Expect.stringContains detail "stdout drain did not settle" "stdout timeout recorded"
+                    Expect.isFalse (detail.Contains "stderr drain did not settle") "stderr must NOT be classified as timeout"
+                | outcome ->
+                    failtestf "expected CleanupFailure for exhausted-deadline scenario, got %A" outcome
+            }
+
+            // Terminal drain task carrying inner ``Result.Error``:
+            // proves ``inspectTerminal`` records the inner error in
+            // the cleanup note (SettledWithError) rather than silently
+            // classifying it as SettledOk.  Exact OutputFailure proves:
+            // 1. terminal inspection did not throw;
+            // 2. the output-stage failure was not misclassified.
+            test "terminal drain carrying inner Result.Error is recorded into the cleanup note" {
+                let injectedEx = IOException("injected-inner-error")
+                let injectedTask : Task<Result<byte[], exn>> =
+                    Task.FromResult (Result.Error injectedEx)
+                let r =
+                    withInjection
+                        (fun () ->
+                            SubstituteStdoutDrainTask <- fun _ -> injectedTask)
+                        (fun () ->
+                            runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
+                match r.Outcome with
+                | OutputFailure (detail, _) ->
+                    Expect.stringContains detail "stdout drain settled with error" "inner error recorded"
+                    Expect.stringContains detail "injected-inner-error" "inner exception preserved"
+                | outcome ->
+                    failtestf "expected OutputFailure for terminal inner-Result.Error, got %A" outcome
+                Expect.equal injectedTask.Status TaskStatus.RanToCompletion "task is RanToCompletion"
+            }
+
+            // Faulted drain task: ``inspectTerminal`` must record
+            // the inner exception message into the cleanup note
+            // (rather than letting ``task.Result`` throw).
+            // Exact OutputFailure proves terminal inspection did not throw
+            // and the output-stage failure was not misclassified.
+            test "faulted drain task is caught by inspectTerminal via IsFaulted branch" {
+                let faultedTask = faultedStdoutTask "injected-fault"
+                let r =
+                    withInjection
+                        (fun () ->
+                            SubstituteStdoutDrainTask <- fun _ -> faultedTask)
+                        (fun () ->
+                            runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
+                match r.Outcome with
+                | OutputFailure (detail, _) ->
+                    Expect.stringContains detail "stdout drain task faulted" "faulted branch ran"
+                    Expect.stringContains detail "injected-fault" "fault exception preserved"
+                | outcome ->
+                    failtestf "expected OutputFailure for faulted drain, got %A" outcome
+                Expect.equal faultedTask.Status TaskStatus.Faulted "task is Faulted"
+            }
+
+            // Cancelled drain task: ``inspectTerminal`` must record
+            // a cancellation note rather than letting ``task.Result``
+            // throw.
+            // Exact OutputFailure proves terminal inspection did not throw
+            // and the output-stage failure was not misclassified.
+            test "cancelled drain task is caught by inspectTerminal via IsCanceled branch" {
+                let cancelledTask = cancelledStdoutTask ()
+                let r =
+                    withInjection
+                        (fun () ->
+                            SubstituteStdoutDrainTask <- fun _ -> cancelledTask)
+                        (fun () ->
+                            runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
+                match r.Outcome with
+                | OutputFailure (detail, _) ->
+                    Expect.stringContains detail "stdout drain task was cancelled" "cancelled branch ran"
+                | outcome ->
+                    failtestf "expected OutputFailure for cancelled drain, got %A" outcome
+                Expect.equal cancelledTask.Status TaskStatus.Canceled "task is Canceled"
             }
 
             test "injected wait failure produces BodyFailure and releases the process" {
