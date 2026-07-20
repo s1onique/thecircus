@@ -176,23 +176,23 @@ let private isPolicyRelevant (p: string) : bool =
 
 let verify (cfg: VerifyConfig) : VerificationOutcome =
     match Inventory.enumerate cfg.RepoRoot with
-    | InventoryDiagnostic d ->
+    | InventoryFailed f ->
         { RepositoryRoot = cfg.RepoRoot
           FilesExamined = 0
           BaselineEntries = 0
           Findings =
             [ { Path = "<repo>"; Code = GitInventoryFailure; Line = None
-                Detail = NulInventory.renderDiagnostic d; Rule = "git/ls-files"
+                Detail = Inventory.renderInventoryFailure f; Rule = "git/ls-files"
                 Expected = Some "ok"; Actual = Some "failed" } ] }
     | InventoryEntries rawEntries ->
         match Inventory.splitTrackedUntracked cfg.RepoRoot rawEntries with
-        | InventoryDiagnostic d ->
+        | InventoryFailed f ->
             { RepositoryRoot = cfg.RepoRoot
               FilesExamined = 0
               BaselineEntries = 0
               Findings =
                 [ { Path = "<repo>"; Code = GitInventoryFailure; Line = None
-                    Detail = NulInventory.renderDiagnostic d; Rule = "git/ls-files"
+                    Detail = Inventory.renderInventoryFailure f; Rule = "git/ls-files"
                     Expected = Some "ok"; Actual = Some "failed" } ] }
         | InventoryEntries entries ->
             let baselineLoad : Baseline.LoadResult = Baseline.load cfg.RepoRoot

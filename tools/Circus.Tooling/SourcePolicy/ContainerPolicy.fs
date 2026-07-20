@@ -666,11 +666,11 @@ let private checkActionPins (root: string) : Violation list =
 /// complete.
 let private checkTrackedSecrets (root: string) : Violation list =
     match gitTrackedFiles root with
-    | TrackedInventoryFailed d ->
+    | TrackedInventoryFailed f ->
         [ { Check = "CP-29_tracked_secrets"
             Id = "CP-29_tracked_secrets"
             Path = "<git inventory>"
-            Detail = sprintf "git ls-files failed (cannot prove the secret scan is complete): %s" (NulInventory.renderDiagnostic d) } ]
+            Detail = sprintf "git ls-files failed (cannot prove the secret scan is complete): %s" (Inventory.renderInventoryFailure f) } ]
     | TrackedFiles tracked ->
         let secretPattern = Regex("(^|/)\\.env(\\.|$)|.*\\.(pem|key|p12|pfx|dockerconfigjson)$", RegexOptions.IgnoreCase)
         let leaked = tracked |> List.filter (fun p -> secretPattern.IsMatch p)
