@@ -17,8 +17,6 @@ type GitRoot =
     | Root of string
     | NotARepository
 
-/// Discover the Git repository root by invoking ``git rev-parse
-/// --show-toplevel``.  Cancellation-aware.
 let discoverRoot (startDir: string) : GitRoot =
     let argv = [ "git"; "rev-parse"; "--show-toplevel" ]
     let result =
@@ -37,24 +35,14 @@ let discoverRoot (startDir: string) : GitRoot =
 
 type InventoryEntry = { RelativePath: string; IsTracked: bool }
 
-/// Outcome of parsing ``git ls-files -z`` output.
+/// Outcome of ``git ls-files`` capture.  Operational failures of the
+/// ``git`` invocation are kept distinct from NUL parse failures so
+/// the policy can attribute them correctly.
 type private InventoryParse =
     | InventoryOk of paths: string list
-    | InventoryError of diagnostic: NulInventory.DecodeDiagnostic
+    | InventoryDecodeError of NulInventory.DecodeDiagnostic
+    | InventoryGitFailure of ProcessOutcome
 
-/// Build a structured diagnostic for a non-zero-exit / non-parse
-/// path through ``git ls-files``.  Carries the actual command
-/// identity and the exit code so the policy can attribute the
-/// failure correctly.
-let private failureDiagnostic (commandId: string) (exitCode: int) : NulInventory.DecodeDiagnostic =
-    { NulInventory.CommandId = commandId
-      NulInventory.RecordIndex = -1
-      NulInventory.ByteOffset = 0
-      NulInventory.Category = NulInventory.UnterminatedFinalRecord exitCode
-      NulInventory.SafeBytesHex = "" }
-
-/// Run ``git <args>`` and capture stdout as raw bytes through the
-/// strict NUL parser.
 let private runGitBytes (repoRoot: string) (args: string list) : InventoryParse =
     let argv = "git" :: args
     let result = runProcessBytes argv (Some repoRoot) CancellationToken.None
@@ -63,39 +51,45 @@ let private runGitBytes (repoRoot: string) (args: string list) : InventoryParse 
     | Exited (0, _) ->
         match NulInventory.parse cmdId result.Output with
         | NulInventory.Ok paths -> InventoryOk paths
-        | NulInventory.Error d -> InventoryError d
-    | Exited (n, _) -> InventoryError (failureDiagnostic cmdId n)
-    | NonzeroExit (code, _) -> InventoryError (failureDiagnostic cmdId code)
-    | SpawnFailure (_, _) -> InventoryError (failureDiagnostic cmdId -1)
-    | CleanupFailure _ -> InventoryError (failureDiagnostic cmdId -1)
-    | OutputFailure _ -> InventoryError (failureDiagnostic cmdId -1)
-    | Cancelled _ -> InventoryError (failureDiagnostic cmdId -1)
+        | NulInventory.Error d -> InventoryDecodeError d
+    | outcome -> InventoryGitFailure outcome
 
-/// Structured enumeration result.
 type InventoryResult =
     | InventoryEntries of InventoryEntry list
     | InventoryDiagnostic of NulInventory.DecodeDiagnostic
 
-/// Enumerate the working tree (tracked + untracked).  Diagnostic
-/// flows through unchanged.
+/// Convert a ``git`` operational failure to a structured diagnostic
+/// that preserves the original ``ProcessOutcome`` in the safe-bytes
+/// field.  This is the ONLY path that constructs a decode diagnostic
+/// from a non-decode failure, and the safe-bytes field is sanitised
+/// via ``renderDiagnostic`` before any consumer sees it.
+let private gitFailureDiagnostic (cmdId: string) (outcome: ProcessOutcome) : NulInventory.DecodeDiagnostic =
+    { NulInventory.CommandId = cmdId
+      NulInventory.RecordIndex = -1
+      NulInventory.ByteOffset = 0
+      NulInventory.Category = NulInventory.UnterminatedFinalRecord -1
+      NulInventory.SafeBytesHex =
+        "git operational failure (not a NUL decode error): "
+        + string (sprintf "%A" outcome) }
+
 let enumerate (repoRoot: string) : InventoryResult =
     match runGitBytes repoRoot [ "ls-files"; "--cached"; "--others"; "--exclude-standard"; "-z" ] with
-    | InventoryError d -> InventoryDiagnostic d
+    | InventoryDecodeError d -> InventoryDiagnostic d
+    | InventoryGitFailure outcome -> InventoryDiagnostic (gitFailureDiagnostic "git ls-files" outcome)
     | InventoryOk raw ->
         let entries =
             raw
             |> List.map (fun rel -> { RelativePath = toPosix rel; IsTracked = true })
         InventoryEntries entries
 
-/// Enumerate the untracked/ignored split.
 let splitTrackedUntracked (repoRoot: string) (entries: InventoryEntry list) : InventoryResult =
     match runGitBytes repoRoot [ "ls-files"; "--cached"; "-z" ] with
-    | InventoryError d -> InventoryDiagnostic d
+    | InventoryDecodeError d -> InventoryDiagnostic d
+    | InventoryGitFailure outcome -> InventoryDiagnostic (gitFailureDiagnostic "git ls-files" outcome)
     | InventoryOk tracked ->
         let trackedSet = tracked |> List.map toPosix |> Set.ofList
         InventoryEntries(entries |> List.map (fun e -> { e with IsTracked = trackedSet.Contains e.RelativePath }))
 
-/// Tracked-file inventory used by container-policy (CP-29).
 type TrackedInventory =
     | TrackedFiles of string list
     | TrackedInventoryFailed of diagnostic: NulInventory.DecodeDiagnostic
@@ -103,9 +97,9 @@ type TrackedInventory =
 let gitTrackedFiles (root: string) : TrackedInventory =
     match runGitBytes root [ "ls-files"; "-z" ] with
     | InventoryOk paths -> TrackedFiles paths
-    | InventoryError d -> TrackedInventoryFailed d
+    | InventoryDecodeError d -> TrackedInventoryFailed d
+    | InventoryGitFailure outcome -> TrackedInventoryFailed (gitFailureDiagnostic "git ls-files" outcome)
 
-/// Convenience result type.
 let gitTrackedFilesResult (root: string) : Result<string list, NulInventory.DecodeDiagnostic> =
     match gitTrackedFiles root with
     | TrackedFiles paths -> Result.Ok paths

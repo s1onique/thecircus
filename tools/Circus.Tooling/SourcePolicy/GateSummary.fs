@@ -108,18 +108,22 @@ let private testedTreeOid (workingDir: string) : string =
     | Result.Ok v -> v
     | Result.Error _ -> ""
 
-/// Build the container-publication-policy ``CheckStatus`` from the
-/// in-process ``ContainerPolicyReport``.  This is the **single**
-/// invocation of the container-policy verifier for the gate summary;
-/// no subprocess is spawned for the check.
-let private containerPolicyCheck (root: string) : CheckStatus =
-    let report = ContainerPolicy.verify root
-    let exitCode =
-        if List.isEmpty report.OperationalFailures then
-            if List.isEmpty report.Violations then 0 else 1
+/// Build the container-publication-policy ``CheckStatus`` from a
+/// pre-produced ``ContainerPolicyReport``.  The caller is
+/// responsible for invoking ``ContainerPolicy.verify`` exactly once
+/// and threading the resulting report through both the status and
+/// the count derivations.
+let private containerPolicyCheck (report: ContainerPolicy.ContainerPolicyReport) : CheckStatus =
+    let exitCode, status =
+        if not (List.isEmpty report.OperationalFailures) then
+            // Operational unavailability surfaces as ``unavailable``,
+            // not as a policy failure.  The exit code carries the
+            // count of operational failures for downstream tooling.
+            -(List.length report.OperationalFailures), "unavailable"
+        else if List.isEmpty report.Violations then
+            0, "pass"
         else
-            2
-    let status = statusForExitCode exitCode
+            1, "fail"
     {
         Name = "container-publication-policy"
         Status = status
@@ -162,9 +166,12 @@ let serialize (doc: GateSummaryDoc) : string =
     JsonSerializer.Serialize(doc, opts)
 
 let regenerate (root: string) : GateSummaryDoc =
-    // Single in-process container-policy invocation drives both the
-    // check status and the violation count.
-    let cpCheck = containerPolicyCheck root
+    // SINGLE in-process container-policy invocation drives both the
+    // check status and the violation count.  No subprocess is launched
+    // for the policy check; status and counts come from the same
+    // structured report.
+    let report = ContainerPolicy.verify root
+    let cpCheck = containerPolicyCheck report
     let extChecks = externalChecks root
     let checks = cpCheck :: extChecks
 
@@ -178,10 +185,7 @@ let regenerate (root: string) : GateSummaryDoc =
         else if passed = List.length checks then "pass"
         else "unavailable"
 
-    let report = ContainerPolicy.verify root
-    let violationsTotal =
-        if List.isEmpty report.OperationalFailures then report.ViolationsTotal
-        else 0
+    let violationsTotal = report.ViolationsTotal
     let violationsOperational = List.length report.OperationalFailures
 
     let doc = {
