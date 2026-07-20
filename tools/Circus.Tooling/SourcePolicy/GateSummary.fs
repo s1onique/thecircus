@@ -88,19 +88,21 @@ let internal ValidCheckStatuses   = set [ "pass"; "fail"; "skip"; "unavailable" 
 let statusForExitCode (exitCode: int) : string =
     if exitCode = 0 then "pass" else "fail"
 
-/// Run a process to completion and return its exit code plus the
-/// verbatim stdout and stderr streams.  We drain the streams
-/// asynchronously to avoid the dead-lock documented on
-/// ``Process.StandardOutput`` by Microsoft (filling the OS pipe
-/// buffer before the child exits).  We read the streams as raw
-/// bytes (not via the line-oriented ``OutputDataReceived`` event)
-/// so NUL-delimited protocols such as ``git ls-files -z`` preserve
-/// filenames verbatim; filenames containing embedded newlines or
-/// leading/trailing whitespace survive byte-for-byte.  On
-/// process-launch failure (e.g. the executable is missing from
-/// PATH) this returns ``(-1, "", err)`` where ``err`` carries the
-/// exception message; callers must distinguish this from a
-/// successful launch that exited non-zero.
+/// Run a process to completion and return its exit code plus
+/// its stdout and stderr streams.  On process-launch failure
+/// (e.g. the executable is missing from PATH) this returns
+/// ``(-1, "", err)`` where ``err`` carries the exception message;
+/// callers must distinguish this from a successful launch that
+/// exited non-zero.
+///
+/// The streams are read via ``StreamReader.ReadToEndAsync()``
+/// which returns ``string`` after UTF-8 decoding; invalid UTF-8
+/// sequences are replaced per the .NET default.  Git
+/// ``ls-files -z`` paths are normally ASCII and decode cleanly,
+/// but arbitrary binary filenames (which Git permits on POSIX
+/// filesystems) are not byte-faithfully preserved.  A future ACT
+/// should switch the NUL-inventory path to a dedicated ``byte[]``
+/// capture to support arbitrary filenames.
 let internal runProcessAsync
     (psi: ProcessStartInfo)
     (cancellationToken: System.Threading.CancellationToken)
