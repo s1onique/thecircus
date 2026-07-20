@@ -299,10 +299,10 @@ Exit code: 0
 ### Exact hashes
 
 - **Implementation commit:** `b61b7790c49deb06a9952c242fe2062da57a8227`
-- **Tested commit:** `3513906` (close report update)
-- **Tree:** `302268f2244aa8ee66e2eaad31b208f9ae4a203d`
-- **Committed range:** `643e0bd..3513906`
-- **Clean working tree:** `git diff --check` passes
+- **Evidence commit:** `ef363c38c2d3c80cf925b8810719135698321c3c`
+- **Tree:** `b2ac5901d338c7749956a7b27cd239a2dd0b22d2`
+- **Committed range:** `643e0bd..ef363c3`
+- **Clean working tree:** confirmed (no uncommitted changes)
 
 ### Patch hygiene
 
