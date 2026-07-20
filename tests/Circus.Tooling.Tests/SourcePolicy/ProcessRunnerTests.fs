@@ -78,10 +78,10 @@ type DescendantProofResult =
     | Unexpected of detail: string
 
 // ---------------------------------------------------------------------------
-// Concurrent ProcessRunner helper with watchdog cancellation.
+// Concurrent ProcessRunner helper with proper coordination primitives.
 // ---------------------------------------------------------------------------
 
-/// Parsed PID record from readiness file or stdout.
+/// Parsed PID record from readiness file.
 type PidRecord = {
     ParentPid: int
     DescendantPid: int
@@ -90,19 +90,24 @@ type PidRecord = {
 
 /// Result of the concurrent ProcessRunner invocation.
 type ConcurrentProofResult = {
-    Result: TextResult
+    Result: TextResult option
     PidRecord: PidRecord option
     ReadinessFound: bool
-    CancelledAfterReadiness: bool
+    CancellationIssuedAfterReadiness: bool
     WatchdogExpired: bool
+    ProcessCompleted: bool
 }
 
-/// Run ProcessRunner with genuine concurrency:
-/// - Start process on background thread
-/// - Poll readiness concurrently
-/// - Cancel immediately after valid readiness
-/// - Use independent watchdog for timeout
-/// Returns when readiness found OR watchdog expires.
+/// Exception thrown when the proof cannot proceed.
+exception ProofFailed of string
+
+/// Run ProcessRunner with genuine concurrency using settled coordination primitives:
+/// - ProcessRunner completion task
+/// - Readiness task
+/// - Watchdog task
+/// - All tasks settled before returning
+/// - Timeout waiting for real result fails the proof.
+/// - All mutable state access is protected by a lock to prevent races.
 let private runProcessConcurrently
     (argv: string list)
     (workspace: string)
@@ -111,14 +116,32 @@ let private runProcessConcurrently
     (watchdogMs: int)
     (cts: CancellationTokenSource)
     : ConcurrentProofResult =
-    let completionTcs = TaskCompletionSource<TextResult>()
-    let readinessTcs = TaskCompletionSource<PidRecord>()
-    let watchdogTcs = TaskCompletionSource<unit>()
-    
+    // One TCS per coordination primitive with async continuations
+    let completionTcs = TaskCompletionSource<TextResult>(TaskCreationOptions.RunContinuationsAsynchronously)
+    let readinessTcs = TaskCompletionSource<PidRecord>(TaskCreationOptions.RunContinuationsAsynchronously)
+    let watchdogTcs = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+    let stateLock = obj()
+
     let mutable readinessFound = false
-    let mutable cancelledAfterReadiness = false
+    let mutable cancellationIssuedAfterReadiness = false
     let mutable watchdogExpired = false
     let mutable parsedRecord: PidRecord option = None
+
+    // Thread-safe state setters
+    let setReadiness (found: bool) (record: PidRecord) =
+        lock stateLock (fun () ->
+            readinessFound <- found
+            parsedRecord <- Some record
+        )
+    let setCancellationAfterReadiness () =
+        lock stateLock (fun () -> cancellationIssuedAfterReadiness <- true)
+    let setWatchdogExpired () =
+        lock stateLock (fun () ->
+            watchdogExpired <- true
+        )
+    let getReadinessFound () : bool =
+        lock stateLock (fun () -> readinessFound)
 
     // Background thread: run process
     let processThread = Thread(fun () ->
@@ -132,17 +155,19 @@ let private runProcessConcurrently
     processThread.Start()
 
     // Watchdog thread: timeout independent of normal cancellation
-    Thread(fun () ->
+    let watchdogThread = Thread(fun () ->
         Thread.Sleep(watchdogMs)
-        if not readinessFound then
-            watchdogExpired <- true
+        if not (getReadinessFound()) then
+            setWatchdogExpired()
             watchdogTcs.TrySetResult() |> ignore
             cts.Cancel() // Force cancel after watchdog
-    ).Start()
+    )
+    watchdogThread.IsBackground <- true
+    watchdogThread.Start()
 
     // Main poll loop
     let deadline = DateTime.UtcNow.AddMilliseconds(float watchdogMs)
-    while not readinessFound && DateTime.UtcNow < deadline do
+    while not (getReadinessFound()) && DateTime.UtcNow < deadline do
         if File.Exists(readinessFile) then
             let content = File.ReadAllText(readinessFile)
             // Parse: PROCESS_TREE_READY parent_pid=N descendant_pid=N nonce=XXX
@@ -152,43 +177,41 @@ let private runProcessConcurrently
                 let descendantPid = int m.Groups.[2].Value
                 let nonce = m.Groups.[3].Value
                 if parentPid > 0 && descendantPid > 0 && parentPid <> descendantPid then
-                    readinessFound <- true
-                    parsedRecord <- Some { ParentPid = parentPid; DescendantPid = descendantPid; Nonce = nonce }
-                    readinessTcs.TrySetResult({ ParentPid = parentPid; DescendantPid = descendantPid; Nonce = nonce }) |> ignore
+                    let record = { ParentPid = parentPid; DescendantPid = descendantPid; Nonce = nonce }
+                    setReadiness true record
+                    readinessTcs.TrySetResult(record) |> ignore
                     // Cancel immediately after valid readiness
-                    cancelledAfterReadiness <- true
+                    setCancellationAfterReadiness()
                     cts.Cancel()
-        if not readinessFound then
+        if not (getReadinessFound()) then
             Thread.Sleep(pollMs)
 
-    // If readiness found, wait for process with remaining time
-    if readinessFound then
-        let remainingMs = max 1000 (watchdogMs - pollMs * 2)
-        let completed = completionTcs.Task.Wait(remainingMs)
-        if not completed then
-            watchdogExpired <- true
-            watchdogTcs.TrySetResult() |> ignore
-    else
-        // Watchdog expired, wait for process
-        watchdogExpired <- true
-        completionTcs.Task.Wait(watchdogMs / 2) |> ignore
+    // Wait for all tasks to settle
+    let allTasks = Task.WhenAll(completionTcs.Task, readinessTcs.Task, watchdogTcs.Task)
+    allTasks.Wait(watchdogMs) |> ignore
 
+    // Determine if process completed
+    let processCompleted = completionTcs.Task.IsCompleted
+
+    // Get result - if not completed, we fail the proof
     let result =
-        if completionTcs.Task.IsCompleted then
-            completionTcs.Task.Result
+        if completionTcs.Task.IsCompleted && not completionTcs.Task.IsFaulted && not completionTcs.Task.IsCanceled then
+            Some completionTcs.Task.Result
         else
-            // Process didn't complete, return a placeholder
-            { Outcome = Cancelled "watchdog/process timeout"
-              Output = ""
-              Stderr = ""
-              Pid = None
-              DescendantPid = None }
+            // Process did not complete - this fails the proof
+            None
+
+    // Read final state under lock
+    let finalReadiness, finalRecord, finalCancellation, finalWatchdog =
+        lock stateLock (fun () ->
+            readinessFound, parsedRecord, cancellationIssuedAfterReadiness, watchdogExpired)
 
     { Result = result
-      PidRecord = parsedRecord
-      ReadinessFound = readinessFound
-      CancelledAfterReadiness = cancelledAfterReadiness
-      WatchdogExpired = watchdogExpired }
+      PidRecord = finalRecord
+      ReadinessFound = finalReadiness
+      CancellationIssuedAfterReadiness = finalCancellation
+      WatchdogExpired = finalWatchdog
+      ProcessCompleted = processCompleted }
 
 // ---------------------------------------------------------------------------
 // Fixture cleanup helpers.
@@ -225,6 +248,20 @@ let private cleanupWorkspace (workspace: string) =
 /// Clean up readiness file.
 let private cleanupReadiness (readinessFile: string) =
     try if File.Exists(readinessFile) then File.Delete(readinessFile) with _ -> ()
+
+/// Shared bash script for process tree fixture.
+/// Creates parent (sleep) and child (sleep), writes PIDs to file and stdout, then blocks.
+let private makeProcessTreeScript (nonce: string) (readinessFile: string) : string =
+    let script =
+        "sleep 999999999 &\n" +
+        "desc_pid=$!\n" +
+        "parent_pid=$$\n" +
+        "msg=\"PROCESS_TREE_READY parent_pid=$parent_pid descendant_pid=$desc_pid nonce=" + nonce + "\"\n" +
+        "printf '%s\\n' \"$msg\" > \"" + readinessFile + "\"\n" +
+        "printf '%s\\n' \"$msg\"\n" +
+        "sync\n" +
+        "sleep 999999999"
+    script
 
 [<Tests>]
 let tests =
@@ -375,8 +412,9 @@ let tests =
             // 2. Unique nonce per invocation to detect stale records
             // 3. Strict parse of readiness file: parent_pid, descendant_pid, nonce
             // 4. Immediate cancellation after valid readiness (not watchdog)
-            // 5. Require Cancelled outcome, parent dead, descendant dead
-            // 6. Exact-PID cleanup in finally; test fails if cleanup required
+            // 5. Require: readiness observed, cancellation after readiness, watchdog not expired,
+            //             real ProcessRunner completed, Cancelled outcome, parent dead, descendant dead
+            // 6. Exact-PID cleanup in outer finally; test fails if cleanup required
             // ---------------------------------------------------------------------------
 
             test "cancellation terminates recorded descendant PID (positive proof)" {
@@ -385,26 +423,13 @@ let tests =
                 Directory.CreateDirectory(workspace) |> ignore
 
                 let readinessFile = Path.Combine(workspace, "ready-" + nonce)
-
-                // Bash script: parent (sleep), child (sleep), write PIDs+nonce to file AND stdout, block forever
-                let body =
-                    sprintf
-                        @"sleep 999999999 &
-                         desc_pid=$!
-                         parent_pid=$$
-                         msg=""PROCESS_TREE_READY parent_pid=$parent_pid descendant_pid=$desc_pid nonce=%s""
-                         echo ""$msg"" > ""%s""
-                         echo ""$msg""
-                         sync; while true; do sleep 60; done"
-                        nonce readinessFile
+                let body = makeProcessTreeScript nonce readinessFile
 
                 let mutable cleanupPids = []
                 let mutable emergencyCleanupRequired = false
 
                 try
                     use cts = new CancellationTokenSource()
-                    // Watchdog: 5 seconds max for bash to fork and write readiness
-                    // Normal cancellation happens immediately after readiness
                     let proofResult =
                         runProcessConcurrently
                             (bashArgs body)
@@ -430,56 +455,68 @@ let tests =
 
                     let record = proofResult.PidRecord.Value
 
-                    // Step 3: Verify stdout contains same record (machine-readable)
-                    let m = Regex.Match(proofResult.Result.Output, @"PROCESS_TREE_READY parent_pid=(\d+) descendant_pid=(\d+) nonce=(\S+)")
-                    if not m.Success then
-                        failtestf "could not parse PIDs from stdout"
-                    let outParent = int m.Groups.[1].Value
-                    let outDescendant = int m.Groups.[2].Value
-                    let outNonce = m.Groups.[3].Value
-                    Expect.equal record.ParentPid outParent "stdout parent matches readiness"
-                    Expect.equal record.DescendantPid outDescendant "stdout descendant matches readiness"
-                    Expect.equal record.Nonce outNonce "stdout nonce matches readiness"
+                    // Step 3: Cancellation must be issued AFTER readiness
+                    if not proofResult.CancellationIssuedAfterReadiness then
+                        failtestf "cancellation must be issued after readiness"
 
-                    // Step 4: Verify r.Pid matches parent
-                    match proofResult.Result.Pid with
-                    | Some reportedPid -> Expect.equal reportedPid record.ParentPid "r.Pid matches parent"
-                    | None -> failtestf "r.Pid must be populated"
+                    // Step 4: Watchdog must NOT have expired
+                    if proofResult.WatchdogExpired then
+                        failtestf "watchdog expired - readiness deadline not met"
 
-                    // Step 5: Assert Cancelled outcome
-                    match proofResult.Result.Outcome with
-                    | Cancelled _ -> ()
-                    | CleanupFailure d -> failtestf "expected Cancelled, got CleanupFailure: %s" d
-                    | OutputFailure (d, _) -> failtestf "expected Cancelled, got OutputFailure: %s" d
-                    | BodyFailure (d, _) -> failtestf "expected Cancelled, got BodyFailure: %s" d
-                    | SpawnFailure (d, _) -> failtestf "expected Cancelled, got SpawnFailure: %s" d
-                    | Exited (c, _) -> failtestf "expected Cancelled, got Exited(%d)" c
-                    | NonzeroExit (c, _) -> failtestf "expected Cancelled, got NonzeroExit(%d)" c
+                    // Step 5: Real ProcessRunner must have completed
+                    match proofResult.Result with
+                    | None -> failtestf "ProcessRunner did not complete - timeout waiting for real result"
+                    | Some result ->
+                        // Step 6: Verify stdout contains exactly ONE matching record
+                        let matches = Regex.Matches(result.Output, @"PROCESS_TREE_READY parent_pid=(\d+) descendant_pid=(\d+) nonce=(\S+)")
+                        if matches.Count <> 1 then
+                            failtestf "expected exactly 1 stdout record, got %d" matches.Count
+                        let m = matches.[0]
+                        let outParent = int m.Groups.[1].Value
+                        let outDescendant = int m.Groups.[2].Value
+                        let outNonce = m.Groups.[3].Value
+                        if record.ParentPid <> outParent then
+                            failtestf "stdout parent mismatch: %d vs %d" record.ParentPid outParent
+                        if record.DescendantPid <> outDescendant then
+                            failtestf "stdout descendant mismatch: %d vs %d" record.DescendantPid outDescendant
+                        if record.Nonce <> outNonce then
+                            failtestf "stdout nonce mismatch: %s vs %s" record.Nonce outNonce
 
-                    // Step 6: Verify cancellation happened after readiness (not watchdog)
-                    if not proofResult.CancelledAfterReadiness then
-                        failtestf "cancellation must happen after readiness, not watchdog"
+                        // Step 7: Verify r.Pid matches parent
+                        match result.Pid with
+                        | Some reportedPid -> Expect.equal reportedPid record.ParentPid "r.Pid matches parent"
+                        | None -> failtestf "r.Pid must be populated"
 
-                    // Step 7: Verify both PIDs are reaped (positive proof: killTree worked)
-                    // Parent must be reaped within 3 seconds
-                    let deadline2 = DateTime.UtcNow.AddSeconds(3.0)
-                    let mutable parentReaped = false
-                    while not parentReaped && DateTime.UtcNow < deadline2 do
-                        if not (isPidAlive record.ParentPid) then parentReaped <- true
-                        else Thread.Sleep(50)
-                    if not parentReaped then
-                        emergencyCleanupRequired <- true
-                        failtestf "parent PID %d was not reaped" record.ParentPid
+                        // Step 8: Assert Cancelled outcome
+                        match result.Outcome with
+                        | Cancelled _ -> ()
+                        | CleanupFailure d -> failtestf "expected Cancelled, got CleanupFailure: %s" d
+                        | OutputFailure (d, _) -> failtestf "expected Cancelled, got OutputFailure: %s" d
+                        | BodyFailure (d, _) -> failtestf "expected Cancelled, got BodyFailure: %s" d
+                        | SpawnFailure (d, _) -> failtestf "expected Cancelled, got SpawnFailure: %s" d
+                        | Exited (c, _) -> failtestf "expected Cancelled, got Exited(%d)" c
+                        | NonzeroExit (c, _) -> failtestf "expected Cancelled, got NonzeroExit(%d)" c
 
-                    // Descendant must be reaped within 3 seconds
-                    let deadline3 = DateTime.UtcNow.AddSeconds(3.0)
-                    let mutable descendantReaped = false
-                    while not descendantReaped && DateTime.UtcNow < deadline3 do
-                        if not (isPidAlive record.DescendantPid) then descendantReaped <- true
-                        else Thread.Sleep(50)
-                    if not descendantReaped then
-                        emergencyCleanupRequired <- true
-                        failtestf "descendant PID %d was not reaped" record.DescendantPid
+                        // Step 9: Verify both PIDs are reaped (positive proof: killTree worked)
+                        // Parent must be reaped within 3 seconds
+                        let deadline2 = DateTime.UtcNow.AddSeconds(3.0)
+                        let mutable parentReaped = false
+                        while not parentReaped && DateTime.UtcNow < deadline2 do
+                            if not (isPidAlive record.ParentPid) then parentReaped <- true
+                            else Thread.Sleep(50)
+                        if not parentReaped then
+                            emergencyCleanupRequired <- true
+                            failtestf "parent PID %d was not reaped" record.ParentPid
+
+                        // Descendant must be reaped within 3 seconds
+                        let deadline3 = DateTime.UtcNow.AddSeconds(3.0)
+                        let mutable descendantReaped = false
+                        while not descendantReaped && DateTime.UtcNow < deadline3 do
+                            if not (isPidAlive record.DescendantPid) then descendantReaped <- true
+                            else Thread.Sleep(50)
+                        if not descendantReaped then
+                            emergencyCleanupRequired <- true
+                            failtestf "descendant PID %d was not reaped" record.DescendantPid
 
                 finally
                     // Always clean up with exact PIDs
@@ -500,8 +537,9 @@ let tests =
             // 1. One process-tree invocation with KillTreeStrategy=false
             // 2. Same concurrent polling as positive proof
             // 3. Immediate cancellation after valid readiness
-            // 4. Require parent dead, descendant alive (DescendantSurvived)
-            // 5. Exact-PID cleanup in finally
+            // 4. Require: readiness observed, cancellation after readiness, watchdog not expired,
+            //             real ProcessRunner completed, parent dead, descendant alive (DescendantSurvived)
+            // 5. Exact-PID cleanup in outer finally
             // ---------------------------------------------------------------------------
 
             test "descendant survives when KillTreeStrategy=false (negative validity proof)" {
@@ -510,18 +548,7 @@ let tests =
                 Directory.CreateDirectory(workspace) |> ignore
 
                 let readinessFile = Path.Combine(workspace, "ready-" + nonce)
-
-                // Same bash script as positive proof (echo to both file and stdout)
-                let body =
-                    sprintf
-                        @"sleep 999999999 &
-                         desc_pid=$!
-                         parent_pid=$$
-                         msg=""PROCESS_TREE_READY parent_pid=$parent_pid descendant_pid=$desc_pid nonce=%s""
-                         echo ""$msg"" > ""%s""
-                         echo ""$msg""
-                         sync; while true; do sleep 60; done"
-                        nonce readinessFile
+                let body = makeProcessTreeScript nonce readinessFile
 
                 let mutable cleanupPids = []
                 let mutable proofResult: DescendantProofResult option = None
@@ -552,9 +579,32 @@ let tests =
 
                             let record = concurrentResult.PidRecord.Value
 
-                            // Cancellation must happen after readiness
-                            if not concurrentResult.CancelledAfterReadiness then
-                                failtestf "cancellation must happen after readiness"
+                            // Cancellation must be issued after readiness
+                            if not concurrentResult.CancellationIssuedAfterReadiness then
+                                failtestf "cancellation must be issued after readiness"
+
+                            // Watchdog must NOT have expired
+                            if concurrentResult.WatchdogExpired then
+                                failtestf "watchdog expired - readiness deadline not met"
+
+                            // Real ProcessRunner must have completed
+                            match concurrentResult.Result with
+                            | None -> failtestf "ProcessRunner did not complete - timeout waiting for real result"
+                            | Some result ->
+                                // Verify exactly one stdout record matches
+                                let matches = Regex.Matches(result.Output, @"PROCESS_TREE_READY parent_pid=(\d+) descendant_pid=(\d+) nonce=(\S+)")
+                                if matches.Count <> 1 then
+                                    failtestf "expected exactly 1 stdout record, got %d" matches.Count
+                                let m = matches.[0]
+                                let outParent = int m.Groups.[1].Value
+                                let outDescendant = int m.Groups.[2].Value
+                                let outNonce = m.Groups.[3].Value
+                                if record.ParentPid <> outParent then
+                                    failtestf "stdout parent mismatch: %d vs %d" record.ParentPid outParent
+                                if record.DescendantPid <> outDescendant then
+                                    failtestf "stdout descendant mismatch: %d vs %d" record.DescendantPid outDescendant
+                                if record.Nonce <> outNonce then
+                                    failtestf "stdout nonce mismatch: %s vs %s" record.Nonce outNonce
 
                             // Verify parent is dead (Kill(false) kills parent)
                             Thread.Sleep(500) // Give OS time to process kill
@@ -568,12 +618,11 @@ let tests =
                                 proofResult <- Some (DescendantReaped(record.ParentPid, record.DescendantPid))
                             else
                                 proofResult <- Some (Unexpected(sprintf "parent=%b descendant=%b" parentAlive descendantAlive))
-
-                            // Cleanup before classification check (descendant may still be alive)
-                            emergencyCleanup cleanupPids |> ignore
                         )
 
                 finally
+                    // Cleanup after classification - descendant may still be alive
+                    emergencyCleanup cleanupPids |> ignore
                     cleanupReadiness readinessFile
                     cleanupWorkspace workspace
 
@@ -720,13 +769,6 @@ let tests =
             // Mechanical proof of the new settlement semantics.
             // -------------------------------------------------------------------
 
-            // ``ContextCleanupFailure`` is exercised by substituting a
-            // never-completing stdout drain via
-            // ``SubstituteStdoutDrainTask``.  The catch branch must
-            // classify the timeout as ``ContextCleanupFailure`` (not
-            // ``ContextConstructionFailure``).  The outcome surfaces
-            // as ``CleanupFailure`` (NOT ``SpawnFailure`` — Process.Start
-            // succeeded), with the exact timed-out label.
             test "ContextCleanupFailure: stdout never completes inside startAsync -> CleanupFailure" {
                 let observedPids = ConcurrentQueue<int>()
                 let neverCompletes = TaskCompletionSource<Result<byte[], exn>>()
@@ -750,14 +792,6 @@ let tests =
                     Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
             }
 
-            // The exhausted-deadline / already-terminal-stderr path.
-            // We use ``InjectWaitFailure`` to force a body exception
-            // so the post-finally outcome constructor runs, and we
-            // substitute stdout with a never-completing task and
-            // stderr with an already-terminal task.  We then verify
-            // stdout ends up ``WaitingForChildrenToComplete`` (never
-            // settled) and stderr ends up ``RanToCompletion`` (the
-            // IsCompleted-first path classified it truthfully).
             test "exhausted deadline: stdout never completes, stderr is already terminal" {
                 let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
                 let stderrTask = ref Unchecked.defaultof<Task<Result<string, exn>>>
@@ -777,20 +811,10 @@ let tests =
                                 Some (TimeoutException("injected-wait-failure") :> exn))
                         (fun () ->
                             runProcessText (bashArgs "sleep 60") noCwd CancellationToken.None)
-                // After settleDrainsShared: stdout remains in a non-terminal
-                // state because the completion source never completes;
-                // stderr was already terminal (RanToCompletion) so the
-                // IsCompleted-first path classified it as SettledOk.
-                // Note: a TCS task that never has SetResult called remains
-                // non-completed even after Wait times out. The TaskStatus
-                // is WaitingForActivation (not WaitingForChildrenToComplete).
                 Expect.equal (!stdoutTask).Status TaskStatus.WaitingForActivation "stdout is waiting for completion source (never completed)"
                 Expect.isTrue (!stderrTask).IsCompleted "stderr task must be terminal"
                 Expect.equal (!stderrTask).Status TaskStatus.RanToCompletion "stderr is RanToCompletion"
                 let _ = alreadyTerminalStdout
-                // Cleanup note must record stdout timeout but NOT stderr.
-                // The contract requires CleanupFailure (not BodyFailure) when
-                // a drain timeout is detected during cleanup.
                 match r.Outcome with
                 | CleanupFailure detail ->
                     Expect.stringContains detail "stdout drain did not settle" "stdout timeout recorded"
@@ -799,12 +823,6 @@ let tests =
                     failtestf "expected CleanupFailure for exhausted-deadline scenario, got %A" outcome
             }
 
-            // Terminal drain task carrying inner ``Result.Error``:
-            // proves ``inspectTerminal`` records the inner error in
-            // the cleanup note (SettledWithError) rather than silently
-            // classifying it as SettledOk.  Exact OutputFailure proves:
-            // 1. terminal inspection did not throw;
-            // 2. the output-stage failure was not misclassified.
             test "terminal drain carrying inner Result.Error is recorded into the cleanup note" {
                 let injectedEx = IOException("injected-inner-error")
                 let injectedTask : Task<Result<byte[], exn>> =
@@ -824,11 +842,6 @@ let tests =
                 Expect.equal injectedTask.Status TaskStatus.RanToCompletion "task is RanToCompletion"
             }
 
-            // Faulted drain task: ``inspectTerminal`` must record
-            // the inner exception message into the cleanup note
-            // (rather than letting ``task.Result`` throw).
-            // Exact OutputFailure proves terminal inspection did not throw
-            // and the output-stage failure was not misclassified.
             test "faulted drain task is caught by inspectTerminal via IsFaulted branch" {
                 let faultedTask = faultedStdoutTask "injected-fault"
                 let r =
@@ -846,11 +859,6 @@ let tests =
                 Expect.equal faultedTask.Status TaskStatus.Faulted "task is Faulted"
             }
 
-            // Cancelled drain task: ``inspectTerminal`` must record
-            // a cancellation note rather than letting ``task.Result``
-            // throw.
-            // Exact OutputFailure proves terminal inspection did not throw
-            // and the output-stage failure was not misclassified.
             test "cancelled drain task is caught by inspectTerminal via IsCanceled branch" {
                 let cancelledTask = cancelledStdoutTask ()
                 let r =
