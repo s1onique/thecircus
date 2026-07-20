@@ -12,27 +12,29 @@ until the remaining open items in §Outstanding are mechanically closed.
 
 This revision's delta against revision 4:
 
-* **P0-3 — exception-safe ownership.**  ``runCore`` and ``startAsync``
-  each use a try/finally ownership bracket.  ``runCore`` executes the
-  body inside an inner ``try/with`` that captures exceptions into a
-  mutable ``bodyResult``, while an outer ``try/finally`` guarantees
-  that **kill → bounded wait → drain-settle → dispose** complete
-  BEFORE the public outcome is constructed.  ``startAsync`` retains
-  local ``partialStdout`` / ``partialStderr`` task options so any
-  drain task that has been created before a subsequent acquisition
-  step throws is still settled (boundedly) inside the catch branch —
-  alongside the kill, bounded wait, and dispose that always run.
-  ``settleDrainsShared`` returns a structured ``DrainSettleAggregate``
-  (``AllDrainsTerminal`` | ``DrainTimeout`` of label).  ``runCore``
-  promotes the outcome to ``CleanupFailure`` when a drain timed out,
-  instead of silently appending text and returning ``BodyFailure``.
-  Five new injection / observation hooks are exposed:
-  * ``InjectStartAsyncStdoutDrainFailure``, ``InjectStartAsyncObserverFailure``
-    — exercise the partial-acquisition window inside ``startAsync``.
-  * ``ObserveStdoutDrainTask``, ``ObserveStderrDrainTask`` — publish
-    drain tasks immediately after creation (BEFORE the subsequent
-    injection point) so a test can capture them and assert they are
-    ``RanToCompletion`` even when a downstream injection throws.
+* **P0-3 — exception-safe ownership.**  ``runCore`` uses nested
+  ``try ( try <body> with capture ) finally <cleanup>``: body
+  exceptions are captured into a mutable ``bodyResult`` while the
+  outer ``finally`` guarantees that kill, bounded wait, drain-settle,
+  and dispose complete BEFORE the public outcome is constructed.
+  ``startAsync`` uses a ``try/with`` block with explicit cleanup in
+  the handler (rather than a nested ``try/finally``) because the
+  cleanup sequence is conditional on whether any partial drain tasks
+  exist.  Both produce the same ownership guarantee.
+  ``settleDrainsShared`` inspects BOTH stdout and stderr drains
+  unconditionally; even when the shared deadline is exhausted by the
+  first pass, the second pass can still inspect the second drain
+  via the ``IsCompleted`` branch.  ``inspectTerminal`` observes the
+  inner ``Result`` for already-terminal tasks so a drain that
+  ``RanToCompletion`` while reporting inner ``Result.Error`` is no
+  longer silently swallowed.  A new ``StartFailure`` discriminated
+  union (PreSpawnFailure | ContextConstructionFailure |
+  ContextCleanupFailure of detail * timedOutLabels) lets
+  ``startAsync`` propagate the structured settlement result so
+  ``runCore`` can produce a truthful ``CleanupFailure`` for a
+  post-``Process.Start`` failure whose cleanup drained timed out
+  — instead of collapsing every post-Start failure into
+  ``SpawnFailure``.
 
 * **P1-2 — inventory failure distinction.**  ``InventoryFailure``
   gains a new ``GitBodyFailure of detail: string`` case.  ``fromOutcome``
@@ -42,8 +44,8 @@ This revision's delta against revision 4:
 * **P0-6 — evidence identity.**  ``implementation_commit_oid`` rebinds
   to this revision's implementation commit.  ``tested_commit_oid``
   and ``tested_tree_oid`` identify the commit actually fully executed
-  against.  ``documentation_content_base_commit_oid`` rebinds to
-  the implementation commit whose tree the docs evaluate.  The
+  against.  ``documentation_content_base_commit_oid`` rebinds to the
+  implementation commit whose tree the docs evaluate.  The
   unresolved ``<run git rev-parse ...>`` placeholder is removed;
   the field is renamed from ``previous_documentation_endpoint_commit_oid``
   to the precise ``revision4_documentation_endpoint_commit_oid`` so
@@ -52,12 +54,12 @@ This revision's delta against revision 4:
 ## Identity reconciliation
 
 ```
-implementation_commit_oid                 = e2b33677f2db2503dd730475cffde0f9f9f14808
-implementation_tree_oid                   = 07c0701d0be99b8cc876382db5bdd4f19bc9c34d
-tested_commit_oid                         = e2b33677f2db2503dd730475cffde0f9f9f14808
-tested_tree_oid                           = 07c0701d0be99b8cc876382db5bdd4f19bc9c34d
-evidence_endpoint_commit_oid              = e2b33677f2db2503dd730475cffde0f9f9f14808
-documentation_content_base_commit_oid     = e2b33677f2db2503dd730475cffde0f9f9f14808
+implementation_commit_oid                 = c4da4ef476044e5bf93b7f260b1457c7b6156eb8
+implementation_tree_oid                   = c3a552a3aa2da2ca9c2da5b5c6130f431f525f2f
+tested_commit_oid                         = c4da4ef476044e5bf93b7f260b1457c7b6156eb8
+tested_tree_oid                           = c3a552a3aa2da2ca9c2da5b5c6130f431f525f2f
+evidence_endpoint_commit_oid              = c4da4ef476044e5bf93b7f260b1457c7b6156eb8
+documentation_content_base_commit_oid     = c4da4ef476044e5bf93b7f260b1457c7b6156eb8
 revision4_documentation_endpoint_commit_oid = f117929 (revision-4 close-report commit)
 ```
 
@@ -80,12 +82,17 @@ tests_failed          = 9  (Container policy negative mutations; pre-existing P0
 tests_errored         = 1  (one mutation-accounting aggregate errored; same root cause)
 tests_skipped         = 0
 process_runner_subset = 26 of 26 passing (including seven failure-injection tests:
-                       - injected startAsync access failure (PID proof),
-                       - injected startAsync stdout-drain partial acquisition,
-                       - injected startAsync observer partial acquisition,
-                       - injected wait failure (long-running child, terminal-state proof),
+                       - injected startAsync access failure (now expects BodyFailure,
+                         NOT SpawnFailure, since Process.Start already succeeded),
+                       - injected startAsync stdout-drain partial acquisition
+                         (settles the partial drain with RanToCompletion),
+                       - injected startAsync observer partial acquisition
+                         (settles BOTH partial drains with RanToCompletion),
+                       - injected wait failure on long-running child
+                         (both drain tasks RanToCompletion),
                        - injected drain failure,
-                       - injected DisposeProcess catch-and-record)
+                       - injected DisposeProcess catch-and-record,
+                       - injection reset / cross-test pollution check)
 mutation_expected     = 22
 mutation_executed     = 13 (carried over from revisions 1-4)
 mutation_passed       = 13
@@ -99,7 +106,7 @@ working_tree_status   = clean (this report was committed separately)
 
 The ProcessRunner-focused subset (26 tests, including the seven
 failure-injection tests) passes 26/26 against the implementation
-tree ``07c0701d0be99b8cc876382db5bdd4f19bc9c34d``.  The full
+tree ``c3a552a3aa2da2ca9c2da5b5c6130f431f525f2f``.  The full
 Circus.Tooling.Tests suite runs 153/163 — the 10 non-passing entries
 (9 failed + 1 errored) are the pre-existing P0-5
 mutation-accounting cases that this ACT acknowledges as outstanding.
@@ -110,10 +117,10 @@ mutation-accounting cases that this ACT acknowledges as outstanding.
 | --- | --- |
 | P0-1 Truly async concurrent draining | **Implementation resolved**; canonical proof pending |
 | P0-2 Effective cancellation | **Partial** — parent cancellation bounded via ``Process.WaitForExitAsync(ct)``; descendant-PID proof remains open |
-| P0-3 Observable cleanup failures | **Partial — ``runCore`` ownership bracket, kill-then-settle drain order, shared-deadline settle, real ``DisposeProcess`` injection, partial-acquisition bracket inside ``startAsync``, structured drain-timeout promotion to ``CleanupFailure``, and the PID / drain-task observation hooks are all in place; descendant-PID proof remains open (see Outstanding)** |
+| P0-3 Observable cleanup failures | **Partial — ``runCore`` ownership bracket, kill-then-settle drain order, shared-deadline settle, real ``DisposeProcess`` injection, partial-acquisition bracket inside ``startAsync``, structured ``StartFailure`` propagation, ``inspectTerminal`` for already-terminal tasks, dual-drain ``settleDrainsShared`` inspection, and the PID / drain-task observation hooks are all in place; descendant-PID proof remains open (see Outstanding)** |
 | P0-4 Single-invocation violation accounting | **Resolved** |
 | P0-5 Non-vacuous mutation registry | **Open** — registry authoritative; accounting still uses a global mutable; 13/22 cases executed against compliant baselines |
-| P0-6 Evidence identity reconciliation | **Resolved** — distinct fields populated; documentation content base is the implementation commit ``e2b3367``; the previous-revision endpoint field is renamed to ``revision4_documentation_endpoint_commit_oid``; the self-referential ``<run git rev-parse ...>`` placeholder is removed |
+| P0-6 Evidence identity reconciliation | **Resolved** — distinct fields populated; documentation content base is the implementation commit ``c4da4ef``; the previous-revision endpoint field is renamed to ``revision4_documentation_endpoint_commit_oid``; the self-referential ``<run git rev-parse ...>`` placeholder is removed |
 
 ## P1 status (revision 5)
 
@@ -165,11 +172,20 @@ mutation-accounting cases that this ACT acknowledges as outstanding.
 
 Revision 5 mechanically closes:
 
-* the ``runCore`` ownership-bracket regression,
-* the partial-acquisition window inside ``startAsync``,
-* the exceptional drain-settlement ordering (kill → bounded wait →
-  drain-settle → dispose, with a single shared settle deadline),
-* the structured drain-timeout promotion to ``CleanupFailure``,
+* the ``runCore`` ownership-bracket regression (nested
+  ``try ( try <body> with capture ) finally <cleanup>``),
+* the ``startAsync`` partial-acquisition bracket (``try/with`` with
+  explicit cleanup in the handler),
+* the structured ``StartFailure`` propagation so a
+  post-``Process.Start`` failure with a cleanup drain timeout is
+  reported as ``CleanupFailure`` and not collapsed into
+  ``SpawnFailure``,
+* the dual-drain ``settleDrainsShared`` inspection (both drains
+  unconditionally inspected; the ``IsCompleted`` branch keeps an
+  already-terminal stderr truthful even after the shared deadline is
+  exhausted by the first pass),
+* the ``inspectTerminal`` helper that observes the inner ``Result``
+  for already-terminal tasks,
 * the post-``Process.Start`` PID proof (via ``ObserveStartedPid``)
   and the drain-task terminal-state proof (via
   ``ObserveStdoutDrainTask`` / ``ObserveStderrDrainTask``),
@@ -177,7 +193,7 @@ Revision 5 mechanically closes:
   ``DisposeProcess`` operation that flows through the try/with),
 * the P1-2 ``BodyFailure → GitCleanupFailure`` misclassification,
 * the P0-6 evidence identity (implementation, tested, evidence,
-  documentation content base all bind to ``e2b3367``; the
+  documentation content base all bind to ``c4da4ef``; the
   previous-revision endpoint field is renamed to
   ``revision4_documentation_endpoint_commit_oid``).
 
