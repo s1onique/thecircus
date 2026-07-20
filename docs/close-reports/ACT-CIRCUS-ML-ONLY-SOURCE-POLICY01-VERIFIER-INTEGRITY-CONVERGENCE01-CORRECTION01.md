@@ -35,7 +35,7 @@ tested_tree_oid                           = a8ad4bc81fd29a22f8dca7faf6a46ce35a0b
 evidence_endpoint_commit_oid              = 6e7b12d134ce062f10f236fb55f5fac63c01dafe
 documentation_content_base_commit_oid     = 6e7b12d134ce062f10f236fb55f5fac63c01dafe
 revision4_documentation_endpoint_commit_oid = f117929 (revision-4 close-report commit)
-preceding_documentation_commit_oid        = 7434729 (revision-6 predecessor; superseded by this revision)
+superseded_misbound_documentation_commit_oid = 7434729 (superseded misnamed close-report commit)
 ```
 
 Implementation, tested, evidence, and documentation content base are
@@ -44,16 +44,18 @@ compilation, and test execution were produced in a single local
 session.
 
 The ``revision4_documentation_endpoint_commit_oid`` field remains for
-historical traceability.  The ``preceding_documentation_commit_oid`` is the
-revision-6 predecessor; this revision's documentation endpoint commit
-is recorded externally in the delivery envelope, not embedded in the
-document itself.
+historical traceability.  The ``superseded_misbound_documentation_commit_oid``
+is the misnamed close-report commit that was superseded during this revision;
+this revision's documentation endpoint commit is recorded externally in the
+delivery envelope, not embedded in the document itself.
 
 ## Required fields
 
 ```
 full_suite_status     = fail
-tests_passed          = 153 (Circus.Tooling.Tests; revision-6 implementation)
+full_suite_evidence   = carried forward from revision-5 tested tree
+full_suite_evidence_commit_oid = c4da4ef476044e5bf93b7f260b1457c7b6156eb8
+tests_passed          = 153 (Circus.Tooling.Tests; carried from revision-5)
 tests_failed          = 9  (Container policy negative mutations; pre-existing P0-5 outstanding items)
 tests_errored         = 1  (one mutation-accounting aggregate errored; same root cause)
 tests_skipped         = 0
@@ -101,7 +103,7 @@ mutation-accounting cases that this ACT acknowledges as outstanding.
 | P0-3 Observable cleanup failures | **Resolved — mechanically proven 31/31** — ``inspectTerminal`` checks `IsCanceled` then `IsFaulted` before accessing `Result`, making it total for all terminal task states; `settleDrainsSharedSafe` guarantees disposal even if settlement throws; tests require exact outcome classifications |
 | P0-4 Single-invocation violation accounting | **Resolved** |
 | P0-5 Non-vacuous mutation registry | **Open** — registry authoritative; accounting still uses a global mutable; 13/22 cases executed against compliant baselines |
-| P0-6 Evidence identity reconciliation | **Resolved** — evidence rebinds to ``6e7b12d`` / ``a8ad4bc8``; ``preceding_documentation_commit_oid`` records the revision-6 predecessor; external delivery records the documentation endpoint |
+| P0-6 Evidence identity reconciliation | **Resolved** — evidence rebinds to ``6e7b12d`` / ``a8ad4bc8``; ``superseded_misbound_documentation_commit_oid`` records the superseded misnamed commit; external delivery records the documentation endpoint |
 
 ## P1 status (revision 6)
 
