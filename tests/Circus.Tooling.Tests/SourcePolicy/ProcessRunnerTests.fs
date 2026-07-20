@@ -7,6 +7,7 @@ open System.Collections.Concurrent
 open System.Diagnostics
 open System.IO
 open System.Threading
+open System.Threading.Tasks
 open Expecto
 
 open Circus.Tooling.SourcePolicy.ProcessRunner
@@ -24,9 +25,10 @@ do
 //
 // The runner exposes ``InjectStartAsyncFailure``,
 // ``InjectStartAsyncAccessFailure``, ``InjectWaitFailure``,
-// ``InjectDrainFailure``, and ``InjectDisposeFailure`` as mutable
-// ``internal`` functions.  Each helper resets every hook to ``None`` so
-// that a misconfigured test cannot poison subsequent tests.
+// ``InjectDrainFailure``, ``InjectDisposeFailure`` (legacy note-append),
+// ``DisposeProcess`` (real dispose operation injection),
+// ``ObserveStartedPid``, ``ObserveStdoutDrainTask``, and
+// ``ObserveStderrDrainTask`` as mutable ``internal`` values.
 // ---------------------------------------------------------------------------
 
 let private resetInjections () =
@@ -34,8 +36,10 @@ let private resetInjections () =
     InjectStartAsyncAccessFailure <- fun () -> None
     InjectWaitFailure             <- fun () -> None
     InjectDrainFailure            <- fun () -> None
-    InjectDisposeFailure          <- fun () -> None
+    DisposeProcess                <- fun (p: Process) -> p.Dispose()
     ObserveStartedPid             <- ignore
+    ObserveStdoutDrainTask        <- ignore
+    ObserveStderrDrainTask        <- ignore
 
 let private withInjection<'a>
     (setHooks : unit -> unit)
@@ -59,17 +63,12 @@ let private outcomeSummary (r: TextResult) : string =
 [<Tests>]
 let tests =
     // ``testSequenced`` is required because several tests mutate the
-    // ``Inject*`` failure-injection hooks (process-runner-level
-    // ``mutable internal`` functions) and the ``ObserveStartedPid``
-    // observation hook.  Running tests in parallel would let one
-    // test's injected state leak into another and produce spurious
-    // SpawnFailure / BodyFailure outcomes.  Sequential execution
-    // guarantees that ``resetInjections`` runs to completion before
-    // the next test begins.
+    // process-runner-level ``mutable internal`` hooks.  Running tests
+    // in parallel would let one test's injected state leak into another
+    // and produce spurious SpawnFailure / BodyFailure outcomes.
     testSequenced <| testList "Process runner" [
         // -------------------------------------------------------------------
-        // Host dependency honesty: a missing bash is reported as skipped,
-        // not as a passing substitute test.
+        // Host dependency honesty: a missing bash is reported as skipped.
         // -------------------------------------------------------------------
         if not bashOk then
             test "skipped (bash unavailable)" {
@@ -77,7 +76,7 @@ let tests =
             }
         else
             // -------------------------------------------------------------------
-            // P0-1 / P0-2 / P0-3: cancellation-aware concurrent draining
+            // P0-1 / P0-2 / P0-3 baseline tests.
             // -------------------------------------------------------------------
             test "successful zero exit" {
                 let r = runProcessText (bashArgs "exit 0") noCwd CancellationToken.None
@@ -108,9 +107,6 @@ let tests =
                 Expect.stringContains r.Stderr "to-err" "stderr preserved"
             }
 
-            // P0-1 deterministic deadlock regression: child fills stderr past
-            // pipe capacity while stdout stays open, then writes stdout, then
-            // exits.  Predecessor implementation blocked here.
             test "simultaneous large stdout and stderr do not deadlock" {
                 let body =
                     "for i in $(seq 1 5000); do echo err$i 1>&2; done; " +
@@ -165,8 +161,7 @@ let tests =
                 | o -> failtestf "expected Exited 0, got %A" o
             }
 
-            // P0-2: cancellation of a stdout-only child must yield Cancelled
-            // (NOT CleanupFailure / OutputFailure) within a bounded time.
+            // P0-2: cancellation
             test "cancellation of stdout-only child yields Cancelled" {
                 let body = "for i in $(seq 1 30); do echo $i; sleep 1; done"
                 use cts = new CancellationTokenSource()
@@ -177,8 +172,6 @@ let tests =
                 | o -> failtestf "expected Cancelled, got %A" o
             }
 
-            // P0-2: cancellation of a stderr-only child (stdout stays open)
-            // must yield Cancelled, not deadlock.
             test "cancellation of stderr-only child yields Cancelled" {
                 let body = "for i in $(seq 1 60); do echo err$i 1>&2; sleep 1; done"
                 use cts = new CancellationTokenSource()
@@ -189,7 +182,6 @@ let tests =
                 | o -> failtestf "expected Cancelled, got %A" o
             }
 
-            // P0-2: cancellation of a silent child must yield Cancelled.
             test "cancellation of silent child yields Cancelled" {
                 let body = "sleep 30"
                 use cts = new CancellationTokenSource()
@@ -200,8 +192,6 @@ let tests =
                 | o -> failtestf "expected Cancelled, got %A" o
             }
 
-            // P0-2: cancellation of a child with a descendant must yield
-            // Cancelled and the parent PID must be reaped.
             test "cancellation of child with descendant reaps parent and descendant" {
                 let body =
                     "sleep 60 & echo \"DESCENDANT_PID=$!\" 1>&2; wait"
@@ -212,7 +202,6 @@ let tests =
                 | Cancelled _ ->
                     match r.Pid with
                     | Some pid ->
-                        // Give the OS a moment to actually reap.
                         Thread.Sleep(250)
                         Expect.isFalse (isPidAlive pid) "parent PID must be reaped"
                     | None -> failtestf "expected a parent PID, got None"
@@ -243,7 +232,6 @@ let tests =
                 | o -> failtestf "unexpected outcome: %A" o
             }
 
-            // P0-1 regression: above-pipe-capacity stderr + stdout simultaneously.
             test "above-pipe-capacity stderr while stdout open does not deadlock" {
                 let stderrBytes = 256 * 1024
                 let body =
@@ -260,12 +248,6 @@ let tests =
 
             // -------------------------------------------------------------------
             // P0-3: Exception-safe ownership bracket + failure-injection tests.
-            //
-            // Each test forces a failure at one stage of the lifecycle.  After
-            // the failure, ``runCore`` MUST still:
-            //   * return a structured ``ProcessOutcome`` (no exception escapes);
-            //   * have released the started process so no PID lingers;
-            //   * leave the failure injection hooks reset for the next test.
             // -------------------------------------------------------------------
 
             test "injected startAsync failure produces SpawnFailure with the injected note" {
@@ -281,10 +263,6 @@ let tests =
                 | o -> failtestf "expected SpawnFailure, got %A" o
             }
 
-            // The context-construction leak test now requires ObserveStartedPid
-            // to capture the PID before the bracket releases the process.
-            // The test FAILS if no PID was observed, instead of silently
-            // passing because ``r.Pid`` is ``None`` in the cleanup branch.
             test "injected startAsync access failure captures the started PID and releases it" {
                 let observedPids = ConcurrentQueue<int>()
                 let r =
@@ -295,15 +273,11 @@ let tests =
                                 Some (InvalidOperationException("injected-context-failure") :> exn))
                         (fun () ->
                             runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
-                // Exactly one PID must have been observed (the one the
-                // bracket released).  If this is zero the runner never
-                // reached ``Process.Id`` and the test must fail loudly.
                 Expect.isGreaterThan (observedPids.Count) 0 "expected at least one observed PID"
                 match r.Outcome with
                 | SpawnFailure _
                 | BodyFailure _ -> ()
                 | o -> failtestf "expected SpawnFailure/BodyFailure, got %A" o
-                // Every observed PID must have been reaped by the OS.
                 for pid in observedPids do
                     Thread.Sleep(250)
                     Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
@@ -328,11 +302,6 @@ let tests =
                 | None -> ()
             }
 
-            // The drain-stage failure injection now exercises the
-            // settleDrain path: the in-flight drain task must be joined
-            // (boundedly) BEFORE the outcome is constructed, so the
-            // cleanup note records either "stdout drain settled with
-            // error" or "did not settle within" — not silence.
             test "injected drain failure produces BodyFailure with drain-settle note" {
                 let r =
                     withInjection
@@ -352,28 +321,68 @@ let tests =
                 | None -> ()
             }
 
-            // Real disposal-failure injection: disposeProc itself honours
-            // InjectDisposeFailure and records the note instead of calling
-            // the real ``Process.Dispose``.  The outcome remains structured
-            // and the cleanup note contains the injected exception message.
-            test "injected dispose failure is captured by disposeProc without calling real Dispose" {
+            // Long-running child + injected wait failure.  This is the
+            // canonical proof that the drain-settle ordering is
+            // correct: kill first (which closes the streams), then
+            // settle (which now sees the streams closed and the drain
+            // tasks terminate).  Without the kill-then-settle order the
+            // drain tasks would still be blocked on ReadAsync and the
+            // bounded settle would only time out — the IsCompleted
+            // assertions below would fail.
+            test "injected wait failure on long-running child leaves both drain tasks terminal" {
+                let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
+                let stderrTask = ref Unchecked.defaultof<Task<Result<string, exn>>>
                 let r =
                     withInjection
                         (fun () ->
-                            InjectDisposeFailure <- fun () ->
-                                Some (ObjectDisposedException("injected-dispose-failure") :> exn))
+                            ObserveStdoutDrainTask <- (fun t -> stdoutTask := t)
+                            ObserveStderrDrainTask <- (fun t -> stderrTask := t)
+                            InjectWaitFailure <- fun () ->
+                                Some (TimeoutException("injected-wait-failure") :> exn))
+                        (fun () ->
+                            runProcessText (bashArgs "sleep 60") noCwd CancellationToken.None)
+                match r.Outcome with
+                | BodyFailure (detail, _) ->
+                    Expect.stringContains detail "injected-wait-failure" "wait note propagated"
+                | o -> failtestf "expected BodyFailure, got %A" o
+                // Both drain tasks MUST be in a terminal state by the
+                // time ``runCore`` returns.  This is the mechanical
+                // proof that the kill-then-settle cleanup order lets
+                // the drain ``ReadAsync`` calls return naturally.
+                Expect.isTrue (!stdoutTask).IsCompleted "stdout drain task must be terminal"
+                Expect.isTrue (!stderrTask).IsCompleted "stderr drain task must be terminal"
+                Expect.equal (!stdoutTask).Status TaskStatus.RanToCompletion "stdout drain RanToCompletion"
+                Expect.equal (!stderrTask).Status TaskStatus.RanToCompletion "stderr drain RanToCompletion"
+                match r.Pid with
+                | Some pid ->
+                    Thread.Sleep(250)
+                    Expect.isFalse (isPidAlive pid) "long-running child must be reaped"
+                | None -> ()
+            }
+
+            // Real dispose-failure injection: DisposeProcess itself
+            // throws, the try/with inside disposeProc catches it, and
+            // the cleanup note records "dispose failed: ..." (not a
+            // synthetic "dispose injected failure" note).  This proves
+            // the catch-and-record branch is exercised.
+            test "injected DisposeProcess throws and is caught by disposeProc" {
+                let r =
+                    withInjection
+                        (fun () ->
+                            DisposeProcess <-
+                                fun (_p: Process) ->
+                                    raise (ObjectDisposedException("injected-dispose-failure")))
                         (fun () ->
                             runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
                 match r.Outcome with
                 | Exited (0, note)
                 | NonzeroExit (_, note) ->
-                    Expect.stringContains note "dispose injected failure" "dispose note recorded by disposeProc"
-                | o -> failtestf "expected Exited/NonzeroExit with dispose note, got %A" o
+                    Expect.stringContains note "dispose failed" "dispose catch-and-record branch ran"
+                    Expect.stringContains note "injected-dispose-failure" "real exception message preserved"
+                | o -> failtestf "expected Exited/NonzeroExit with dispose-failed note, got %A" o
             }
 
             test "injection hooks are reset after each test (no cross-test pollution)" {
-                // No injection should be active for this run; we expect a normal
-                // Exited 0 even though previous tests injected failures.
                 resetInjections ()
                 let r = runProcessText (bashArgs "exit 0") noCwd CancellationToken.None
                 match r.Outcome with
