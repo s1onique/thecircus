@@ -7,14 +7,8 @@ open Circus.Tooling.SourcePolicy.Cli
 [<EntryPoint>]
 let main (argv: string[]) : int =
     let args = argv |> Array.toList
-    let subArgs =
-        match args with
-        | "source-policy" :: rest -> rest
-        | _ -> args
 
-    let emitText (_format: string) (text: string) : unit = stdout.WriteLine text
-
-    match parse subArgs with
+    match parse args with
     | Error msg ->
         stderr.WriteLine("error: " + msg)
         eprintfn "%s" (helpText ())
@@ -25,18 +19,17 @@ let main (argv: string[]) : int =
             stdout.WriteLine(helpText ())
             ExitCode.pass
         | VersionCmd ->
-            stdout.WriteLine "circus-tooling source-policy 1.0.0"
+            stdout.WriteLine "circus-tooling 1.0.0"
             ExitCode.pass
-        | VerifyCmd fmt ->
-            let f = fmt
+        | VerifyCmd _ ->
             match resolveRepoRoot () with
-            | Error detail -> emitText f detail; ExitCode.operationalError
-            | Ok repoRoot -> runVerify f repoRoot
-        | InventoryCmd fmt ->
-            let f = fmt
+            | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
+            | Ok repoRoot -> runSourcePolicyVerify repoRoot
+        | ContainerPolicyCmd _ ->
             match resolveRepoRoot () with
-            | Error detail -> emitText f detail; ExitCode.operationalError
-            | Ok repoRoot -> runInventory f repoRoot
-        | ExplainCmd (_path, _ignored) ->
-            stdout.WriteLine "explain: not implemented"
-            ExitCode.pass
+            | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
+            | Ok repoRoot -> runContainerPolicy repoRoot
+        | GateSummaryCmd _ ->
+            match resolveRepoRoot () with
+            | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
+            | Ok repoRoot -> runGateSummary repoRoot

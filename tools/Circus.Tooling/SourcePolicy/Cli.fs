@@ -4,10 +4,14 @@ open System
 open System.IO
 
 open Circus.Tooling.SourcePolicy.Paths
+open Circus.Tooling.SourcePolicy.Inventory
+open Circus.Tooling.SourcePolicy.Classifier
 open Circus.Tooling.SourcePolicy.Verification
 open Circus.Tooling.SourcePolicy.Domain
 open Circus.Tooling.SourcePolicy.JsonReport
 open Circus.Tooling.SourcePolicy.HumanReport
+open Circus.Tooling.SourcePolicy.ContainerPolicy
+open Circus.Tooling.SourcePolicy.GateSummary
 
 module ExitCode =
     let pass = 0
@@ -16,53 +20,28 @@ module ExitCode =
 
 type Command =
     | VerifyCmd of fmt: string
-    | InventoryCmd of fmt: string
-    | ExplainCmd of path: string * fmt: string
+    | ContainerPolicyCmd of fmt: string
+    | GateSummaryCmd of fmt: string
     | HelpCmd
     | VersionCmd
 
 let helpText () : string =
-    "circus-tooling source-policy — ML-only source policy verifier\n"
+    "circus-tooling — F# implementation policy verifier (source-policy, container-policy, gate-summary)\n"
     + "\n"
     + "Usage:\n"
-    + "  circus-tooling source-policy verify [--format human|json]\n"
-    + "  circus-tooling source-policy inventory [--format human|json]\n"
-    + "  circus-tooling source-policy explain <path> [--format human|json]\n"
-    + "  circus-tooling source-policy help\n"
-
-let parseFormat (value: string) : Result<string, string> =
-    match value with
-    | "human" | "json" -> Ok value
-    | _ -> Error(sprintf "unknown --format value: %s" value)
-
-let rec skipFlags (args: string list) (fmt: string) : Result<string, string> =
-    match args with
-    | [] -> Ok fmt
-    | "--format" :: value :: rest ->
-        match parseFormat value with
-        | Ok f -> skipFlags rest f
-        | Error e -> Error e
-    | other :: _ -> Error(sprintf "unexpected argument: %s" other)
+    + "  circus-tooling source-policy verify\n"
+    + "  circus-tooling container-policy verify\n"
+    + "  circus-tooling gate-summary regenerate\n"
+    + "  circus-tooling help\n"
 
 let parse (argv: string list) : Result<Command, string> =
     match argv with
     | [] | [ "help" ] | [ "-h" ] | [ "--help" ] -> Ok HelpCmd
     | [ "version" ] -> Ok VersionCmd
-    | [ "verify" ] -> Ok(VerifyCmd "human")
-    | "verify" :: rest ->
-        match skipFlags rest "human" with
-        | Ok f -> Ok(VerifyCmd f)
-        | Error e -> Error e
-    | [ "inventory" ] -> Ok(InventoryCmd "human")
-    | "inventory" :: rest ->
-        match skipFlags rest "human" with
-        | Ok f -> Ok(InventoryCmd f)
-        | Error e -> Error e
-    | "explain" :: path :: rest ->
-        match skipFlags rest "human" with
-        | Ok f -> Ok(ExplainCmd(path, f))
-        | Error e -> Error e
-    | _ -> Error "usage: source-policy {verify|inventory|explain <path>|help|version}"
+    | [ "source-policy"; "verify" ] | [ "verify" ] -> Ok(VerifyCmd "human")
+    | [ "container-policy"; "verify" ] | [ "container-policy" ] -> Ok(ContainerPolicyCmd "human")
+    | [ "gate-summary"; "regenerate" ] | [ "gate-summary" ] -> Ok(GateSummaryCmd "human")
+    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|help}"
 
 let resolveRepoRoot () : Result<string, string> =
     match Inventory.discoverRoot Environment.CurrentDirectory with
@@ -70,22 +49,15 @@ let resolveRepoRoot () : Result<string, string> =
     | Inventory.NotARepository ->
         Error(sprintf "not in a Git repository (cwd=%s)" Environment.CurrentDirectory)
 
-let private emit (format: string) (text: string) : unit =
-    stdout.WriteLine text
-
-let runVerify (fmt: string) (repoRoot: string) : int =
+let runSourcePolicyVerify (repoRoot: string) : int =
     let cfg = defaultConfig repoRoot
-    let outcome = verify cfg
-    if fmt = "json" then emit fmt (renderVerify outcome)
-    else emit fmt (renderVerify outcome)
+    let outcome : VerificationOutcome = Verification.verify cfg
+    stdout.WriteLine (HumanReport.renderVerify outcome)
     if List.isEmpty outcome.Findings then ExitCode.pass
     else ExitCode.policyFailure
 
-let runInventory (fmt: string) (repoRoot: string) : int =
-    let outcome = verify (defaultConfig repoRoot)
-    emit fmt (JsonReport.renderVerify outcome)
-    if List.isEmpty outcome.Findings then ExitCode.pass else ExitCode.policyFailure
+let runContainerPolicy (repoRoot: string) : int =
+    ContainerPolicy.runVerify repoRoot
 
-let runExplain (path: string) (fmt: string) (repoRoot: string) : int =
-    emit fmt (JsonReport.renderOperationalError "not_implemented" "explain command is not implemented in this build")
-    ExitCode.operationalError
+let runGateSummary (repoRoot: string) : int =
+    GateSummary.runRegenerate repoRoot
