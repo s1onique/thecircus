@@ -88,37 +88,58 @@ let internal ValidCheckStatuses   = set [ "pass"; "fail"; "skip"; "unavailable" 
 let statusForExitCode (exitCode: int) : string =
     if exitCode = 0 then "pass" else "fail"
 
-/// Run a process to completion, draining stdout and stderr
-/// concurrently to avoid the dead-lock documented on
-/// ``Process.StandardOutput`` by Microsoft.  We use the
-/// ``OutputDataReceived`` / ``ErrorDataReceived`` event-driven
-/// streams so the OS pipe buffer is consumed as the child writes,
-/// rather than waiting for the child to exit before reading.  When
-/// the child exits the wait completes and we have the buffered
-/// output ready.
-let private runProcess (psi: ProcessStartInfo) : int * string * string =
-    let stdout = StringBuilder()
-    let stderr = StringBuilder()
-    let mutable exited = false
-    let exitCode = ref 0
-    try
+/// Run a process to completion and return its exit code plus the
+/// verbatim stdout and stderr streams.  We drain the streams
+/// asynchronously to avoid the dead-lock documented on
+/// ``Process.StandardOutput`` by Microsoft (filling the OS pipe
+/// buffer before the child exits).  We read the streams as raw
+/// bytes (not via the line-oriented ``OutputDataReceived`` event)
+/// so NUL-delimited protocols such as ``git ls-files -z`` preserve
+/// filenames verbatim; filenames containing embedded newlines or
+/// leading/trailing whitespace survive byte-for-byte.  On
+/// process-launch failure (e.g. the executable is missing from
+/// PATH) this returns ``(-1, "", err)`` where ``err`` carries the
+/// exception message; callers must distinguish this from a
+/// successful launch that exited non-zero.
+let internal runProcessAsync
+    (psi: ProcessStartInfo)
+    (cancellationToken: System.Threading.CancellationToken)
+    : System.Threading.Tasks.Task<int * string * string> =
+    task {
         let proc = Process.Start(psi)
-        proc.OutputDataReceived.Add(fun e ->
-            if not (isNull e) && not (isNull e.Data) then
-                stdout.AppendLine(e.Data) |> ignore)
-        proc.ErrorDataReceived.Add(fun e ->
-            if not (isNull e) && not (isNull e.Data) then
-                stderr.AppendLine(e.Data) |> ignore)
-        proc.BeginOutputReadLine()
-        proc.BeginErrorReadLine()
-        proc.WaitForExit()
-        exited <- true
-        exitCode := proc.ExitCode
-        proc.Dispose()
+        // Read stdout/stderr as raw byte streams so we preserve
+        // every character the child wrote (including embedded NULs
+        // and newlines).  The string conversion is byte-faithful
+        // because F# strings are UTF-16 and the input is decoded as
+        // the system default code page; git ls-files paths are ASCII.
+        let stdoutTask =
+            task {
+                use reader = new System.IO.StreamReader(proc.StandardOutput.BaseStream)
+                return! reader.ReadToEndAsync()
+            }
+        let stderrTask =
+            task {
+                use reader = new System.IO.StreamReader(proc.StandardError.BaseStream)
+                return! reader.ReadToEndAsync()
+            }
+        try
+            do! proc.WaitForExitAsync(cancellationToken)
+        with _ ->
+            try if not proc.HasExited then proc.Kill(true) with _ -> ()
+        let stdout = stdoutTask.Result
+        let stderr = stderrTask.Result
+        return (proc.ExitCode, stdout, stderr)
+    }
+
+/// Synchronous wrapper around ``runProcessAsync``.
+let internal runProcess (psi: ProcessStartInfo) : int * string * string =
+    try
+        runProcessAsync psi System.Threading.CancellationToken.None
+        |> Async.AwaitTask
+        |> Async.RunSynchronously
     with ex ->
-        stderr.AppendLine(sprintf "%s: %s" (ex.GetType().FullName) ex.Message) |> ignore
-        exitCode := -1
-    !exitCode, stdout.ToString(), stderr.ToString()
+        let msg = sprintf "%s: %s" (ex.GetType().FullName) ex.Message
+        (-1, "", msg)
 
 /// Execute one canonical check and record its outcome.  The runner
 /// never throws: a failure to launch the process becomes
@@ -130,7 +151,16 @@ let private runCheck (name: string) (cmd: string list) (workingDir: string) : Ch
     else
         let psi = ProcessStartInfo()
         psi.FileName <- cmd.[0]
-        psi.Arguments <- String.concat " " (List.skip 1 cmd)
+        // ``ProcessStartInfo.ArgumentList`` is the documented
+        // argument-passing mechanism; ``psi.Arguments`` joins the
+        // list with spaces and then re-parses the string per
+        // Windows argument-parsing rules, which corrupts paths or
+        // arguments containing spaces, quotes, or other
+        // shell-significant characters.  See Microsoft docs on
+        // ``ProcessStartInfo.ArgumentList``.
+        psi.ArgumentList.Clear()
+        for a in List.skip 1 cmd do
+            psi.ArgumentList.Add(a)
         psi.RedirectStandardOutput <- true
         psi.RedirectStandardError <- true
         psi.UseShellExecute <- false
