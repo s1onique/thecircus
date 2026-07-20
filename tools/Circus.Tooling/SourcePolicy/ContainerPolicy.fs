@@ -744,60 +744,66 @@ let private checkGateSummaryAcceptance (root: string) : Violation list =
 /// check to its F# implementation; tests exercise both the positive
 /// (correct repository state) and the negative (mutated repository)
 /// cases for every entry.
-let private checks : (string * (string -> Violation list)) list = [
-    ("CP-01_required_files", checkRequiredFiles)
-    ("CP-02_shell_executable", checkShellExecutable)
-    ("CP-03_dockerignore", checkDockerignore)
-    ("CP-04_workflow_triggers", checkWorkflowTriggers)
-    ("CP-05_push_main", checkPushBranchRestriction)
-    ("CP-06_minimal_permissions", checkMinimalPermissions)
-    ("CP-07_concurrency", checkReferenceScopedConcurrency)
-    ("CP-08_reusable_inputs", checkReusableInputs)
-    ("CP-09_no_pull_request_target", checkNoPullRequestTarget)
-    ("CP-10_trusted_runner", checkTrustedRunner)
-    ("CP-11_harbor_naming", checkHarborRepositoryNaming)
-    ("CP-12_password_stdin", checkPasswordStdin)
-    ("CP-13_tls_bypass", checkTlsBypass)
-    ("CP-14_ca_secret", checkPrivateCaAndBuildkit)
-    ("CP-15_cache_distinct", checkCacheSeparation)
-    ("CP-16_publish_gating", checkPublishGating)
-    ("CP-17_cache_import_export", checkCacheImportExport)
-    ("CP-18_immutable_tag", checkImmutableTags)
-    ("CP-19_latest_main_only", checkLatestTagContract)
-    ("CP-20_secret_marker", checkSecretMountCleanup)
-    ("CP-21_elm_marker", checkElmInstaller)
-    ("CP-22_backend_user", checkNumericUsers)
-    ("CP-23_backend_port", checkPortContracts)
-    ("CP-24_backend_smoke", checkSmokeEndpoints)
-    ("CP-25_digest_pull", checkDigestPullInspect)
-    ("CP-26_seam_step", checkWorkflowSeams)
-    ("CP-27_github_output", checkGithubOutputContracts)
-    ("CP-28_action_pin", checkActionPins)
-    ("CP-29_tracked_secrets", checkTrackedSecrets)
-    ("CP-30_final_stage_material", checkFinalStageExclusions)
-    ("CP-31_acceptance_marker", checkGateSummaryAcceptance)
+/// P1-1: Explicit check definition with identity, function name, and runner.
+/// Using nameof ensures compile-time binding and rename tracking.
+type CheckDefinition = {
+    Id: string
+    ImplementationFunction: string
+    Run: string -> Violation list
+}
+
+let private checks : CheckDefinition list = [
+    { Id = "CP-01_required_files";         ImplementationFunction = nameof checkRequiredFiles;        Run = checkRequiredFiles }
+    { Id = "CP-02_shell_executable";        ImplementationFunction = nameof checkShellExecutable;       Run = checkShellExecutable }
+    { Id = "CP-03_dockerignore";            ImplementationFunction = nameof checkDockerignore;           Run = checkDockerignore }
+    { Id = "CP-04_workflow_triggers";       ImplementationFunction = nameof checkWorkflowTriggers;      Run = checkWorkflowTriggers }
+    { Id = "CP-05_push_main";               ImplementationFunction = nameof checkPushBranchRestriction; Run = checkPushBranchRestriction }
+    { Id = "CP-06_minimal_permissions";     ImplementationFunction = nameof checkMinimalPermissions;    Run = checkMinimalPermissions }
+    { Id = "CP-07_concurrency";             ImplementationFunction = nameof checkReferenceScopedConcurrency; Run = checkReferenceScopedConcurrency }
+    { Id = "CP-08_reusable_inputs";          ImplementationFunction = nameof checkReusableInputs;        Run = checkReusableInputs }
+    { Id = "CP-09_no_pull_request_target";   ImplementationFunction = nameof checkNoPullRequestTarget;  Run = checkNoPullRequestTarget }
+    { Id = "CP-10_trusted_runner";          ImplementationFunction = nameof checkTrustedRunner;        Run = checkTrustedRunner }
+    { Id = "CP-11_harbor_naming";           ImplementationFunction = nameof checkHarborRepositoryNaming; Run = checkHarborRepositoryNaming }
+    { Id = "CP-12_password_stdin";           ImplementationFunction = nameof checkPasswordStdin;        Run = checkPasswordStdin }
+    { Id = "CP-13_tls_bypass";              ImplementationFunction = nameof checkTlsBypass;             Run = checkTlsBypass }
+    { Id = "CP-14_ca_secret";               ImplementationFunction = nameof checkPrivateCaAndBuildkit; Run = checkPrivateCaAndBuildkit }
+    { Id = "CP-15_cache_distinct";          ImplementationFunction = nameof checkCacheSeparation;       Run = checkCacheSeparation }
+    { Id = "CP-16_publish_gating";          ImplementationFunction = nameof checkPublishGating;         Run = checkPublishGating }
+    { Id = "CP-17_cache_import_export";     ImplementationFunction = nameof checkCacheImportExport;     Run = checkCacheImportExport }
+    { Id = "CP-18_immutable_tag";           ImplementationFunction = nameof checkImmutableTags;          Run = checkImmutableTags }
+    { Id = "CP-19_latest_main_only";        ImplementationFunction = nameof checkLatestTagContract;      Run = checkLatestTagContract }
+    { Id = "CP-20_secret_marker";           ImplementationFunction = nameof checkSecretMountCleanup;    Run = checkSecretMountCleanup }
+    { Id = "CP-21_elm_marker";              ImplementationFunction = nameof checkElmInstaller;         Run = checkElmInstaller }
+    { Id = "CP-22_backend_user";             ImplementationFunction = nameof checkNumericUsers;           Run = checkNumericUsers }
+    { Id = "CP-23_backend_port";            ImplementationFunction = nameof checkPortContracts;           Run = checkPortContracts }
+    { Id = "CP-24_backend_smoke";           ImplementationFunction = nameof checkSmokeEndpoints;         Run = checkSmokeEndpoints }
+    { Id = "CP-25_digest_pull";             ImplementationFunction = nameof checkDigestPullInspect;       Run = checkDigestPullInspect }
+    { Id = "CP-26_seam_step";               ImplementationFunction = nameof checkWorkflowSeams;         Run = checkWorkflowSeams }
+    { Id = "CP-27_github_output";           ImplementationFunction = nameof checkGithubOutputContracts;   Run = checkGithubOutputContracts }
+    { Id = "CP-28_action_pin";              ImplementationFunction = nameof checkActionPins;             Run = checkActionPins }
+    { Id = "CP-29_tracked_secrets";          ImplementationFunction = nameof checkTrackedSecrets;         Run = checkTrackedSecrets }
+    { Id = "CP-30_final_stage_material";    ImplementationFunction = nameof checkFinalStageExclusions;   Run = checkFinalStageExclusions }
+    { Id = "CP-31_acceptance_marker";       ImplementationFunction = nameof checkGateSummaryAcceptance;   Run = checkGateSummaryAcceptance }
 ]
 
 /// Public surface: all check IDs so tests can mutate each one in turn.
-let CheckIds : string list = checks |> List.map fst
+let CheckIds : string list = checks |> List.map (fun c -> c.Id)
 
-/// Production metadata for container policy checks.
 /// P1-1: Single authoritative source for identity and function mapping.
 type CheckMetadata = {
     Id: string
     ImplementationFunction: string
 }
 
-/// P1-1: Authoritative production metadata derived from the checks list.
-/// Uses exact concrete check identities.
+/// P1-1: Authoritative production metadata derived from CheckDefinition.
 let CheckMetadata : CheckMetadata list =
     checks
-    |> List.map (fun (id, fn) -> { Id = id; ImplementationFunction = fn.Name })
+    |> List.map (fun c -> { Id = c.Id; ImplementationFunction = c.ImplementationFunction })
 
 /// Public surface: run a single check by id.
 let runCheckById (id: string) (root: string) : Violation list =
-    match checks |> List.tryFind (fun (cid, _) -> cid = id) with
-    | Some (_, fn) -> fn root
+    match checks |> List.tryFind (fun c -> c.Id = id) with
+    | Some c -> c.Run root
     | None -> [ { Check = id; Id = id; Path = "<unknown>"; Detail = sprintf "unknown check id: %s" id } ]
 
 /// Run every check and produce a unified report.  ``ChecksFailed``
@@ -809,13 +815,13 @@ let verify (root: string) : ContainerPolicyReport =
     let mutable failedChecks = 0
     let mutable allViolations : Violation list = []
     let mutable operational : string list = []
-    for (id, fn) in checks do
-        let v = fn root
+    for c in checks do
+        let v = c.Run root
         if List.isEmpty v then
             passed <- passed + 1
         else
             failedChecks <- failedChecks + 1
-            if id = "CP-29_tracked_secrets" &&
+            if c.Id = "CP-29_tracked_secrets" &&
                List.exists (fun x -> x.Detail.Contains "git ls-files failed") v then
                 operational <- "CP-29 git inventory failed (cannot prove the secret scan is complete)" :: operational
             allViolations <- List.rev v @ allViolations

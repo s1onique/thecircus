@@ -24,7 +24,8 @@ let ValidStatuses : string list = [ "complete" ]
 
 /// P1-1: Concrete check identity grammar pattern.
 /// Valid format: CP-XX_suffix (e.g., CP-01_required_files, CP-10_trusted_runner)
-let private ConcreteIdPattern = Regex(@"^CP-[0-9]{2}_[a-z0-9]+(?:_[a-z0-9]+)*$")
+/// Uses \A (absolute start) and \z (absolute end) for strict anchoring.
+let private ConcreteIdPattern = Regex(@"\ACP-[0-9]{2}_[a-z0-9]+(?:_[a-z0-9]+)*\z")
 
 /// P1-1: Validates concrete check identity grammar.
 let parseConcreteId (id: string) : string option =
@@ -249,26 +250,38 @@ let validate (rows: ParityRow list) : ValidationOutcome =
     let allMalformed = (malformedLegacyIds @ malformedFsharpIds) |> List.sort |> List.distinct
     let allMalformedReasons = (malformedLegacyReasons @ malformedFsharpReasons) |> List.sortBy fst |> List.distinctBy fst
 
-    // P1-1: Duplicate parity IDs
+    // P1-1: Duplicate parity IDs from original list (before Set.ofList)
     let dupCsvIds =
         csvLegacyIds
         |> List.groupBy id
         |> List.choose (fun (k, g) -> if List.length g > 1 then Some k else None)
 
-    // P1-1: Duplicate production IDs
+    // P1-1: Duplicate production IDs from original metadata list (before Set.ofList)
+    let productionIds = productionMetadata |> List.map (fun m -> m.Id)
     let dupProductionIds =
-        knownIds
-        |> Set.toList
+        productionIds
         |> List.groupBy id
         |> List.choose (fun (k, g) -> if List.length g > 1 then Some k else None)
 
     // P1-1: Known IDs from valid legacy partition
     let validLegacyIds = validLegacy |> List.map fst
+    let validFsharpIds = validFsharp |> List.map fst
 
-    // P1-1: Unknown identities (valid grammar but absent from metadata)
+    // P1-1: Unknown identities (valid grammar but absent from metadata) from BOTH columns
     let unknownLegacy =
         validLegacyIds
         |> List.filter (fun id -> not (Set.contains id knownIds))
+        |> List.sort |> List.distinct
+
+    // P1-1: Unknown FsharpCheckId identities (valid grammar but absent from metadata)
+    let unknownFsharp =
+        validFsharpIds
+        |> List.filter (fun id -> not (Set.contains id knownIds))
+        |> List.sort |> List.distinct
+
+    // P1-1: Combined unknown identities from both columns
+    let unknownIdentities =
+        (unknownLegacy @ unknownFsharp)
         |> List.sort |> List.distinct
 
     // P1-1: Missing identities (in production but not in parity)
@@ -324,7 +337,7 @@ let validate (rows: ParityRow list) : ValidationOutcome =
         ParityRowCount = parityRowCount
         ExactMatches = exactMatches
         MissingIdentities = missing
-        UnknownIdentities = unknownLegacy
+        UnknownIdentities = unknownIdentities  // P1-1: Combined from both legacy and fsharp columns
         DuplicateIdentities = dupCsvIds
         DuplicateProductionIds = dupProductionIds
         FieldMismatches = fieldMismatches
@@ -338,7 +351,7 @@ let validate (rows: ParityRow list) : ValidationOutcome =
         MalformedIdentityReasons = allMalformedReasons
     }
 
-    // P1-1: Build failure list
+    // P1-1: Build failure list (use combined unknownIdentities)
     let failures =
         []
         |> List.append (if productionRuleCount <> parityRowCount then
@@ -349,7 +362,7 @@ let validate (rows: ParityRow list) : ValidationOutcome =
                         else [])
         |> List.append (List.map (sprintf "malformed identity: %s") allMalformed)
         |> List.append (List.map (fun (id, reason) -> sprintf "malformed '%s': %s" id reason) allMalformedReasons)
-        |> List.append (List.map (sprintf "unknown identity: %s") unknownLegacy)
+        |> List.append (List.map (sprintf "unknown identity: %s") unknownIdentities)  // P1-1: Combined from both columns
         |> List.append (List.map (sprintf "missing identity: %s") missing)
         |> List.append (List.map (sprintf "duplicate parity identity: %s") dupCsvIds)
         |> List.append (List.map (sprintf "duplicate production identity: %s") dupProductionIds)

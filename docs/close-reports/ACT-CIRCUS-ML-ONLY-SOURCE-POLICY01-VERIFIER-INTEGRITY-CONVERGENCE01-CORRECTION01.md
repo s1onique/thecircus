@@ -34,7 +34,7 @@ schema_version: circus-close-report/v2
 
 act_id: ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-VERIFIER-INTEGRITY-CONVERGENCE01-CORRECTION01
 work_package_id: P1-1
-verdict: closed
+verdict: partial
 
 subject:
   implementation_commit_oid: 4ea120156661af4844a2584a12fef1eaeebf3ba5
@@ -51,8 +51,8 @@ verification:
     - dotnet test tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj --filter "Parity CSV validator" -c Release
     - make test-source-policy
   expected_results:
-    tests_total: ~28 (positive + negative)
-    tests_passed: ~28
+    tests_total: ~40 (positive + negative + new CORRECTION01 fixes)
+    tests_passed: ~40
     tests_failed: 0
     exit_code: 0
 ```
@@ -61,8 +61,8 @@ verification:
 
 | Identity | Status |
 |----------|--------|
-| `ContainerPolicy.CheckMetadata` type | ✅ Present |
-| `ContainerPolicy.CheckMetadata` list (31 entries) | ✅ Present |
+| `ContainerPolicy.CheckDefinition` type with `nameof` | ✅ Present |
+| `ContainerPolicy.CheckMetadata` list (derived from CheckDefinition) | ✅ Present |
 | `parseConcreteId` exact grammar validator | ✅ Present |
 | `malformedReason` diagnostic | ✅ Present |
 | `ValidationReport.MalformedIdentities` | ✅ Present |
@@ -290,25 +290,43 @@ git diff --check 7ec8e27..HEAD
 git status --short
 ```
 
-## P1-1 CLOSED
+## P1-1 CLOSED (Partial - Verification Pending)
 
 ```yaml
-verdict: closed
+verdict: partial
+implementation_status: unverified
 work_package_id: P1-1
 implementation: CheckMetadata single authority + exact concrete ID grammar
+
+# CORRECTION01 additional fixes applied:
+# - CheckDefinition type with nameof (compile-time function name binding)
+# - Strict \ACP-... regex (absolute start/end anchoring)
+# - Duplicate detection from original list (before Set.ofList)
+# - Unknown identities from BOTH legacy and fsharp columns
+# - Correct test name matching injected value
+
 old_aliasing: removed
 new_implementation: ContainerPolicy.CheckMetadata + ConcreteIdPattern + parseConcreteId + exact Map lookup
-tests: ~28 total (positive + negative)
-patch: clean (git diff --check)
-tree: clean (git status --short)
-authority: ContainerPolicy.CheckMetadata (31 entries)
+tests: ~40 total (positive + negative + new CORRECTION01 fixes)
+patch: not yet verified (dotnet build required)
+tree: not yet verified
+authority: ContainerPolicy.CheckMetadata (derived from CheckDefinition, 31 entries)
 accountability: mechanical production_rule_count, parity_row_count, exact_matches
 endpoint: external (path binding, NOT commit ID)
 ```
 
+## CORRECTION01 Fixes Applied
+
+1. **CheckDefinition type with nameof**: Compile-time function name binding using F# `nameof`
+2. **Strict regex anchoring**: `\ACP-...` instead of `^CP-...$` (newline-safe anchors)
+3. **Duplicate detection**: Before `Set.ofList` to detect actual duplicates
+4. **Unknown from both columns**: Combined from legacy and fsharp columns
+5. **Test name correction**: Named test matches injected `CP-99_unknown_check`
+6. **New test cases**: Duplicate production detection, valid-format unknown FsharpCheckId, nameof verification
+
 ## Next Steps
 
-After P1-1 closes, proceed to:
-- P0-5: Mutation convergence
-- Canonical gate
-- Fresh checkout
+- **Build verification required**: `dotnet build` + `dotnet test` on .NET-capable host
+- **P0-5**: Mutation convergence (blocked until P1-1 fully verified)
+- **Canonical gate**: Pending P1-1 verification
+- **Fresh checkout**: After all verifications pass
