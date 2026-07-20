@@ -22,24 +22,19 @@ do
 
 // ---------------------------------------------------------------------------
 // Failure-injection test helpers.
-//
-// The runner exposes ``InjectStartAsyncFailure``,
-// ``InjectStartAsyncAccessFailure``, ``InjectWaitFailure``,
-// ``InjectDrainFailure``, ``InjectDisposeFailure`` (legacy note-append),
-// ``DisposeProcess`` (real dispose operation injection),
-// ``ObserveStartedPid``, ``ObserveStdoutDrainTask``, and
-// ``ObserveStderrDrainTask`` as mutable ``internal`` values.
 // ---------------------------------------------------------------------------
 
 let private resetInjections () =
-    InjectStartAsyncFailure       <- fun () -> None
-    InjectStartAsyncAccessFailure <- fun () -> None
-    InjectWaitFailure             <- fun () -> None
-    InjectDrainFailure            <- fun () -> None
-    DisposeProcess                <- fun (p: Process) -> p.Dispose()
-    ObserveStartedPid             <- ignore
-    ObserveStdoutDrainTask        <- ignore
-    ObserveStderrDrainTask        <- ignore
+    InjectStartAsyncFailure               <- fun () -> None
+    InjectStartAsyncAccessFailure         <- fun () -> None
+    InjectStartAsyncStdoutDrainFailure    <- fun () -> None
+    InjectStartAsyncObserverFailure       <- fun () -> None
+    InjectWaitFailure                     <- fun () -> None
+    InjectDrainFailure                    <- fun () -> None
+    DisposeProcess                        <- fun (p: Process) -> p.Dispose()
+    ObserveStartedPid                     <- ignore
+    ObserveStdoutDrainTask                <- ignore
+    ObserveStderrDrainTask                <- ignore
 
 let private withInjection<'a>
     (setHooks : unit -> unit)
@@ -62,14 +57,7 @@ let private outcomeSummary (r: TextResult) : string =
 
 [<Tests>]
 let tests =
-    // ``testSequenced`` is required because several tests mutate the
-    // process-runner-level ``mutable internal`` hooks.  Running tests
-    // in parallel would let one test's injected state leak into another
-    // and produce spurious SpawnFailure / BodyFailure outcomes.
     testSequenced <| testList "Process runner" [
-        // -------------------------------------------------------------------
-        // Host dependency honesty: a missing bash is reported as skipped.
-        // -------------------------------------------------------------------
         if not bashOk then
             test "skipped (bash unavailable)" {
                 Expect.isTrue true "bash missing on this host; suite is unavailable"
@@ -263,6 +251,8 @@ let tests =
                 | o -> failtestf "expected SpawnFailure, got %A" o
             }
 
+            // Access-failure injection fires BEFORE any drain task is
+            // created.  The bracket still releases the started process.
             test "injected startAsync access failure captures the started PID and releases it" {
                 let observedPids = ConcurrentQueue<int>()
                 let r =
@@ -278,6 +268,64 @@ let tests =
                 | SpawnFailure _
                 | BodyFailure _ -> ()
                 | o -> failtestf "expected SpawnFailure/BodyFailure, got %A" o
+                for pid in observedPids do
+                    Thread.Sleep(250)
+                    Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
+            }
+
+            // Partial-acquisition injection #1: stdout drain was created
+            // before the throw.  The partial bracket must settle that
+            // drain boundedly before propagating the error.
+            test "injected startAsync stdout-drain failure settles the created stdout drain" {
+                let observedPids = ConcurrentQueue<int>()
+                let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
+                let r =
+                    withInjection
+                        (fun () ->
+                            ObserveStartedPid <- observedPids.Enqueue
+                            ObserveStdoutDrainTask <- (fun t -> stdoutTask := t)
+                            InjectStartAsyncStdoutDrainFailure <- fun () ->
+                                Some (InvalidOperationException("injected-stdout-drain-failure") :> exn))
+                        (fun () ->
+                            runProcessText (bashArgs "sleep 60") noCwd CancellationToken.None)
+                Expect.isGreaterThan (observedPids.Count) 0 "expected at least one observed PID"
+                // The created stdout drain must be terminal after the
+                // partial-acquisition bracket runs settleDrainsShared.
+                Expect.isTrue (!stdoutTask).IsCompleted "partial stdout drain must be terminal"
+                match r.Outcome with
+                | SpawnFailure _
+                | BodyFailure _
+                | CleanupFailure _ -> ()
+                | o -> failtestf "expected SpawnFailure/BodyFailure/CleanupFailure, got %A" o
+                for pid in observedPids do
+                    Thread.Sleep(250)
+                    Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
+            }
+
+            // Partial-acquisition injection #2: both drains were created
+            // before the throw.  Both must be terminal.
+            test "injected startAsync observer failure settles both created drain tasks" {
+                let observedPids = ConcurrentQueue<int>()
+                let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
+                let stderrTask = ref Unchecked.defaultof<Task<Result<string, exn>>>
+                let r =
+                    withInjection
+                        (fun () ->
+                            ObserveStartedPid <- observedPids.Enqueue
+                            ObserveStdoutDrainTask <- (fun t -> stdoutTask := t)
+                            ObserveStderrDrainTask <- (fun t -> stderrTask := t)
+                            InjectStartAsyncObserverFailure <- fun () ->
+                                Some (InvalidOperationException("injected-observer-failure") :> exn))
+                        (fun () ->
+                            runProcessText (bashArgs "sleep 60") noCwd CancellationToken.None)
+                Expect.isGreaterThan (observedPids.Count) 0 "expected at least one observed PID"
+                Expect.isTrue (!stdoutTask).IsCompleted "partial stdout drain must be terminal"
+                Expect.isTrue (!stderrTask).IsCompleted "partial stderr drain must be terminal"
+                match r.Outcome with
+                | SpawnFailure _
+                | BodyFailure _
+                | CleanupFailure _ -> ()
+                | o -> failtestf "expected SpawnFailure/BodyFailure/CleanupFailure, got %A" o
                 for pid in observedPids do
                     Thread.Sleep(250)
                     Expect.isFalse (isPidAlive pid) (sprintf "observed PID %d must be reaped" pid)
@@ -321,14 +369,10 @@ let tests =
                 | None -> ()
             }
 
-            // Long-running child + injected wait failure.  This is the
-            // canonical proof that the drain-settle ordering is
-            // correct: kill first (which closes the streams), then
-            // settle (which now sees the streams closed and the drain
-            // tasks terminate).  Without the kill-then-settle order the
-            // drain tasks would still be blocked on ReadAsync and the
-            // bounded settle would only time out — the IsCompleted
-            // assertions below would fail.
+            // Long-running child + injected wait failure.  Both drain
+            // tasks must reach a terminal state by the time runCore
+            // returns, mechanically proving the kill-then-settle
+            // cleanup order.
             test "injected wait failure on long-running child leaves both drain tasks terminal" {
                 let stdoutTask = ref Unchecked.defaultof<Task<Result<byte[], exn>>>
                 let stderrTask = ref Unchecked.defaultof<Task<Result<string, exn>>>
@@ -344,11 +388,9 @@ let tests =
                 match r.Outcome with
                 | BodyFailure (detail, _) ->
                     Expect.stringContains detail "injected-wait-failure" "wait note propagated"
-                | o -> failtestf "expected BodyFailure, got %A" o
-                // Both drain tasks MUST be in a terminal state by the
-                // time ``runCore`` returns.  This is the mechanical
-                // proof that the kill-then-settle cleanup order lets
-                // the drain ``ReadAsync`` calls return naturally.
+                | CleanupFailure detail ->
+                    Expect.stringContains detail "drain timed out" "drain timeout promoted to CleanupFailure"
+                | o -> failtestf "expected BodyFailure or CleanupFailure, got %A" o
                 Expect.isTrue (!stdoutTask).IsCompleted "stdout drain task must be terminal"
                 Expect.isTrue (!stderrTask).IsCompleted "stderr drain task must be terminal"
                 Expect.equal (!stdoutTask).Status TaskStatus.RanToCompletion "stdout drain RanToCompletion"
@@ -360,11 +402,6 @@ let tests =
                 | None -> ()
             }
 
-            // Real dispose-failure injection: DisposeProcess itself
-            // throws, the try/with inside disposeProc catches it, and
-            // the cleanup note records "dispose failed: ..." (not a
-            // synthetic "dispose injected failure" note).  This proves
-            // the catch-and-record branch is exercised.
             test "injected DisposeProcess throws and is caught by disposeProc" {
                 let r =
                     withInjection

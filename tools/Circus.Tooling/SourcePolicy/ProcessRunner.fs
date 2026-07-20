@@ -35,9 +35,6 @@ type TextResult = {
 }
 
 let internal CleanupTimeout : TimeSpan = TimeSpan.FromSeconds(5.0)
-/// Shared bounded time the cleanup bracket waits for in-flight drain
-/// tasks to settle.  Both stdout and stderr drains share this single
-/// deadline so two drains do not independently consume two seconds each.
 let internal DrainSettleTimeout : TimeSpan = TimeSpan.FromSeconds(2.0)
 
 let private appendNote (note: string ref) (msg: string) : unit =
@@ -48,33 +45,29 @@ let private appendNote (note: string ref) (msg: string) : unit =
 // ---------------------------------------------------------------------------
 // Failure-injection hooks and observation hooks.
 //
-// Each hook is a mutable ``internal`` function the test suite can flip
-// from its default to exercise the corresponding lifecycle stage.  The
-// observation hooks publish the drain tasks so a focused test can prove
-// they have reached a terminal state.  Production code never sets any
-// of these; they exist solely for failure-injection tests.
+// Production code never sets any of these; they exist solely for
+// failure-injection tests.
 // ---------------------------------------------------------------------------
 
 let mutable internal InjectStartAsyncFailure : (unit -> string option) = fun () -> None
+/// Inject an exception that fires immediately after the started
+/// process has been assigned a PID but BEFORE any drain tasks are
+/// created.
 let mutable internal InjectStartAsyncAccessFailure : (unit -> exn option) = fun () -> None
+/// Inject an exception that fires AFTER the stdout drain task has been
+/// created but before stderr drain creation.  Used to exercise the
+/// startAsync partial-acquisition window.
+let mutable internal InjectStartAsyncStdoutDrainFailure : (unit -> exn option) = fun () -> None
+/// Inject an exception that fires AFTER both drain tasks have been
+/// created but before the observer publication.
+let mutable internal InjectStartAsyncObserverFailure : (unit -> exn option) = fun () -> None
 let mutable internal InjectWaitFailure : (unit -> exn option) = fun () -> None
 let mutable internal InjectDrainFailure : (unit -> exn option) = fun () -> None
 
-/// Test-only operation that performs the actual disposal.  Production
-/// installs the real ``Process.Dispose``.  A test can replace this with
-/// a throwing function to exercise the catch-and-record branch inside
-/// ``disposeProc`` with a real exception.
 let mutable internal DisposeProcess : (Process -> unit) =
     fun (p: Process) -> p.Dispose()
 
-/// Test-only observation hook fired immediately after a started process
-/// has been assigned a PID.
 let mutable internal ObserveStartedPid : int -> unit = fun _ -> ()
-
-/// Test-only observation hooks fired when the stdout / stderr drain
-/// tasks are created inside ``startAsync``.  Tests can save the tasks
-/// and assert they are terminal (``IsCompleted``) once ``runCore``
-/// returns.
 let mutable internal ObserveStdoutDrainTask : (Task<Result<byte[], exn>> -> unit) = ignore
 let mutable internal ObserveStderrDrainTask : (Task<Result<string, exn>> -> unit) = ignore
 
@@ -94,66 +87,94 @@ let private waitBounded (proc: Process) (note: string ref) : bool =
         appendNote note (sprintf "wait bounded failed: %s" ex.Message)
         false
 
-/// Dispose the process via the injectable ``DisposeProcess`` operation
-/// so a test can replace it with a throwing function and exercise the
-/// real catch-and-record branch.
 let private disposeProc (proc: Process) (note: string ref) : unit =
     try
         if not (isNull proc) then DisposeProcess proc
     with ex ->
         appendNote note (sprintf "dispose failed: %s" ex.Message)
 
-/// Boundedly settle a single drain task.  Returns ``true`` when the
-/// task completed inside the bound; ``false`` when the wait timed out
-/// or the task threw while being awaited.  Either way, cleanup is
-/// guaranteed to finish inside ``remaining`` so a damaged stream
-/// cannot make the cleanup bracket indefinite.
+/// Boundedly settle a single drain task.
+///
+/// Returns one of:
+///   ``Settled``              — task completed (success or recorded error)
+///                              inside the bound.
+///   ``AlreadyTerminal``      — task was already terminal when checked,
+///                              so the deadline was honoured without
+///                              waiting.
+///   ``TimeoutOccurred``      — wait timed out; task may still be
+///                              running.  ``Task.Wait`` does NOT
+///                              terminate the task.
+///
+/// ``settleDrainsShared`` aggregates the per-drain result and reports
+/// whether any drain timed out so ``runCore`` can promote the outcome
+/// to a structured ``CleanupFailure`` rather than silently swallowing
+/// the timeout.
+type private DrainSettleStatus =
+    | Settled
+    | AlreadyTerminal
+    | TimeoutOccurred
+
 let private settleOneDrain
     (t: Task<Result<'a, exn>> option)
     (label: string)
     (remaining: TimeSpan)
     (note: string ref)
-    : bool =
+    : DrainSettleStatus =
     match t with
-    | None -> true
+    | None -> Settled
     | Some task ->
-        try
-            if remaining > TimeSpan.Zero && task.Wait(remaining) then
-                match task.Result with
-                | Result.Ok _ -> true
-                | Result.Error e ->
-                    appendNote note (sprintf "%s drain settled with error: %s" label e.Message)
-                    false
-            else
-                appendNote note (sprintf "%s drain did not settle within shared %O deadline" label DrainSettleTimeout)
-                false
-        with
-        | :? AggregateException as agg ->
-            appendNote note
-                (sprintf "%s drain settle aggregate: %s" label
-                    (agg.InnerExceptions
-                     |> Seq.map (fun e -> e.Message)
-                     |> String.concat "; "))
-            false
-        | ex ->
-            appendNote note (sprintf "%s drain settle exception: %s" label ex.Message)
-            false
+        // ``Task.Wait`` returns false on timeout without terminating
+        // the task, and tasks that completed before the bound are
+        // already terminal.  Check ``IsCompleted`` first so a
+        // second-pass drain does not need a fresh wait when the
+        // shared deadline has already elapsed.
+        if task.IsCompleted then
+            AlreadyTerminal
+        else if remaining <= TimeSpan.Zero then
+            appendNote note (sprintf "%s drain did not settle (shared deadline already exhausted)" label)
+            TimeoutOccurred
+        else
+            try
+                if task.Wait(remaining) then
+                    match task.Result with
+                    | Result.Ok _ -> Settled
+                    | Result.Error e ->
+                        appendNote note (sprintf "%s drain settled with error: %s" label e.Message)
+                        Settled
+                else
+                    appendNote note (sprintf "%s drain did not settle within shared %O deadline" label DrainSettleTimeout)
+                    TimeoutOccurred
+            with
+            | :? AggregateException as agg ->
+                appendNote note
+                    (sprintf "%s drain settle aggregate: %s" label
+                        (agg.InnerExceptions
+                         |> Seq.map (fun e -> e.Message)
+                         |> String.concat "; "))
+                Settled
+            | ex ->
+                appendNote note (sprintf "%s drain settle exception: %s" label ex.Message)
+                Settled
 
-/// Settle both stdout and stderr drains under a single shared deadline
-/// so two slow drains do not independently consume ``DrainSettleTimeout``
-/// each.  The deadline is captured up-front so the second drain sees the
-/// remaining time.
+/// Aggregate of per-drain settle results.  Used by ``runCore`` to
+/// decide whether to promote the outcome to ``CleanupFailure`` when
+/// any drain timed out.
+type private DrainSettleAggregate =
+    | AllDrainsTerminal
+    | DrainTimeout of label: string
+
 let private settleDrainsShared
     (stdout: Task<Result<byte[], exn>> option)
     (stderr: Task<Result<string, exn>> option)
     (note: string ref)
-    : unit =
+    : DrainSettleAggregate =
     let deadline = DateTime.UtcNow.Add DrainSettleTimeout
-    let stdoutOk = settleOneDrain stdout "stdout" (deadline - DateTime.UtcNow) note
-    let stderrOk = settleOneDrain stderr "stderr" (deadline - DateTime.UtcNow) note
-    let _ = stdoutOk
-    let _ = stderrOk
-    ()
+    let stdoutStatus = settleOneDrain stdout "stdout" (deadline - DateTime.UtcNow) note
+    if stdoutStatus = TimeoutOccurred then DrainTimeout "stdout"
+    else
+        let stderrStatus = settleOneDrain stderr "stderr" (deadline - DateTime.UtcNow) note
+        if stderrStatus = TimeoutOccurred then DrainTimeout "stderr"
+        else AllDrainsTerminal
 
 let private drainBytesAsync (stream: Stream) (cancellationToken: CancellationToken) : Task<Result<byte[], exn>> =
     task {
@@ -226,11 +247,25 @@ type private AsyncProcessContext = {
     StdoutText: Task<Result<string, exn>>
 }
 
+/// Start a child process with exception-safe partial-acquisition ownership.
+///
+/// The body is bracketed by an inner ``try/with`` that retains local
+/// ``partialStdout`` / ``partialStderr`` task options so any drain
+/// task that has been created before a later operation throws is still
+/// settled (boundedly) inside the catch branch — alongside the
+/// kill, bounded wait, and dispose that always run.
+///
+/// Failure-injection points are exposed after each acquisition step:
+///   * ``InjectStartAsyncAccessFailure`` — fires right after ``proc.Id``
+///     but BEFORE any drain is created.
+///   * ``InjectStartAsyncStdoutDrainFailure`` — fires AFTER the stdout
+///     drain has been created but BEFORE the stderr drain.
+///   * ``InjectStartAsyncObserverFailure`` — fires AFTER both drain
+///     tasks have been created but BEFORE the observer publication.
 let private startAsync (argv: string list) (workingDir: string option) (ct: CancellationToken) (note: string ref) : Result<AsyncProcessContext, string> =
     if List.isEmpty argv then
         Result.Error "argv is empty"
     else
-        // Failure injection hook for the "spawn failed" branch.
         match InjectStartAsyncFailure() with
         | Some msg ->
             appendNote note (sprintf "spawn injected failure: %s" msg)
@@ -246,20 +281,35 @@ let private startAsync (argv: string list) (workingDir: string option) (ct: Canc
                 appendNote note "Process.Start returned null"
                 Result.Error "Process.Start returned null"
             else
-                // After ``Process.Start`` succeeds but before the owned
-                // context is returned, an exception (real or injected)
-                // would historically leak the freshly-started process.
-                // That whole window is now bracketed: if anything throws,
-                // we still dispose the started process before propagating
-                // the error to the caller.
+                // Acquisition bracket for partially-created resources.
+                let mutable partialStdout : Task<Result<byte[], exn>> option = None
+                let mutable partialStderr : Task<Result<string, exn>> option = None
                 try
                     let pid = proc.Id
                     ObserveStartedPid pid
                     match InjectStartAsyncAccessFailure() with
                     | Some ex -> raise ex
                     | None -> ()
+
                     let stdoutBytes = drainBytesAsync proc.StandardOutput.BaseStream ct
+                    partialStdout <- Some stdoutBytes
+                    // Publish the stdout drain task BEFORE the post-stdout
+                    // injection so a test can capture and assert the
+                    // task's terminal state even when the injection
+                    // throws.
+                    ObserveStdoutDrainTask stdoutBytes
+
+                    // Post-stdout-drain injection: exercises the window
+                    // where one drain has been created and the partial
+                    // bracket must settle it.
+                    match InjectStartAsyncStdoutDrainFailure() with
+                    | Some ex -> raise ex
+                    | None -> ()
+
                     let stderrText = drainTextAsync proc.StandardError.BaseStream ct
+                    partialStderr <- Some stderrText
+                    ObserveStderrDrainTask stderrText
+
                     let stdoutText = task {
                         let! r = stdoutBytes
                         return
@@ -267,21 +317,28 @@ let private startAsync (argv: string list) (workingDir: string option) (ct: Canc
                             | Result.Ok b -> Result.Ok (Encoding.UTF8.GetString b)
                             | Result.Error e -> Result.Error e
                     }
-                    // Publish the drain tasks so a focused test can prove
-                    // they reach a terminal state once ``runCore`` returns.
-                    ObserveStdoutDrainTask stdoutBytes
-                    ObserveStderrDrainTask stderrText
+
+                    // Post-both-drains injection: exercises the window
+                    // where both drains exist but the observer
+                    // publication has not yet happened.
+                    match InjectStartAsyncObserverFailure() with
+                    | Some ex -> raise ex
+                    | None -> ()
+
                     Result.Ok { Proc = proc; Pid = pid
                                 StdoutBytes = stdoutBytes
                                 StderrText = stderrText
                                 StdoutText = stdoutText }
                 with ex ->
                     appendNote note (sprintf "context construction failed: %s" ex.Message)
-                    // Exception-safe: kill, boundedly wait, dispose the
-                    // already-started process before propagating the
-                    // error to the caller.
+                    // Partial-acquisition cleanup: kill + bounded wait
+                    // + settle partially-created drains + dispose, so a
+                    // drain task created before the throw is also
+                    // settled (boundedly) before the caller is told the
+                    // context failed to construct.
                     killTree proc note
                     let _ = waitBounded proc note
+                    let _ = settleDrainsShared partialStdout partialStderr note
                     disposeProc proc note
                     Result.Error (sprintf "context construction failed: %s" ex.Message)
 
@@ -342,33 +399,20 @@ let private finalize (verdict: Result<int, string>) (stdoutOk: bool) (stderrOk: 
 
 /// Run the child process with exception-safe ownership.
 ///
-/// The lifecycle is bracketed by ``try``/``finally`` so that every
-/// process that ``runCore`` causes to be created is released (killed,
-/// boundedly reaped, drain-settled, and disposed) BEFORE the public
-/// outcome is constructed.  No cleanup runs after the outcome exists.
-///
-/// F# does not allow combining ``try/with`` and ``try/finally`` in a
-/// single expression, so the bracket is structured as nested
-/// ``try ( try <body> with capture ) finally <cleanup>`` so that cleanup
-/// runs after the body has settled regardless of whether it threw.
-///
 /// Cleanup order on every exit path (executed in the ``finally``):
-///   1. ``killTree``         (Process.Kill(entireProcessTree=true)).
-///   2. ``waitBounded``      (Process.WaitForExit bounded to ``CleanupTimeout``).
-///   3. ``settleDrainsShared`` (drain tasks share a single
-///      ``DrainSettleTimeout``; the kill in step 1 closes the streams
-///      so drain ``ReadAsync`` returns naturally, and the bounded wait
-///      in step 2 limits the kill itself).
-///   4. ``disposeProc``      (calls the injectable ``DisposeProcess``;
-///      any throw is caught into the cleanup note).
+///   1. ``killTree``            (Process.Kill(entireProcessTree=true)).
+///   2. ``waitBounded``         (Process.WaitForExit bounded).
+///   3. ``settleDrainsShared``  (drains share a single
+///      ``DrainSettleTimeout``; the kill in step 1 closes streams so
+///      ``ReadAsync`` returns naturally; the bounded wait in step 2
+///      limits the kill itself).
+///   4. ``disposeProc``         (calls the injectable ``DisposeProcess``).
 ///
-/// The kill-then-settle order is essential: settling drains before the
-/// process is killed leaves the drains blocked on ``ReadAsync`` waiting
-/// for stream closure, which only happens after the kill anyway, so a
-/// pre-kill settle would just consume the shared deadline for no
-/// benefit.  By killing first the streams close, the drain tasks reach
-/// a terminal state quickly, and the bounded settle only needs to mop
-/// up any straggling work.
+/// The settle step now returns a structured result.  When a drain
+/// times out, ``runCore`` promotes the outcome to ``CleanupFailure``
+/// instead of silently appending text to the cleanup note, so callers
+/// can mechanically distinguish "drain settled" from "drain timed
+/// out, may still be running".
 let private runCore
     (argv: string list)
     (workingDir: string option)
@@ -385,6 +429,8 @@ let private runCore
     let mutable capturedStdoutRaw : byte[] = [||]
     let mutable capturedStderrText : string = ""
     let mutable capturedStderrOk : bool = true
+
+    let mutable drainSettle : DrainSettleAggregate = AllDrainsTerminal
 
     try
         try
@@ -447,24 +493,31 @@ let private runCore
             appendNote cleanupNote (sprintf "body exception: %s" ex.Message)
             bodyResult <- BodyUnexpected ex.Message
     finally
-        // Exceptional cleanup order: kill first (which closes streams),
-        // then boundedly wait for the parent exit, then drain-settle the
-        // redirected streams under a single shared deadline, then
-        // dispose.  This guarantees the drain tasks reach a terminal
-        // state BEFORE the public outcome is constructed.
         killTree proc cleanupNote
         let _ = waitBounded proc cleanupNote
-        settleDrainsShared stdoutDrain stderrDrain cleanupNote
+        drainSettle <- settleDrainsShared stdoutDrain stderrDrain cleanupNote
         disposeProc proc cleanupNote
 
     let outcome =
         match bodyResult with
         | BodySpawnError msg -> SpawnFailure (msg, cleanupNote.Value)
         | BodyUnexpected msg ->
-            BodyFailure (sprintf "body exception: %s [%s]" msg cleanupNote.Value, cleanupNote.Value)
+            match drainSettle with
+            | DrainTimeout label ->
+                // A drain timed out AND the body threw — promote to a
+                // structured CleanupFailure so the partial-acquisition
+                // or exceptional drain situation is not silently
+                // collapsed into BodyFailure.
+                CleanupFailure (sprintf "%s drain timed out during cleanup: %s [%s]" label msg cleanupNote.Value)
+            | AllDrainsTerminal ->
+                BodyFailure (sprintf "body exception: %s [%s]" msg cleanupNote.Value, cleanupNote.Value)
         | BodyCompleted (verdict, _stdoutRaw, _stdoutText, _stderrText, stdoutOk, stderrOk) ->
-            let cleanup = { Notes = cleanupNote.Value }
-            finalize verdict stdoutOk stderrOk cleanup
+            match drainSettle with
+            | DrainTimeout label ->
+                CleanupFailure (sprintf "%s drain timed out during cleanup: %s" label cleanupNote.Value)
+            | AllDrainsTerminal ->
+                let cleanup = { Notes = cleanupNote.Value }
+                finalize verdict stdoutOk stderrOk cleanup
 
     Ok (outcome, capturedStdoutRaw, capturedStderrText, (defaultArg pid 0), capturedStderrOk, cleanupNote.Value)
 
