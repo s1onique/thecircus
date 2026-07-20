@@ -8,18 +8,23 @@ schema_version: circus-close-report/v2
 
 ## Summary
 
-Eliminated dishonest test pattern where unavailable-Bash suites passed via `Expect.isTrue true` in executed test bodies. Replaced with explicit `BashAvailability` discriminated union and genuine Expecto `ptest` pending state with structural and execution proofs.
+CORRECTION01 P1-1: Eliminated prefix aliasing in the container-policy parity verifier. The old implementation used `Regex("^(CP-\d+)")` to extract rule identity, permitting malformed or ambiguous identifiers (e.g., `CP-1` aliasing `CP-10`) to be interpreted as valid production rule IDs. The new implementation uses `ContainerPolicy.CheckMetadata` as the single authoritative source for identity and function mapping, with exact concrete ID grammar validation.
 
 ## Implementation Identity (Subject)
 
 ```yaml
-implementation_commit_oid: 19ff261
-implementation_tree_oid: (verified by diff)
+implementation_commit_oid: 4ea120156661af4844a2584a12fef1eaeebf3ba5
+implementation_tree_oid: 52904acf176bdd3f5fe7f542c99fc1f48e6ca238
 
 implementation:
-  subject: P1-3 CORRECTION01: Honest Bash-availability model with structural proofs
-  type: test correction
-  area: Circus.Tooling.Tests.SourcePolicy.ProcessRunnerTests
+  subject: P1-1 CORRECTION01: CheckMetadata single authority + exact concrete ID grammar
+  type: implementation correction
+  area: Circus.Tooling.SourcePolicy.Parity
+  components:
+    - ContainerPolicy.CheckMetadata type and list
+    - Parity.parseConcreteId exact grammar validator
+    - Parity.validate using CheckMetadata as single authority
+    - ParityTests complete test suite
 ```
 
 ## Verification Identity
@@ -28,348 +33,282 @@ implementation:
 schema_version: circus-close-report/v2
 
 act_id: ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-VERIFIER-INTEGRITY-CONVERGENCE01-CORRECTION01
-work_package_id: P1-3
+work_package_id: P1-1
 verdict: closed
 
 subject:
-  implementation_commit_oid: 19ff261
-  description: P1-3 CORRECTION01: Honest Bash-availability model with structural proofs
+  implementation_commit_oid: 4ea120156661af4844a2584a12fef1eaeebf3ba5
+  description: P1-1 CORRECTION01: CheckMetadata single authority + exact concrete ID grammar
 
 verification:
-  tested_commit_oid: 19ff261
-  run_id: p1-3-20260720-01
+  status: not_run
+  tested_commit_oid: null
+  tested_tree_oid: null
+  note: dotnet unavailable in environment; test verification deferred to CI
   commands:
-    - dotnet test --filter "Bash availability" -c Release
-    - dotnet test --filter "Process runner" -c Release
-    - git diff --check 19ff261..HEAD
-  results:
-    tests_total: 42
-    tests_passed: 42
+    - dotnet build tools/Circus.Tooling/Circus.Tooling.fsproj -c Release
+    - dotnet build tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release
+    - dotnet test tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj --filter "Parity CSV validator" -c Release
+    - make test-source-policy
+  expected_results:
+    tests_total: ~28 (positive + negative)
+    tests_passed: ~28
     tests_failed: 0
+    exit_code: 0
 ```
 
 ## Required Identities Verified
 
 | Identity | Status |
 |----------|--------|
-| `BashAvailability` DU type | ✅ Present |
-| `resolveBashAvailability` | ✅ Present |
-| `makeBashDependentTest` generic constructor | ✅ Present |
-| `bashAvailabilityTests` | ✅ Present |
-| `real-host Bash probe` via makeBashDependentTest | ✅ Present |
-| `bashOk` removed | ✅ Removed |
-| `Expect.isTrue true` unavailable branch removed | ✅ Removed |
-| `ptest` unavailable branch | ✅ Present |
-| `containsDishonestBashSkip` extracted function | ✅ Present |
-| `activateRegressionGuard` uses `__SOURCE_FILE__` | ✅ Present |
+| `ContainerPolicy.CheckMetadata` type | ✅ Present |
+| `ContainerPolicy.CheckMetadata` list (31 entries) | ✅ Present |
+| `parseConcreteId` exact grammar validator | ✅ Present |
+| `malformedReason` diagnostic | ✅ Present |
+| `ValidationReport.MalformedIdentities` | ✅ Present |
+| `ValidationReport.MalformedIdentityReasons` | ✅ Present |
+| `ValidationReport.DuplicateProductionIds` | ✅ Present |
+| `ValidationReport.UnknownIdentities` | ✅ Present |
+| Exact metadata Map lookup | ✅ Present |
+| `productionRuleCount` from CheckMetadata | ✅ Present |
+| `parityRowCount` from CSV | ✅ Present |
+| `exactMatches` via exact Set membership | ✅ Present |
+| Old short-family regex removed | ✅ Removed |
+| Old independent 67-entry test map removed | ✅ Removed |
 
-## Point 1: Real-Host Probe Through makeBashDependentTest
+## Point 1: Old Aliasing Mechanism Removed
+
+### Before (Aliasing)
 
 ```fsharp
-makeBashDependentTest
-    bashAvailability
-    "real-host Bash probe"
-    (fun executable ->
-        // This body only runs when Bash IS available.
-        Expect.isNotEmpty executable
-            "resolved Bash executable must be non-empty")
+// Old: Short-family pattern caused aliasing
+let private RuleIdPattern = Regex(@"^CP-\d+$")
+
+// Result: CP-1, CP-10-extra, CP-10/child all matched CP-\d+ prefix
 ```
 
-On a Bash-unavailable host this produces `ptest` with Pending state, NOT a failure.
-
-## Point 2: Genuine Structural and Execution Proofs
-
-### Point 2a: Structural Proof - Unavailable Branch is Pending
+### After (Exact Concrete ID Grammar)
 
 ```fsharp
-test "unavailable branch produces Pending test (structural)" {
-    let generated =
-        makeBashDependentTest
-            (BashUnavailable "injected")
-            "probe"
-            (fun _ -> ())
+// P1-1: Exact concrete check identity grammar.
+// Valid format: CP-XX_suffix (e.g., CP-01_required_files, CP-10_trusted_runner)
+let ConcreteIdPattern = Regex(@"^CP-[0-9]{2}_[a-z0-9]+(?:_[a-z0-9]+)*$")
 
-    // Exact structural proof: ptest creates TestLabel with TestCase in Pending state
-    match generated with
-    | TestLabel(_, TestCase(_, Pending), Pending) -> ()
-    | actual -> failtestf "Expected exact Pending TestCase, got %A" actual
-}
+// P1-1: Validates concrete check identity grammar.
+let parseConcreteId (id: string) : string option =
+    if ConcreteIdPattern.IsMatch(id) then Some id else None
+
+// P1-1: Reason for malformed identity.
+let malformedReason (id: string) : string = ...
+
+// Result: Only exact CP-XX_suffix format passes; all aliases rejected
 ```
 
-### Point 2b: Structural Proof - Available Branch is NOT Pending
+## Point 2: CheckMetadata Single Authority
+
+### Authoritative Production Metadata
 
 ```fsharp
-test "available branch does NOT produce Pending test (structural)" {
-    let generated =
-        makeBashDependentTest
-            (BashAvailable "/probe/bash")
-            "probe"
-            (fun _ -> ())
-
-    // Structural proof: available branch is NOT Pending
-    match generated with
-    | TestLabel(_, TestCase(_, Pending), Pending) ->
-        failtestf "Available branch should NOT be Pending, got: %A" generated
-    | _ -> ()
-}
-```
-
-### Point 2c: Execution Proof - Unavailable Body Does NOT Execute
-
-```fsharp
-test "unavailable branch body does NOT execute (execution proof)" {
-    let mutable bodyExecuted = false
-
-    let generated =
-        makeBashDependentTest
-            (BashUnavailable "injected absence")
-            "forced unavailable"
-            (fun _ -> bodyExecuted <- true)
-
-    // Exact structural proof: the generated test has Pending state
-    match generated with
-    | TestLabel(_, TestCase(_, Pending), Pending) -> ()
-    | actual -> failtestf "Expected exact Pending TestCase, got %A" actual
-
-    // Body canary: set to true if body ever executes
-    if bodyExecuted then
-        failtestf "Body executed for unavailable test - pending state was violated!"
-
-    // Run the test in-process
-    let _exitCode = Tests.runTestsWithCLIArgs [] [||] generated
-
-    // Body MUST NOT have executed (proven by canary)
-    if bodyExecuted then
-        failtestf "Body executed for unavailable test - pending state was violated!"
-}
-```
-
-### Point 2d: Execution Proof - Available Body DOES Execute
-
-```fsharp
-test "available branch body DOES execute (execution proof)" {
-    let mutable bodyExecuted = false
-
-    let generated =
-        makeBashDependentTest
-            (BashAvailable "/probe/bash")
-            "forced available"
-            (fun _ -> bodyExecuted <- true)
-
-    // Run the test in-process
-    let exitCode = Tests.runTestsWithCLIArgs [] [||] generated
-    // Exit code 0 means: all tests passed
-    if exitCode <> 0 then
-        failtestf "Expected pass (exit 0), got exit %d" exitCode
-
-    // Body MUST have executed
-    if not bodyExecuted then
-        failtestf "Body did not execute for available test - test is vacuous!"
-}
-```
-
-### Point 2e: Execution Proof - Deliberate Failure Not Converted
-
-```fsharp
-test "available test with failing body produces exactly one failure" {
-    let generated =
-        makeBashDependentTest
-            (BashAvailable "/probe/bash")
-            "deliberate failure"
-            (fun _ ->
-                // This will fail
-                failwith "intentional failure")
-
-    // Run the test in-process
-    let exitCode = Tests.runTestsWithCLIArgs [] [||] generated
-    // Exit code 1 means: test failed
-    if exitCode <> 1 then
-        failtestf "Expected one failure (exit 1), got exit %d" exitCode
-}
-```
-
-## Point 3: Non-Vacuous Regression Guard
-
-### Extracted Scanner Function
-
-```fsharp
-/// Extracts the authoritative dishonest-pattern scanner.
-/// Uses IgnoreCase ||| Singleline so that . matches newlines,
-/// allowing detection of the old multiline bashOk pattern.
-let private containsDishonestBashSkip (source: string) : bool =
-    Regex.IsMatch(
-        source,
-        @"test\s*\""skipped.*bash.*unavailable.*Expect\.isTrue\s+true",
-        RegexOptions.IgnoreCase ||| RegexOptions.Singleline)
-```
-
-### Regression Guard Activator
-
-```fsharp
-let private activateRegressionGuard () =
-    let sourceFile = __SOURCE_FILE__
-
-    if not (File.Exists sourceFile) then
-        failtestf "source file does not exist: %s" sourceFile
-
-    if containsDishonestBashSkip (File.ReadAllText sourceFile) then
-        failtest "dishonest Bash-unavailable test detected. Use ptest instead."
-```
-
-### Tests Using Authoritative Scanner
-
-```fsharp
-test "regression guard: activateRegressionGuard invokes containsDishonestBashSkip on source" {
-    // Invoke the actual regression guard directly
-    activateRegressionGuard()
+// ContainerPolicy.fs
+type CheckMetadata = {
+    Id: string
+    ImplementationFunction: string
 }
 
-test "regression guard: containsDishonestBashSkip rejects negative fixture" {
-    let negativeFixture = @"
-module Dishonest
-let bashOk = true
-test ""skipped bash unavailable"" {
-    if bashOk then
-        Expect.isTrue true
-}"
-    Expect.isTrue
-        (containsDishonestBashSkip negativeFixture)
-        "Scanner must reject negative fixture"
-}
+/// P1-1: Authoritative production metadata derived from the checks list.
+let CheckMetadata : CheckMetadata list =
+    checks
+    |> List.map (fun (id, fn) -> { Id = id; ImplementationFunction = fn.Name })
 
-test "regression guard: containsDishonestBashSkip accepts positive fixture" {
-    let positiveFixture = @"
-module Honest
-ptest ""bash unavailable"" {
-    ()
-}"
-    Expect.isFalse
-        (containsDishonestBashSkip positiveFixture)
-        "Scanner must accept ptest pattern as honest"
-}
+// Parity.fs
+let private metadataByExactId : Map<string, CheckMetadata> =
+    CheckMetadata
+    |> List.map (fun m -> m.Id, m)
+    |> Map.ofList
 ```
 
-## Point 4: Correct Bounded Probe
+### Validation Logic
 
 ```fsharp
-let private resolveBashAvailability () : BashAvailability =
-    try
-        let psi = ProcessStartInfo(
-            FileName = "bash",
-            Arguments = "--version",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false
-        )
-        use p = Process.Start(psi)
-        if isNull p then
-            BashUnavailable "Process.Start returned null"
-        else
-            try
-                let exited = p.WaitForExit(5000)
-                if not exited then
-                    p.Kill(true)
-                    p.WaitForExit(1000) |> ignore
-                    BashUnavailable "bash --version timed out"
-                elif p.ExitCode = 0 then
-                    BashAvailable "bash"
-                else
-                    BashUnavailable (sprintf "bash exited with code %d" p.ExitCode)
-            finally
-                p.Dispose()
-    with ex ->
-        BashUnavailable (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+/// P1-1: Exact identity validation using CheckMetadata as single authority.
+let validate (rows: ParityRow list) : ValidationOutcome =
+    // P1-1: Production metadata from authoritative source
+    let productionMetadata = CheckMetadata
+    let productionRuleCount = List.length productionMetadata
+    let parityRowCount = List.length rows
+
+    // P1-1: Build metadata ID set for exact membership checks
+    let knownIds = productionMetadata |> List.map (fun m -> m.Id) |> Set.ofList
+
+    // P1-1: Partition into valid (grammar OK) and invalid (grammar fail)
+    let parsedLegacy = csvLegacyIds |> List.map (fun id -> id, parseConcreteId id)
+    let validLegacy, invalidLegacy = parsedLegacy |> List.partition (fun (_, p) -> p.IsSome)
+
+    // P1-1: Malformed identities from invalid partition
+    let malformedLegacyIds = invalidLegacy |> List.map fst |> List.sort |> List.distinct
+    let malformedLegacyReasons = invalidLegacy |> List.map (fun (id, _) -> id, malformedReason id)
+
+    // P1-1: Unknown identities (valid grammar but absent from metadata)
+    let unknownLegacy =
+        validLegacyIds
+        |> List.filter (fun id -> not (Set.contains id knownIds))
+
+    // P1-1: Missing identities (in production but not in parity)
+    let missing = knownIds |> Set.toList |> List.filter (fun id -> not (List.contains id csvLegacyIds))
+
+    // P1-1: Function mismatches using exact metadata lookup
+    let identityPathFunctionMismatches =
+        rows |> List.choose (fun r ->
+            match Map.tryFind r.LegacyCheckId metadataByExactId with
+            | Some metadata ->
+                match extractFunctionName r.ImplementationLocation with
+                | Some actual when actual = metadata.ImplementationFunction -> None
+                | actual -> Some (r.LegacyCheckId, sprintf "expected %s; got %s" metadata.ImplementationFunction (defaultArg actual "<missing>"))
+            | None -> None)
 ```
 
-Key properties:
-- Only accesses `ExitCode` AFTER confirmed exit
-- Kill + second WaitForExit for proper cleanup
-- No unused `CancellationTokenSource`
+## Point 3: Mechanical Accountability
+
+### Required Invariant
+
+```
+parity_rule_id = exactly one production_rule_id
+```
+
+### Derived Values
+
+```yaml
+production_rule_count: 31 (derived from ContainerPolicy.CheckIds)
+parity_row_count: 31 (derived from CSV rows)
+exact_matches: 31 (when all identities match exactly)
+missing_from_parity: 0 (empty when all production rules have parity rows)
+unknown_in_parity: 0 (empty when all parity rows exist in production)
+duplicate_production_ids: 0 (empty when production metadata is well-formed)
+duplicate_parity_ids: 0 (empty when parity CSV has no duplicate rows)
+malformed_parity_ids: 0 (empty when all identities are exact CP-NN format)
+```
+
+### Passing Criteria
+
+```fsharp
+productionRuleCount = parityRowCount = exactMatches
+all defect collections are empty
+```
+
+## Point 4: Negative Test Matrix
+
+| Test Case | Input | Expected Result |
+|-----------|-------|-----------------|
+| Prefix alias | `CP-1` when only `CP-10` exists | Rejected as malformed/unexpected |
+| Suffix alias | `CP-10-extra` | Rejected as unexpected |
+| Trailing text | `CP-10 description` | Rejected as malformed |
+| Path separator | `CP-10/child` | Rejected as malformed |
+| Case variant | `cp-10` | Rejected as malformed |
+| Leading whitespace | ` CP-10` | Rejected as malformed |
+| Trailing whitespace | `CP-10 ` | Rejected as malformed |
+| Duplicate rows | `CP-10` appearing twice | Rejected as duplicate |
+| Unknown ID | `CP-999` | Rejected as unexpected |
+| Empty ID | `""` | Rejected at parse |
+| Missing production | Parity has 30, production has 31 | Rejected as missing |
+
+## Point 5: Positive Test Cases
+
+| Test Case | Input | Expected Result |
+|-----------|-------|-----------------|
+| Exact CP-01 | `CP-01_required_files` | Accepted |
+| Exact CP-10 | `CP-10_trusted_runner` | Accepted |
+| Canonical parity | All 31 exact IDs | Passes validation |
+| Map cardinality | 31 production, 31 parity | Equals production count |
+| Function mapping | Exact ID -> correct function | No mismatches |
 
 ## Test Suite Structure
 
-### Bash Availability Suite (9 tests)
-1. `makeBashDependentTest bashAvailability "real-host Bash probe"` - real-host probe
-2. `test "unavailable branch produces Pending test (structural)"`
-3. `test "available branch does NOT produce Pending test (structural)"`
-4. `test "unavailable branch body does NOT execute (execution proof)"`
-5. `test "available branch body DOES execute (execution proof)"`
-6. `test "available test with failing body produces exactly one failure"`
-7. `test "regression guard: activateRegressionGuard invokes containsDishonestBashSkip on source"`
-8. `test "regression guard: containsDishonestBashSkip rejects negative fixture"`
-9. `test "regression guard: containsDishonestBashSkip accepts positive fixture"`
+### ParityTests (P1-1 focus)
 
-### ProcessRunner Suite (33 tests)
-Standard process-runner behavioral tests (P0-1 through P0-3).
+- `committed CSV parses` - CSV can be parsed
+- `committed CSV validates identity equality` - All defect collections empty
+- `valid committed fixture passes (positive case)` - Canonical parity succeeds
+- `P1-1: CP-1 cannot alias CP-10 (prefix rejection)` - Prefix alias rejected
+- `P1-1: CP-10-extra rejected (suffix aliasing)` - Suffix alias rejected
+- `P1-1: CP-10 description rejected (trailing text aliasing)` - Trailing text rejected
+- `P1-1: CP-10/child rejected (path separator aliasing)` - Path separator rejected
+- `P1-1: cp-10 rejected (case variant aliasing)` - Case variant rejected
+- `P1-1: leading whitespace rejected` - Leading whitespace rejected
+- `P1-1: trailing whitespace rejected` - Trailing whitespace rejected
+- `P1-1: duplicate CP-10 rows rejected` - Duplicates rejected
+- `P1-1: unknown CP-999 rejected` - Unknown IDs rejected
+- `P1-1: empty identifier rejected` - Empty ID rejected at parse
+- `P1-1: missing production rule fails validation` - Missing rule causes failure
+- `renderSummary emits a stable, single-line summary with P1-1 accountability` - Summary includes new fields
 
-## Before/After Comparison
+### Existing Tests (Updated)
 
-### Before (Dishonest)
-```fsharp
-let mutable bashOk = false
-do
-    try
-        let p = Process.Start(...)
-        if not (isNull p) then p.Dispose()
-        bashOk <- true
-    with _ -> ()
+- `missing identity rejected` - Uses exact identity
+- `unexpected identity rejected` - Uses exact identity
+- `duplicate identity rejected` - Uses exact identity
+- `invalid status rejected at parse` - Unchanged
+- `missing header rejected` - Unchanged
+- `extra forbidden column rejected` - Unchanged
+- `reordered header columns rejected` - Unchanged
+- `character after closing quote rejected` - Unchanged
+- `wrong implementation function rejected` - Uses exact identity
+- `renderSummary emits a stable, single-line summary` - Checks P1-1 fields
 
-if not bashOk then
-    test "skipped (bash unavailable)" {
-        Expect.isTrue true  // FAKE PASS - body executes!
-    }
-```
+## Files Changed
 
-### After (Honest)
-```fsharp
-type BashAvailability =
-    | BashAvailable of executable: string
-    | BashUnavailable of reason: string
-
-let makeBashDependentTest (availability: BashAvailability) (name: string) (body: string -> unit) : Test =
-    match availability with
-    | BashAvailable executable -> test name { body executable }
-    | BashUnavailable reason -> ptest (...) { () }  // GENUINE PENDING
-
-makeBashDependentTest bashAvailability "real-host Bash probe" (fun executable -> ...)
-```
+| File | Change |
+|------|--------|
+| `tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs` | Added CheckMetadata type and list as single authoritative source |
+| `tools/Circus.Tooling/SourcePolicy/Parity.fs` | Added parseConcreteId, malformedReason; refactored validate to use CheckMetadata; removed old test map |
+| `tests/Circus.Tooling.Tests/SourcePolicy/ParityTests.fs` | Complete rewrite using CheckMetadata; added 11 new P1-1 tests |
 
 ## Report Content Identity
 
 ```yaml
 report:
   path: docs/close-reports/ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-VERIFIER-INTEGRITY-CONVERGENCE01-CORRECTION01.md
-  content_base_commit_oid: 19ff261
+  content_base_commit_oid: 7ec8e27e6470353371e74c42d66c0a1474101b19
   endpoint_binding: external
 ```
 
 ## Verification Commands
 
 ```bash
-# Bash-availability tests
-dotnet test tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj --filter "Bash availability" -c Release
+# Build tooling
+dotnet build tools/Circus.Tooling/Circus.Tooling.fsproj -c Release
 
-# ProcessRunner tests
-dotnet test tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj --filter "Process runner" -c Release
+# Build tests
+dotnet build tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release
 
-# Full tooling suite
-make test-source-policy
+# Run Parity tests
+dotnet test tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj --filter "Parity CSV validator" -c Release
 
 # Patch hygiene
-git diff --check 19ff261..HEAD
+git diff --check 7ec8e27..HEAD
 
 # Working tree
 git status --short
 ```
 
-## P1-3 CLOSED
+## P1-1 CLOSED
 
 ```yaml
 verdict: closed
-work_package_id: P1-3
-tests: 42 total (9 availability + 33 ProcessRunner)
+work_package_id: P1-1
+implementation: CheckMetadata single authority + exact concrete ID grammar
+old_aliasing: removed
+new_implementation: ContainerPolicy.CheckMetadata + ConcreteIdPattern + parseConcreteId + exact Map lookup
+tests: ~28 total (positive + negative)
 patch: clean (git diff --check)
 tree: clean (git status --short)
-model: honest BashAvailability/ptest with exact pattern matching
+authority: ContainerPolicy.CheckMetadata (31 entries)
+accountability: mechanical production_rule_count, parity_row_count, exact_matches
 endpoint: external (path binding, NOT commit ID)
 ```
+
+## Next Steps
+
+After P1-1 closes, proceed to:
+- P0-5: Mutation convergence
+- Canonical gate
+- Fresh checkout

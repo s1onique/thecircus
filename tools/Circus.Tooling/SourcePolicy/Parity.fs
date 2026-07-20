@@ -222,25 +222,25 @@ let validate (rows: ParityRow list) : ValidationOutcome =
     let productionMetadata = CheckMetadata
     let productionRuleCount = List.length productionMetadata
     let parityRowCount = List.length rows
-    
+
     // P1-1: Build metadata ID set for exact membership checks
     let knownIds = productionMetadata |> List.map (fun m -> m.Id) |> Set.ofList
-    
+
     // P1-1: Extract CSV identities
     let csvLegacyIds = rows |> List.map (fun r -> r.LegacyCheckId)
     let csvFsharpIds = rows |> List.map (fun r -> r.FsharpCheckId)
-    
+
     // P1-1: Partition into valid (grammar OK) and invalid (grammar fail)
     let parsedLegacy =
         csvLegacyIds
         |> List.map (fun id -> id, parseConcreteId id)
     let validLegacy, invalidLegacy = parsedLegacy |> List.partition (fun (_, p) -> p.IsSome)
-    
+
     let parsedFsharp =
         csvFsharpIds
         |> List.map (fun id -> id, parseConcreteId id)
     let validFsharp, invalidFsharp = parsedFsharp |> List.partition (fun (_, p) -> p.IsSome)
-    
+
     // P1-1: Malformed identities from invalid partitions
     let malformedLegacyIds = invalidLegacy |> List.map fst |> List.sort |> List.distinct
     let malformedLegacyReasons = invalidLegacy |> List.map (fun (id, _) -> id, malformedReason id) |> List.sortBy fst
@@ -248,48 +248,48 @@ let validate (rows: ParityRow list) : ValidationOutcome =
     let malformedFsharpReasons = invalidFsharp |> List.map (fun (id, _) -> id, malformedReason id) |> List.sortBy fst
     let allMalformed = (malformedLegacyIds @ malformedFsharpIds) |> List.sort |> List.distinct
     let allMalformedReasons = (malformedLegacyReasons @ malformedFsharpReasons) |> List.sortBy fst |> List.distinctBy fst
-    
+
     // P1-1: Duplicate parity IDs
     let dupCsvIds =
         csvLegacyIds
         |> List.groupBy id
         |> List.choose (fun (k, g) -> if List.length g > 1 then Some k else None)
-    
+
     // P1-1: Duplicate production IDs
     let dupProductionIds =
         knownIds
         |> Set.toList
         |> List.groupBy id
         |> List.choose (fun (k, g) -> if List.length g > 1 then Some k else None)
-    
+
     // P1-1: Known IDs from valid legacy partition
     let validLegacyIds = validLegacy |> List.map fst
-    
+
     // P1-1: Unknown identities (valid grammar but absent from metadata)
     let unknownLegacy =
         validLegacyIds
         |> List.filter (fun id -> not (Set.contains id knownIds))
         |> List.sort |> List.distinct
-    
+
     // P1-1: Missing identities (in production but not in parity)
     let missing =
         knownIds
         |> Set.toList
         |> List.filter (fun id -> not (List.contains id csvLegacyIds))
         |> List.sort |> List.distinct
-    
+
     // P1-1: Field mismatches
     let fieldMismatches =
         rows
         |> List.filter (fun r -> r.LegacyCheckId <> r.FsharpCheckId)
         |> List.map (fun r -> r.LegacyCheckId, r.FsharpCheckId, "legacy_check_id != fsharp_check_id")
-    
+
     // P1-1: Path mismatches
     let identityPathMismatches =
         rows
         |> List.filter (fun r -> not (r.ImplementationLocation.Contains "ContainerPolicy.fs"))
         |> List.map (fun r -> r.LegacyCheckId, r.ImplementationLocation, "<must reference ContainerPolicy.fs>")
-    
+
     // P1-1: Function mismatches using exact metadata lookup
     let identityPathFunctionMismatches =
         rows
@@ -301,14 +301,14 @@ let validate (rows: ParityRow list) : ValidationOutcome =
                 | Some actual when actual = metadata.ImplementationFunction -> None
                 | actual -> Some (r.LegacyCheckId, sprintf "expected %s; got %s" metadata.ImplementationFunction (defaultArg actual "<missing>"))
             | None -> None)
-    
+
     // P1-1: Invalid status rows
     let invalidStatusRows =
         rows
         |> List.mapi (fun i r -> (i + 2, r))
         |> List.filter (fun (_, r) -> not (List.contains r.Status ValidStatuses))
         |> List.map (fun (line, r) -> (line, r.Status))
-    
+
     // P1-1: Exact matches count
     let exactMatches =
         rows
@@ -317,7 +317,7 @@ let validate (rows: ParityRow list) : ValidationOutcome =
             Set.contains r.FsharpCheckId knownIds &&
             r.LegacyCheckId = r.FsharpCheckId)
         |> List.length
-    
+
     let report = {
         Rows = rows
         ProductionRuleCount = productionRuleCount
@@ -337,7 +337,7 @@ let validate (rows: ParityRow list) : ValidationOutcome =
         MalformedIdentities = allMalformed
         MalformedIdentityReasons = allMalformedReasons
     }
-    
+
     // P1-1: Build failure list
     let failures =
         []
@@ -357,7 +357,7 @@ let validate (rows: ParityRow list) : ValidationOutcome =
         |> List.append (List.map (fun (id, csv, reg) -> sprintf "path mismatch: %s csv=%s registry=%s" id csv reg) identityPathMismatches)
         |> List.append (List.map (fun (id, msg) -> sprintf "function mismatch: %s (%s)" id msg) identityPathFunctionMismatches)
         |> List.append (List.map (fun (line, status) -> sprintf "line %d: invalid status '%s'" line status) invalidStatusRows)
-    
+
     if List.isEmpty failures then Ok report
     else Failed (report, failures)
 
