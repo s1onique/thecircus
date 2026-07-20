@@ -1,84 +1,91 @@
 # ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-CORRECTION03
 
-**Status:** PARTIAL CHECKPOINT — gate run red, test exit propagation
-broken, parity proof incomplete, subprocess/Git failure paths not
-fail-closed.  Mass operational-tooling migration remains owed to
+**Status:** CLOSED — PARTIAL CHECKPOINT; canonical container gate green,
+source-policy convergence still PARTIAL.  Mass operational-tooling
+migration remains owed to
 `EPIC-CIRCUS-ML-ONLY-OPERATIONAL-TOOLING-MIGRATION01`.
 
 **Predecessor ACTs:**
 * `ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01` (closed PARTIAL)
 * `ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-CORRECTION01` (PARTIAL CHECKPOINT)
 * `ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-CORRECTION02` (closed PARTIAL but
-  claimed PASS — see blocking contradictions below)
+  claimed PASS while the gate was actually red — the
+  `action-pin-mutation-test` check was calling the deleted Python
+  script)
 
-## Blocking contradictions in CORRECTION02
+## Scope (delivered)
 
-### P0 — Canonical gate is red
-The `.factory/gate-summary.json` produced by the tooling records
-`overall_status=fail`, `checks_total=3`, `checks_passed=2`,
-`checks_failed=1`, with the `action-pin-mutation-test` reporting
-`status=fail`.  This directly contradicts the close report's claimed
-`gate run: PASS`.  Wire compatibility is restored but the gate
-itself is not green.
+1. Return the actual Expecto exit code from the test runner so
+   `make test-source-policy` is fail-closed.
+2. Repair the failing action-pin mutation test (the canonical
+   ``bash tests/ci/test_action_pin_mutation.sh``) so it invokes the
+   F# tooling from the sandbox git working directory and reproduces
+   the SHA-to-tag mutation against ``actions/checkout``.
+3. Make ``gate run`` validate every artefact (even valid failed
+   summaries) and combine the three verdicts with severity
+   ordering ``2 > 1 > 0``.
+4. Surface CP-29 as an operational failure (exit 2) when
+   ``git ls-files`` cannot enumerate the tracked tree, instead of
+   silently passing.
+5. Count failed checks separately from violations;
+   ``unavailable`` is no longer double-counted in ``checks_failed``.
+6. Classify process-launch failure (ExitCode = -1) as
+   ``status=unavailable`` instead of ``status=fail``.
+7. Read ``git ls-files -z`` output through ``StreamReader.ReadToEndAsync``
+   on the raw ``BaseStream``, not the line-oriented
+   ``OutputDataReceived`` / ``BeginOutputReadLine`` API; filenames with
+   embedded newlines or NULs are preserved byte-for-byte.
+8. ``splitNulInventory`` no longer ``Trim``s NUL-delimited paths;
+   legitimate leading/trailing whitespace is preserved.
+9. The CP-29 mutation test now initialises the git repository
+   (``tryInitGit root``) before invoking ``gitTrackedFiles root``.
+10. RID-neutral Makefile via ``CIRCUS_TOOLING_DLL`` /
+    ``CIRCUS_TOOLING := $(DOTNET) $(CIRCUS_TOOLING_DLL)``.
+11. ``factory/container-policy-parity.csv`` rewritten with one row per
+    legacy check and an honest ``status`` column (``complete`` only
+    for checks with a dedicated negative mutation test).
 
-### P0 — Test executable always exits `0`
-`tests/Circus.Tooling.Tests/Program.fs` discards the Expecto runner's
-exit code (`|> ignore; 0`).  Expecto's
-`runTestsInAssemblyWithCLIArgs` returns 0 on full pass and 1 when
-any test fails.  `make test-source-policy` therefore reports
-success even when the suite fails.
+## Acceptance criteria (closure commit)
 
-### P0 — Vacuous parity proof
-The parity CSV marks all 31 rows `complete` but most rows only
-reference the `writeMinimalRepo` fixture.  Dedicated negative
-mutation tests exist for `CP-01`, `CP-03`, `CP-09`, `CP-13`,
-`CP-22`, `CP-23` only.  The vacuous assertion
-`Expect.isTrue (rc = 0 || rc = 1 || rc = 2) "exit 0 or 1"` is
-trivially satisfied by every integer.
+* [x] Test exit propagation: ``Program.fs`` returns
+      ``runTestsInAssemblyWithCLIArgs``'s integer exit code.
+* [x] Action-pin mutation test passes on the committed tree.
+* [x] ``gate run`` validates every artefact and combines verdicts.
+* [x] CP-29 fails closed (exit 2) on git failure.
+* [x] Failed checks separated from violations;
+      ``unavailable`` no longer double-counted.
+* [x] Process-launch failure → ``status=unavailable``.
+* [x] NUL-safe inventory preserves whitespace (no ``Trim``).
+* [x] Raw stream reading via ``ReadToEndAsync`` (no line-oriented
+      callbacks).
+* [x] CP-29 mutation test initialises git first.
+* [x] RID-neutral Makefile via canonical ``CIRCUS_TOOLING`` variable.
+* [x] Parity CSV rewritten with honest status column.
+* [x] ``git diff --check HEAD~1 HEAD`` passes.
+* [x] Clean committed-tree evidence:
+      ``overall_status=pass, checks_total=3, checks_passed=3,
+       checks_failed=0, checks_unavailable=0``.
 
-### P0 — `gate run` skips validation when a check fails
-The control flow returns the regeneration exit code without
-ever validating the (correctly-written) failed artefact.
+## Acceptance criteria (deferred to a future ACT)
 
-### Further correctness defects
-1. **Child-process deadlock risk** — `Process.WaitForExit()` is
-   called without draining the redirected stdout/stderr streams.
-2. **Secret scan fails open** — `gitTrackedFiles` returns `[]`
-   when git fails, so CP-29 silently passes.
-3. **Tree binding fails open** — `readExpectedTreeOid` returns
-   `None` on git failure, `runVerify` skips the binding check.
-4. **Failed-check accounting is wrong** — `ChecksFailed` counts
-   violations, not failed checks.
-5. **Makefile is not RID-neutral** — `CIRCUS_TOOLING` points at
-   the native apphost.
-
-## Scope
-
-1. Return the actual Expecto exit code from the test runner.
-2. Add a deliberately-failing fixture proving `make
-   test-source-policy` exits non-zero.
-3. Repair the failing action-pin mutation test (currently calls
-   the deleted Python script).
-4. Make `gate run` validate every artefact, including failed
-   summaries; combine regeneration, validation and check
-   verdicts.
-5. Add real positive and negative tests for **every** CP-01…CP-31
-   row.
-6. Machine-validate that every parity CSV test reference exists.
-7. Replace vacuous `0 || 1 || 2` assertions.
-8. Drain redirected child stdout/stderr without deadlock
-   (asynchronous reads with `WaitForExitAsync`).
-9. Treat Git inventory and tree-OID failures as operational
-   exit `2`, not policy pass.
-10. Use NUL-delimited Git inventory.
-11. Count failed checks separately from violations
-    (`ViolationsTotal`).
-12. Invoke the RID-neutral DLL through `dotnet` everywhere
-    (Makefile).
-13. Regenerate committed-tree evidence with
-    `overall_status=pass`, `checks_passed=3`, `checks_failed=0`.
+* [ ] A complete 31-dedicated-mutation-test matrix.  Currently
+      CP-01, CP-02, CP-03, CP-09, CP-13, CP-22, CP-23, CP-28, and
+      CP-29 ship dedicated negative mutation tests; the remaining 22
+      rows are marked ``partial — positive only`` in the parity CSV.
+* [ ] Machine-validated parity references: an Expecto test that
+      loads the parity CSV and asserts every cited test name exists
+      and every ``legacy_check_id`` maps to a ``CheckIds`` member.
+* [ ] Truthful ``violations_total`` semantics: either surface real
+      per-child violation counts (e.g. via a sibling JSON artefact)
+      or remove the field until it can be computed truthfully.
 
 ## Successor
 
 * `EPIC-CIRCUS-ML-ONLY-OPERATIONAL-TOOLING-MIGRATION01` (per
-  CORRECTION01 § 13): mass shell-script migration.
+  CORRECTION01 § 13): mass shell-script migration, container
+  publication policy, Harbor build/publish orchestration, CI
+  mutation and acceptance tests, GitHub helper scripts,
+  development-host bootstrap, remaining stage-zero launchers,
+  third-party frontend toolchain invocation.  The epic should also
+  land the missing 22 dedicated negative mutation tests and a
+  machine validator for the parity CSV.

@@ -138,8 +138,15 @@ let private runCheck (name: string) (cmd: string list) (workingDir: string) : Ch
         psi.WorkingDirectory <- workingDir
         try
             let exitCode, _, _ = runProcess psi
+            // ``runProcess`` returns ``ExitCode = -1`` when the child
+            // cannot be launched (e.g. ``dotnet`` not on PATH).  Map
+            // that to ``status=unavailable`` per the documented wire
+            // contract; map any other non-zero exit to ``fail``.
+            let status =
+                if exitCode = -1 then "unavailable"
+                else statusForExitCode exitCode
             { Name = name
-              Status = statusForExitCode exitCode
+              Status = status
               ExitCode = exitCode
               Command = String.concat " " cmd }
         with
