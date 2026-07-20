@@ -225,9 +225,9 @@ let private makeProcessTreeScript (nonce: string) (readinessFile: string) : stri
 
 ## Exact hashes
 
-- **Implementation commit:** `e26acc6016be977ca62998d50d961fca2116da91`
-- **Tested commit:** (this ACT's commit)
-- **Tree:** `8b54f64eedbeb31110cb646cfab7424c6d5ec14a`
+- **Implementation commit:** `b61b7790c49deb06a9952c242fe2062da57a8227`
+- **Tested commit:** `b61b7790c49deb06a9952c242fe2062da57a8227`
+- **Tree:** `302268f2244aa8ee66e2eaad31b208f9ae4a203d`
 - **Documentation:** `docs/close-reports/closure-ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-CORRECTION02-P0-2.md`
 
 ## Patch hygiene
