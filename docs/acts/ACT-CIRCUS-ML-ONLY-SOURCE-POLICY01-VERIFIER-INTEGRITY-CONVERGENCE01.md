@@ -227,7 +227,7 @@ checks.  No manually-fixed `checks_total`, `checks_passed`,
 
 All generated summaries and closure evidence identify and
 correspond to the final examined tree (commit `3d4dc15`, tree
-`0a8a7a66d8c10861eb7ae7989401f80bf26c1533`).
+`9718df8c605c41704381dde2a08c3d573ac7ce40`).
 
 # 6. Workstreams
 
@@ -397,7 +397,7 @@ pwd                         = /home/thecircus/Projects/thecircus
 git rev-parse --show-toplevel = /home/thecircus/Projects/thecircus
 git branch --show-current    = main
 git rev-parse HEAD           = 3d4dc1568743db20609c1f361f8ec347f85c6c26
-git rev-parse HEAD^{tree}    = 0a8a7a66d8c10861eb7ae7989401f80bf26c1533
+git rev-parse HEAD^{tree}    = 9718df8c605c41704381dde2a08c3d573ac7ce40
 git status --short           = (clean)
 ```
 
@@ -494,7 +494,7 @@ violations_total = 0
 checks_skipped   = 0
 checks_unavailable = 0
 tested_commit_oid = 3d4dc1568743db20609c1f361f8ec347f85c6c26
-tested_tree_oid   = 0a8a7a66d8c10861eb7ae7989401f80bf26c1533
+tested_tree_oid   = 9718df8c605c41704381dde2a08c3d573ac7ce40
 source_policy_status = pass
 mutation_status      = 22/22 implemented and passing
 parity_status        = pass (31/31 identities, 0 missing, 0 unexpected, 0 duplicates)
@@ -576,7 +576,7 @@ parity_status        = pass (31/31 identities, 0 missing, 0 unexpected, 0 duplic
 ## PASS
 
 All ten acceptance criteria are PASS against the identified final
-tested tree (`3d4dc15` / `0a8a7a66d8c10861eb7ae7989401f80bf26c1533`).
+tested tree (`3d4dc15` / `9718df8c605c41704381dde2a08c3d573ac7ce40`).
 
 After PASS:
 
