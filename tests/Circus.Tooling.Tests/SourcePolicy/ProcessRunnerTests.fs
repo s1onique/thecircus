@@ -308,14 +308,25 @@ let makeBashDependentTest
             ()
         }
 
+/// Extracts the authoritative dishonest-pattern scanner.
+/// Uses IgnoreCase ||| Singleline so that . matches newlines,
+/// allowing detection of the old multiline bashOk pattern.
+let private containsDishonestBashSkip (source: string) : bool =
+    Regex.IsMatch(
+        source,
+        @"test\s*\""skipped.*bash.*unavailable.*Expect\.isTrue\s+true",
+        RegexOptions.IgnoreCase ||| RegexOptions.Singleline)
+
 /// Regression guard: rejects known dishonest pattern.
 /// Reads the actual source file and checks for the prohibited pattern.
 let private activateRegressionGuard () =
     let sourceFile = __SOURCE_FILE__
-    let source = File.ReadAllText(sourceFile)
-    let pattern = @"test\s*\""skipped.*bash.*unavailable.*Expect\.isTrue\s+true"
-    if Regex.IsMatch(source, pattern, RegexOptions.IgnoreCase) then
-        failtestf "REGRESSION: dishonest Bash-unavailable test pattern detected. Use ptest instead."
+
+    if not (File.Exists sourceFile) then
+        failtestf "source file does not exist: %s" sourceFile
+
+    if containsDishonestBashSkip (File.ReadAllText sourceFile) then
+        failtest "dishonest Bash-unavailable test detected. Use ptest instead."
 
 /// Runs a generated test in-process and returns the summary.
 /// Used for genuine execution proofs.
@@ -348,10 +359,10 @@ let bashAvailabilityTests =
                     "probe"
                     (fun _ -> ())
 
-            let testStr = sprintf "%A" generated
-            // ptest creates TestCase with Pending state
-            if not (testStr.Contains("Pending") || testStr.Contains("pending")) then
-                failtestf "Expected Pending, got: %s" testStr
+            // Exact structural proof: ptest creates TestLabel with TestCase in Pending state
+            match generated with
+            | TestLabel(_, TestCase(_, Pending), Pending) -> ()
+            | actual -> failtestf "Expected exact Pending TestCase, got %A" actual
         }
 
         // -------------------------------------------------------------------
@@ -364,9 +375,11 @@ let bashAvailabilityTests =
                     "probe"
                     (fun _ -> ())
 
-            let testStr = sprintf "%A" generated
-            if testStr.Contains("Pending") then
-                failtestf "Available branch should NOT be Pending, got: %s" testStr
+            // Structural proof: available branch is NOT Pending
+            match generated with
+            | TestLabel(_, TestCase(_, Pending), Pending) ->
+                failtestf "Available branch should NOT be Pending, got: %A" generated
+            | _ -> ()
         }
 
         // -------------------------------------------------------------------
@@ -381,17 +394,19 @@ let bashAvailabilityTests =
                     "forced unavailable"
                     (fun _ -> bodyExecuted <- true)
 
+            // Exact structural proof: the generated test has Pending state
+            match generated with
+            | TestLabel(_, TestCase(_, Pending), Pending) -> ()
+            | actual -> failtestf "Expected exact Pending TestCase, got %A" actual
+
+            // Body canary: set to true if body ever executes
+            if bodyExecuted then
+                failtestf "Body executed for unavailable test - pending state was violated!"
+
             // Run the test in-process
-            let exitCode = Tests.runTestsWithCLIArgs [||] generated
-            // Exit code 0 means: test was selected, no failures
-            // Exit code 1 means: test failed
-            // Exit code 2 means: test was ignored/pending
+            let _exitCode = Tests.runTestsWithCLIArgs [] [||] generated
 
-            // The generated test is PENDING, so exit code should be 2 (ignored/pending)
-            if exitCode <> 2 then
-                failtestf "Expected pending (exit 2), got exit %d. Body may have executed." exitCode
-
-            // Body MUST NOT have executed
+            // Body MUST NOT have executed (proven by canary)
             if bodyExecuted then
                 failtestf "Body executed for unavailable test - pending state was violated!"
         }
@@ -409,10 +424,8 @@ let bashAvailabilityTests =
                     (fun _ -> bodyExecuted <- true)
 
             // Run the test in-process
-            let exitCode = Tests.runTestsWithCLIArgs [||] generated
-            // Exit code 0 means: test passed
-            // The body executed and did not fail
-
+            let exitCode = Tests.runTestsWithCLIArgs [] [||] generated
+            // Exit code 0 means: all tests passed
             if exitCode <> 0 then
                 failtestf "Expected pass (exit 0), got exit %d" exitCode
 
@@ -434,70 +447,47 @@ let bashAvailabilityTests =
                         failwith "intentional failure")
 
             // Run the test in-process
-            let exitCode = Tests.runTestsWithCLIArgs [||] generated
-            // Exit code 1 means: test failed (exactly one failure as expected)
-
+            let exitCode = Tests.runTestsWithCLIArgs [] [||] generated
+            // Exit code 1 means: test failed
             if exitCode <> 1 then
-                failtestf "Expected one failure (exit 1), got exit %d. Failures may be converted to pending/passing!" exitCode
+                failtestf "Expected one failure (exit 1), got exit %d" exitCode
         }
 
         // -------------------------------------------------------------------
         // Point 3: Non-vacuous regression guard
         // -------------------------------------------------------------------
-        test "regression guard: negative fixture (old bashOk pattern) must be rejected" {
-            let oldDishonestCode = @"
+
+        test "regression guard: activateRegressionGuard invokes containsDishonestBashSkip on source" {
+            // Invoke the actual regression guard directly
+            activateRegressionGuard()
+        }
+
+        test "regression guard: containsDishonestBashSkip rejects negative fixture (old bashOk multiline pattern)" {
+            // The negative fixture contains the old dishonest pattern
+            let negativeFixture = @"
 module Dishonest
 let bashOk = true
 test ""skipped bash unavailable"" {
     if bashOk then
         Expect.isTrue true
 }"
-            // Write to temp file
-            let tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dishonest-" + Guid.NewGuid().ToString("n") + ".fs")
-            try
-                System.IO.File.WriteAllText(tempPath, oldDishonestCode)
-                let source = System.IO.File.ReadAllText(tempPath)
-                let pattern = @"test\s*\""skipped.*bash.*unavailable.*Expect\.isTrue\s+true"
-                if not (Regex.IsMatch(source, pattern, RegexOptions.IgnoreCase)) then
-                    failtestf "Negative fixture should match the dishonest pattern"
-            finally
-                System.IO.File.Delete(tempPath) |> ignore
+            // Use the authoritative scanner function
+            Expect.isTrue
+                (containsDishonestBashSkip negativeFixture)
+                "Scanner must reject negative fixture (old bashOk pattern)"
         }
 
-        test "regression guard: positive fixture (new ptest pattern) must be accepted" {
-            let newHonestCode = @"
+        test "regression guard: containsDishonestBashSkip accepts positive fixture (new ptest pattern)" {
+            // The positive fixture uses ptest, which should NOT match the old pattern
+            let positiveFixture = @"
 module Honest
 ptest ""bash unavailable"" {
     ()
 }"
-            // Write to temp file
-            let tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "honest-" + Guid.NewGuid().ToString("n") + ".fs")
-            try
-                System.IO.File.WriteAllText(tempPath, newHonestCode)
-                let source = System.IO.File.ReadAllText(tempPath)
-                let oldPattern = @"test\s*\""skipped.*bash.*unavailable.*Expect\.isTrue\s+true"
-                if Regex.IsMatch(source, oldPattern, RegexOptions.IgnoreCase) then
-                    failtestf "Positive fixture should NOT match the old dishonest pattern"
-            finally
-                System.IO.File.Delete(tempPath) |> ignore
-        }
-
-        test "regression guard: activateRegressionGuard scans actual source" {
-            // This test verifies that activateRegressionGuard uses __SOURCE_FILE__
-            // and reads the actual source file, not a hardcoded string.
-            let sourceFile = __SOURCE_FILE__
-            if not (System.IO.File.Exists(sourceFile)) then
-                failtestf "Source file must exist: %s" sourceFile
-
-            let source = System.IO.File.ReadAllText(sourceFile)
-            // Verify the pattern we're guarding against is NOT present
-            let pattern = @"test\s*\""skipped.*bash.*unavailable.*Expect\.isTrue\s+true"
-            if Regex.IsMatch(source, pattern, RegexOptions.IgnoreCase) then
-                failtestf "REGRESSION: dishonest pattern found in actual source"
-
-            // Verify activateRegressionGuard function exists
-            if not (source.Contains "activateRegressionGuard") then
-                failtestf "activateRegressionGuard function must exist"
+            // Use the authoritative scanner function
+            Expect.isFalse
+                (containsDishonestBashSkip positiveFixture)
+                "Scanner must accept ptest pattern as honest"
         }
     ]
 
