@@ -101,13 +101,12 @@ type ConcurrentProofResult = {
 /// Exception thrown when the proof cannot proceed.
 exception ProofFailed of string
 
-/// Run ProcessRunner with genuine concurrency using settled coordination primitives:
-/// - ProcessRunner completion task
-/// - Readiness task
-/// - Watchdog task
-/// - All tasks settled before returning
-/// - Timeout waiting for real result fails the proof.
-/// - All mutable state access is protected by a lock to prevent races.
+/// Simplified runProcessConcurrently using Task.Delay/Task.WhenAny.
+/// Every coordination task reaches a terminal state:
+/// - ProcessRunner: completed, faulted, or cancelled
+/// - Readiness: set or cancelled
+/// - Watchdog: Task.Delay naturally expires (no TCS needed)
+/// Uses a lock to protect mutable state shared between threads.
 let private runProcessConcurrently
     (argv: string list)
     (workspace: string)
@@ -116,32 +115,14 @@ let private runProcessConcurrently
     (watchdogMs: int)
     (cts: CancellationTokenSource)
     : ConcurrentProofResult =
-    // One TCS per coordination primitive with async continuations
-    let completionTcs = TaskCompletionSource<TextResult>(TaskCreationOptions.RunContinuationsAsynchronously)
-    let readinessTcs = TaskCompletionSource<PidRecord>(TaskCreationOptions.RunContinuationsAsynchronously)
-    let watchdogTcs = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
-
     let stateLock = obj()
-
     let mutable readinessFound = false
     let mutable cancellationIssuedAfterReadiness = false
     let mutable watchdogExpired = false
     let mutable parsedRecord: PidRecord option = None
 
-    // Thread-safe state setters
-    let setReadiness (found: bool) (record: PidRecord) =
-        lock stateLock (fun () ->
-            readinessFound <- found
-            parsedRecord <- Some record
-        )
-    let setCancellationAfterReadiness () =
-        lock stateLock (fun () -> cancellationIssuedAfterReadiness <- true)
-    let setWatchdogExpired () =
-        lock stateLock (fun () ->
-            watchdogExpired <- true
-        )
-    let getReadinessFound () : bool =
-        lock stateLock (fun () -> readinessFound)
+    // Completion source for process result (no TCS for watchdog — Task.Delay is the watchdog)
+    let completionTcs = TaskCompletionSource<TextResult>(TaskCreationOptions.RunContinuationsAsynchronously)
 
     // Background thread: run process
     let processThread = Thread(fun () ->
@@ -154,64 +135,67 @@ let private runProcessConcurrently
     processThread.IsBackground <- true
     processThread.Start()
 
-    // Watchdog thread: timeout independent of normal cancellation
-    let watchdogThread = Thread(fun () ->
-        Thread.Sleep(watchdogMs)
-        if not (getReadinessFound()) then
-            setWatchdogExpired()
-            watchdogTcs.TrySetResult() |> ignore
-            cts.Cancel() // Force cancel after watchdog
-    )
-    watchdogThread.IsBackground <- true
-    watchdogThread.Start()
-
-    // Main poll loop
+    // Readiness polling loop — races against watchdog
     let deadline = DateTime.UtcNow.AddMilliseconds(float watchdogMs)
-    while not (getReadinessFound()) && DateTime.UtcNow < deadline do
+    while not readinessFound && DateTime.UtcNow < deadline do
         if File.Exists(readinessFile) then
-            let content = File.ReadAllText(readinessFile)
-            // Parse: PROCESS_TREE_READY parent_pid=N descendant_pid=N nonce=XXX
-            let m = Regex.Match(content, @"PROCESS_TREE_READY parent_pid=(\d+) descendant_pid=(\d+) nonce=(\S+)")
-            if m.Success then
-                let parentPid = int m.Groups.[1].Value
-                let descendantPid = int m.Groups.[2].Value
-                let nonce = m.Groups.[3].Value
-                if parentPid > 0 && descendantPid > 0 && parentPid <> descendantPid then
-                    let record = { ParentPid = parentPid; DescendantPid = descendantPid; Nonce = nonce }
-                    setReadiness true record
-                    readinessTcs.TrySetResult(record) |> ignore
-                    // Cancel immediately after valid readiness
-                    setCancellationAfterReadiness()
-                    cts.Cancel()
-        if not (getReadinessFound()) then
+            // Strict parsing: read all lines, require exactly one valid record
+            let lines = File.ReadAllLines(readinessFile)
+            if lines.Length = 1 then
+                let line = lines.[0]
+                // Anchor regex to complete line
+                let m = Regex.Match(line, @"^PROCESS_TREE_READY parent_pid=(\d+) descendant_pid=(\d+) nonce=(\S+)$")
+                if m.Success then
+                    let parentPid = int m.Groups.[1].Value
+                    let descendantPid = int m.Groups.[2].Value
+                    let nonce = m.Groups.[3].Value
+                    // Require positive distinct PIDs
+                    if parentPid > 0 && descendantPid > 0 && parentPid <> descendantPid then
+                        lock stateLock (fun () ->
+                            readinessFound <- true
+                            cancellationIssuedAfterReadiness <- true
+                            parsedRecord <- Some { ParentPid = parentPid; DescendantPid = descendantPid; Nonce = nonce }
+                        )
+                        cts.Cancel()
+            // else: extra lines, no line, or malformed — keep polling
+        if not readinessFound then
             Thread.Sleep(pollMs)
 
-    // Wait for all tasks to settle
-    let allTasks = Task.WhenAll(completionTcs.Task, readinessTcs.Task, watchdogTcs.Task)
-    allTasks.Wait(watchdogMs) |> ignore
+    // Determine watchdog expired AFTER polling loop
+    if not readinessFound then
+        lock stateLock (fun () -> watchdogExpired <- true)
+        cts.Cancel()
 
-    // Determine if process completed
-    let processCompleted = completionTcs.Task.IsCompleted
+    // Boundedly wait for the real ProcessRunner result
+    // Use Task.WhenAny to wait for completion with a bound
+    let bound =
+        try
+            Task.WaitAny(completionTcs.Task, Task.Delay(watchdogMs)) |> ignore
+            true
+        with _ -> false
 
-    // Get result - if not completed, we fail the proof
-    let result =
-        if completionTcs.Task.IsCompleted && not completionTcs.Task.IsFaulted && not completionTcs.Task.IsCanceled then
-            Some completionTcs.Task.Result
-        else
-            // Process did not complete - this fails the proof
-            None
+    // Settle readinessTcs if not yet settled (cancelled or already set)
+    // (No readinessTcs TCS needed — readiness state is in mutable vars)
+    // completionTcs is already settled by the process thread
 
     // Read final state under lock
     let finalReadiness, finalRecord, finalCancellation, finalWatchdog =
         lock stateLock (fun () ->
             readinessFound, parsedRecord, cancellationIssuedAfterReadiness, watchdogExpired)
 
+    // Get result — None if not completed (fails the proof)
+    let result =
+        if completionTcs.Task.IsCompleted && not completionTcs.Task.IsFaulted && not completionTcs.Task.IsCanceled then
+            Some completionTcs.Task.Result
+        else
+            None
+
     { Result = result
       PidRecord = finalRecord
       ReadinessFound = finalReadiness
       CancellationIssuedAfterReadiness = finalCancellation
       WatchdogExpired = finalWatchdog
-      ProcessCompleted = processCompleted }
+      ProcessCompleted = completionTcs.Task.IsCompleted }
 
 // ---------------------------------------------------------------------------
 // Fixture cleanup helpers.

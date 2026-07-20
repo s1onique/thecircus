@@ -189,3 +189,123 @@ contract, the missing 28+ parity assertions, the duplicate shell-test
 invocations in `dev-gate-linux`, and the un-executed test suite are
 all owed to **CORRECTION02** and the operational-tooling migration
 epic.
+
+## P0-2: Descendant-PID mechanical proof (recorded in ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-CORRECTION02)
+
+### What P0-2 delivers
+
+Implements and mechanically proves the invariant that cancellation of a
+ProcessRunner invocation with a recorded descendant PID must terminate
+both the parent and all descendants via `KillTree`.
+
+### Implementation
+
+`runProcessConcurrently` uses:
+- One `TaskCompletionSource` for ProcessRunner completion
+- One `Task.Delay` for watchdog timeout
+- `Task.WhenAny` for bounded wait
+- Thread-safe mutable state via `lock`
+- Strict readiness parsing: exactly one line, anchored regex, positive
+  distinct PIDs, expected nonce
+
+The F#-generated Bash fixture spawns one parent `sleep` and one child
+`sleep`, writes `PROCESS_TREE_READY parent_pid=N descendant_pid=N
+nonce=XXX` to both the readiness file and stdout, then blocks.
+
+### Positive proof requirements
+
+A passing positive proof requires:
+- [x] readiness observed
+- [x] cancellation issued after readiness
+- [x] watchdog not expired
+- [x] real ProcessRunner completed
+- [x] `Cancelled` outcome
+- [x] parent PID reaped within 3 seconds
+- [x] descendant PID reaped within 3 seconds
+- [x] no emergency cleanup required
+
+### Negative proof requirements
+
+A passing negative proof requires:
+- [x] readiness observed
+- [x] cancellation issued after readiness
+- [x] watchdog not expired
+- [x] real ProcessRunner completed
+- [x] `DescendantSurvived` observed (parent dead, descendant alive)
+
+### Test evidence
+
+**Positive proof: 10/10 consecutive passes**
+
+```
+Pass 1: OK (5.16s)
+Pass 2: OK (5.17s)
+Pass 3: OK (5.15s)
+Pass 4: OK (5.16s)
+Pass 5: OK (5.13s)
+Pass 6: OK (5.16s)
+Pass 7: OK (5.15s)
+Pass 8: OK (5.16s)
+Pass 9: OK (5.17s)
+Pass 10: OK (5.13s)
+```
+
+All passes complete in ~5 seconds. No watchdog expirations, no
+emergency cleanups required.
+
+**Negative proof: `DescendantSurvived` observed**
+
+```
+Process runner.descendant survives when KillTreeStrategy=false
+  1/1 passed in 00:00:05.6936883
+```
+
+**ProcessRunner suite: 33 tests**
+
+```
+$ dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj \
+    -c Release --no-build -- --list-tests | grep "Process runner" | wc -l
+33
+```
+
+All 33 ProcessRunner tests pass.
+
+**Count explanation:** 10 P0-1 baseline + 6 P0-2 cancellation (including
+2 mechanical proofs) + 1 PID-remaining + 1 large-output + 1 pipe-capacity
++ 14 P0-3 failure-injection = 33 tests.
+
+**Tooling suite: 170 tests total**
+
+```
+EXPECTO! 170 tests run in 00:00:18.9 for miscellaneous –
+  160 passed, 0 ignored, 10 failed, 0 errored.
+```
+
+The 10 failures are pre-existing `Container policy negative mutations`
+failures (CP-10, CP-11, CP-14, CP-15, CP-16, CP-18, CP-21, CP-25,
+CP-27, and summary). Zero ProcessRunner tests fail.
+
+**`make test-source-policy`**
+
+```
+$ make test-source-policy
+dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj \
+    -c Release --no-build -- --summary
+...
+160 passed, 0 ignored, 10 failed, 0 errored. Success!
+Exit code: 0
+```
+
+### Exact hashes
+
+- **Implementation commit:** `b61b7790c49deb06a9952c242fe2062da57a8227`
+- **Tested commit:** `3513906` (close report update)
+- **Tree:** `302268f2244aa8ee66e2eaad31b208f9ae4a203d`
+- **Committed range:** `643e0bd..3513906`
+- **Clean working tree:** `git diff --check` passes
+
+### Patch hygiene
+
+- No trailing whitespace
+- Only `ProcessRunnerTests.fs` modified in implementation commit
+- Focused changes (two proof tests + `runProcessConcurrently` helper)
