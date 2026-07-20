@@ -18,6 +18,34 @@ do
         bashOk <- true
     with _ -> ()
 
+// ---------------------------------------------------------------------------
+// Failure-injection test helpers.
+//
+// The runner exposes ``InjectStartAsyncFailure``,
+// ``InjectStartAsyncAccessFailure``, ``InjectWaitFailure``,
+// ``InjectDrainFailure``, and ``InjectDisposeFailure`` as mutable
+// ``internal`` functions.  Each helper resets every hook to ``None`` so
+// that a misconfigured test cannot poison subsequent tests.
+// ---------------------------------------------------------------------------
+
+let private resetInjections () =
+    InjectStartAsyncFailure       <- fun () -> None
+    InjectStartAsyncAccessFailure <- fun () -> None
+    InjectWaitFailure             <- fun () -> None
+    InjectDrainFailure            <- fun () -> None
+    InjectDisposeFailure          <- fun () -> None
+
+let private withInjection<'a>
+    (setHooks : unit -> unit)
+    (body : unit -> 'a)
+    : 'a =
+    resetInjections ()
+    try
+        setHooks ()
+        body ()
+    finally
+        resetInjections ()
+
 let private bashArgs (body: string) : string list =
     [ "bash"; "-c"; body ]
 
@@ -28,7 +56,14 @@ let private outcomeSummary (r: TextResult) : string =
 
 [<Tests>]
 let tests =
-    testList "Process runner" [
+    // ``testSequenced`` is required because several tests mutate the
+    // ``Inject*`` failure-injection hooks (process-runner-level
+    // ``mutable internal`` functions).  Running tests in parallel
+    // would let one test's injected state leak into another and
+    // produce spurious SpawnFailure / BodyFailure outcomes.  Sequential
+    // execution guarantees that ``resetInjections`` runs to completion
+    // before the next test begins.
+    testSequenced <| testList "Process runner" [
         // -------------------------------------------------------------------
         // Host dependency honesty: a missing bash is reported as skipped,
         // not as a passing substitute test.
@@ -218,5 +253,111 @@ let tests =
                     Expect.stringContains r.Output "stdout-1000" "stdout survived"
                     Expect.stringContains r.Stderr "stderr-line-" "stderr survived"
                 | o -> failtestf "expected Exited 0, got %s" (outcomeSummary r)
+            }
+
+            // -------------------------------------------------------------------
+            // P0-3: Exception-safe ownership bracket + failure-injection tests.
+            //
+            // Each test forces a failure at one stage of the lifecycle.  After
+            // the failure, ``runCore`` MUST still:
+            //   * return a structured ``ProcessOutcome`` (no exception escapes);
+            //   * have released the started process so no PID lingers;
+            //   * leave the failure injection hooks reset for the next test.
+            // -------------------------------------------------------------------
+
+            test "injected startAsync failure produces SpawnFailure with the injected note" {
+                let r =
+                    withInjection
+                        (fun () ->
+                            InjectStartAsyncFailure <- fun () -> Some "injected-spawn-error")
+                        (fun () ->
+                            runProcessText (bashArgs "exit 0") noCwd CancellationToken.None)
+                match r.Outcome with
+                | SpawnFailure (detail, _) ->
+                    Expect.stringContains detail "injected-spawn-error" "injected note propagated"
+                | o -> failtestf "expected SpawnFailure, got %A" o
+            }
+
+            test "injected startAsync access failure still releases the started process" {
+                let r =
+                    withInjection
+                        (fun () ->
+                            InjectStartAsyncAccessFailure <- fun () ->
+                                Some (InvalidOperationException("injected-context-failure") :> exn))
+                        (fun () ->
+                            runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
+                // The started process must NOT linger.
+                match r.Pid with
+                | Some pid ->
+                    Thread.Sleep(250)
+                    Expect.isFalse (isPidAlive pid) "started process must be released"
+                | None -> ()
+                match r.Outcome with
+                | SpawnFailure _
+                | BodyFailure _ -> ()
+                | o -> failtestf "expected SpawnFailure/BodyFailure, got %A" o
+            }
+
+            test "injected wait failure produces BodyFailure and releases the process" {
+                let r =
+                    withInjection
+                        (fun () ->
+                            InjectWaitFailure <- fun () ->
+                                Some (TimeoutException("injected-wait-failure") :> exn))
+                        (fun () ->
+                            runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
+                match r.Outcome with
+                | BodyFailure (detail, _) ->
+                    Expect.stringContains detail "injected-wait-failure" "wait note propagated"
+                | o -> failtestf "expected BodyFailure, got %A" o
+                match r.Pid with
+                | Some pid ->
+                    Thread.Sleep(250)
+                    Expect.isFalse (isPidAlive pid) "wait-failed process must be released"
+                | None -> ()
+            }
+
+            test "injected drain failure produces BodyFailure and releases the process" {
+                let r =
+                    withInjection
+                        (fun () ->
+                            InjectDrainFailure <- fun () ->
+                                Some (IOException("injected-drain-failure") :> exn))
+                        (fun () ->
+                            runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
+                match r.Outcome with
+                | BodyFailure (detail, _) ->
+                    Expect.stringContains detail "injected-drain-failure" "drain note propagated"
+                | o -> failtestf "expected BodyFailure, got %A" o
+                match r.Pid with
+                | Some pid ->
+                    Thread.Sleep(250)
+                    Expect.isFalse (isPidAlive pid) "drain-failed process must be released"
+                | None -> ()
+            }
+
+            test "injected dispose failure records note but outcome is still structured" {
+                let r =
+                    withInjection
+                        (fun () ->
+                            InjectDisposeFailure <- fun () ->
+                                Some (ObjectDisposedException("injected-dispose-failure") :> exn))
+                        (fun () ->
+                            runProcessText (bashArgs "echo alive; exit 0") noCwd CancellationToken.None)
+                match r.Outcome with
+                | Exited (0, note)
+                | NonzeroExit (_, note) ->
+                    Expect.stringContains note "dispose injected failure" "dispose note recorded"
+                | o -> failtestf "expected Exited/NonzeroExit with dispose note, got %A" o
+            }
+
+            test "injection hooks are reset after each test (no cross-test pollution)" {
+                // No injection should be active for this run; we expect a normal
+                // Exited 0 even though previous tests injected failures.
+                resetInjections ()
+                let r = runProcessText (bashArgs "exit 0") noCwd CancellationToken.None
+                match r.Outcome with
+                | Exited (0, _) -> ()
+                | o -> failtestf "expected clean Exited 0 after reset, got %A" o
             }
     ]

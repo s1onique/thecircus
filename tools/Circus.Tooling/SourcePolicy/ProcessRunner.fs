@@ -16,6 +16,7 @@ type ProcessOutcome =
     | Cancelled of cleanupNote: string
     | CleanupFailure of detail: string
     | OutputFailure of detail: string * cleanupNote: string
+    | BodyFailure of detail: string * cleanupNote: string
 
 type BytesResult = {
     Outcome: ProcessOutcome
@@ -39,6 +40,23 @@ let private appendNote (note: string ref) (msg: string) : unit =
     if msg = "" then ()
     elif note.Value = "" then note.Value <- msg
     else note.Value <- sprintf "%s; %s" note.Value msg
+
+// ---------------------------------------------------------------------------
+// Failure injection hooks.
+//
+// Each hook is a mutable ``internal`` function the test suite can flip from
+// its default ``None`` to ``Some`` to force the corresponding lifecycle
+// stage to fail.  Production code never sets them; they exist solely so
+// failure-injection tests can exercise the exception-safe ownership bracket
+// inside ``runCore`` and ``startAsync``.  All hooks are reset-safe because
+// they are functions, not flags.
+// ---------------------------------------------------------------------------
+
+let mutable internal InjectStartAsyncFailure : (unit -> string option) = fun () -> None
+let mutable internal InjectStartAsyncAccessFailure : (unit -> exn option) = fun () -> None
+let mutable internal InjectWaitFailure : (unit -> exn option) = fun () -> None
+let mutable internal InjectDrainFailure : (unit -> exn option) = fun () -> None
+let mutable internal InjectDisposeFailure : (unit -> exn option) = fun () -> None
 
 let private killTree (proc: Process) (note: string ref) : unit =
     try
@@ -137,30 +155,58 @@ let private startAsync (argv: string list) (workingDir: string option) (ct: Canc
     if List.isEmpty argv then
         Result.Error "argv is empty"
     else
-        let psi = buildStartInfo argv workingDir
-        let proc =
-            try Process.Start(psi)
-            with ex ->
-                appendNote note (sprintf "spawn failed: %s" ex.Message)
-                Unchecked.defaultof<Process>
-        if isNull proc then
-            appendNote note "Process.Start returned null"
-            Result.Error "Process.Start returned null"
-        else
-            let pid = proc.Id
-            let stdoutBytes = drainBytesAsync proc.StandardOutput.BaseStream ct
-            let stderrText = drainTextAsync proc.StandardError.BaseStream ct
-            let stdoutText = task {
-                let! r = stdoutBytes
-                return
-                    match r with
-                    | Result.Ok b -> Result.Ok (Encoding.UTF8.GetString b)
-                    | Result.Error e -> Result.Error e
-            }
-            Result.Ok { Proc = proc; Pid = pid
-                        StdoutBytes = stdoutBytes
-                        StderrText = stderrText
-                        StdoutText = stdoutText }
+        // Failure injection hook for the "spawn failed" branch.
+        match InjectStartAsyncFailure() with
+        | Some msg ->
+            appendNote note (sprintf "spawn injected failure: %s" msg)
+            Result.Error (sprintf "spawn injected failure: %s" msg)
+        | None ->
+            let psi = buildStartInfo argv workingDir
+            let proc =
+                try Process.Start(psi)
+                with ex ->
+                    appendNote note (sprintf "spawn failed: %s" ex.Message)
+                    Unchecked.defaultof<Process>
+            if isNull proc then
+                appendNote note "Process.Start returned null"
+                Result.Error "Process.Start returned null"
+            else
+                // After ``Process.Start`` succeeds but before the owned
+                // context is returned, an exception (real or injected)
+                // would historically leak the freshly-started process.
+                // That whole window is now bracketed: if anything throws,
+                // we still dispose the started process before propagating
+                // the error to the caller.
+                try
+                    let pid = proc.Id
+                    // Failure injection for the post-Start context
+                    // construction window.  Throwing here exercises the
+                    // ownership-bracket cleanup path.
+                    match InjectStartAsyncAccessFailure() with
+                    | Some ex -> raise ex
+                    | None -> ()
+                    let stdoutBytes = drainBytesAsync proc.StandardOutput.BaseStream ct
+                    let stderrText = drainTextAsync proc.StandardError.BaseStream ct
+                    let stdoutText = task {
+                        let! r = stdoutBytes
+                        return
+                            match r with
+                            | Result.Ok b -> Result.Ok (Encoding.UTF8.GetString b)
+                            | Result.Error e -> Result.Error e
+                    }
+                    Result.Ok { Proc = proc; Pid = pid
+                                StdoutBytes = stdoutBytes
+                                StderrText = stderrText
+                                StdoutText = stdoutText }
+                with ex ->
+                    appendNote note (sprintf "context construction failed: %s" ex.Message)
+                    // Exception-safe: kill, boundedly wait, dispose the
+                    // already-started process before propagating the
+                    // error to the caller.
+                    killTree proc note
+                    let _ = waitBounded proc note
+                    disposeProc proc note
+                    Result.Error (sprintf "context construction failed: %s" ex.Message)
 
 let private waitForExitAsync (ctx: AsyncProcessContext) (cancellationToken: CancellationToken) (note: string ref) : Async<Result<int, string>> =
     async {
@@ -190,11 +236,19 @@ type private CleanupObservation = {
     Notes: string
 }
 
-let private observeCleanup (proc: Process) (note: string ref) : CleanupObservation =
-    killTree proc note
-    let _ = waitBounded proc note
-    disposeProc proc note
-    { Notes = note.Value }
+/// The body result captured during the lifecycle bracket.  This type is
+/// ``private`` because callers consume ``ProcessOutcome`` values, not raw
+/// bracket state.
+type private BodyResult =
+    | BodySpawnError of detail: string
+    | BodyCompleted of
+        verdict : Result<int, string> *
+        stdoutRaw : byte[] *
+        stdoutText : string *
+        stderrText : string *
+        stdoutOk : bool *
+        stderrOk : bool
+    | BodyUnexpected of detail: string
 
 let private finalize (verdict: Result<int, string>) (stdoutOk: bool) (stderrOk: bool) (cleanup: CleanupObservation) : ProcessOutcome =
     let note = cleanup.Notes
@@ -212,14 +266,21 @@ let private finalize (verdict: Result<int, string>) (stdoutOk: bool) (stderrOk: 
         | Result.Error other ->
             CleanupFailure (sprintf "%s: %s" other note)
 
-/// Run the child process with strict lifecycle ordering:
-///   1. Wait for process exit (cancellation-aware);
-///   2. If cancelled, kill the tree and boundedly reap (already done inside waitForExitAsync);
-///   3. Await both drain tasks so stdout and stderr are completely consumed;
-///   4. Dispose the process;
-///   5. Construct the outcome from verdict + drain results + cleanup note.
+/// Run the child process with exception-safe ownership.
 ///
-/// No cleanup is performed after the outcome is constructed.
+/// The lifecycle is bracketed by ``try``/``finally`` so that every
+/// process that ``runCore`` causes to be created is released (killed,
+/// boundedly reaped, and disposed) BEFORE the public outcome is
+/// constructed.  No cleanup runs after the outcome exists.  Exceptions
+/// raised inside the body are captured into the cleanup note and reported
+/// as ``BodyFailure``; the runner itself never propagates an exception to
+/// its callers — every code path returns a structured ``Result`` or
+/// outcome shape.
+///
+/// F# does not allow combining ``try/with`` and ``try/finally`` in a single
+/// expression, so the bracket is structured as nested
+/// ``try ( try <body> with capture ) finally <cleanup>`` so that cleanup
+/// runs after the body has settled regardless of whether it threw.
 let private runCore
     (argv: string list)
     (workingDir: string option)
@@ -230,60 +291,114 @@ let private runCore
     let mutable stdoutDrain : Task<Result<byte[], exn>> option = None
     let mutable stderrDrain : Task<Result<string, exn>> option = None
     let mutable pid : int option = None
-    let mutable verdict : Result<int, string> = Result.Ok 0
-    match startAsync argv workingDir cancellationToken cleanupNote with
-        | Result.Error msg ->
-            Ok (SpawnFailure (msg, cleanupNote.Value), [||], "", 0, true, cleanupNote.Value)
-        | Result.Ok ctx ->
-            proc <- ctx.Proc
-            pid <- Some ctx.Pid
-            stdoutDrain <- Some ctx.StdoutBytes
-            stderrDrain <- Some ctx.StderrText
-            // 1. Wait for exit (cancellation-aware).  Cancellation
-            //    already triggered the bounded kill + wait internally.
-            verdict <-
-                waitForExitAsync ctx cancellationToken cleanupNote
-                |> Async.RunSynchronously
-            // 2 & 3. Await drain tasks BEFORE disposing the process.
-            //      Reading redirected streams after Dispose can fail.
-            let mutable stdoutRaw : byte[] = [||]
-            let mutable stderrText : string = ""
-            let mutable stdoutOk = true
-            let mutable stderrOk = true
-            (match stdoutDrain with
-             | Some t ->
-                 try
-                     match t.Result with
-                     | Result.Ok data -> stdoutRaw <- data
-                     | Result.Error e ->
+
+    // Body result placeholder.  Defaults to a sentinel that the
+    // post-finally outcome constructor can recognise if the body
+    // never executes (which is impossible in practice, but F# requires
+    // an initial value for ``mutable`` bindings).
+    let mutable bodyResult : BodyResult = BodySpawnError "not started"
+
+    // Mutable observation buffers populated inside the body so the
+    // post-finally outcome constructor can read them.
+    let mutable capturedStdoutRaw : byte[] = [||]
+    let mutable capturedStderrText : string = ""
+    let mutable capturedStderrOk : bool = true
+
+    try
+        try
+            match startAsync argv workingDir cancellationToken cleanupNote with
+            | Result.Error msg ->
+                bodyResult <- BodySpawnError msg
+            | Result.Ok ctx ->
+                proc <- ctx.Proc
+                pid <- Some ctx.Pid
+                stdoutDrain <- Some ctx.StdoutBytes
+                stderrDrain <- Some ctx.StderrText
+
+                // Failure injection for the wait stage.
+                match InjectWaitFailure() with
+                | Some ex -> raise ex
+                | None -> ()
+
+                let verdict =
+                    waitForExitAsync ctx cancellationToken cleanupNote
+                    |> Async.RunSynchronously
+
+                // Failure injection for the drain stage.
+                match InjectDrainFailure() with
+                | Some ex -> raise ex
+                | None -> ()
+
+                // Drain operations: any failure is recorded into the
+                // cleanup note and surfaced via the stdoutOk / stderrOk
+                // flags in ``BodyCompleted``.
+                let mutable stdoutRaw : byte[] = [||]
+                let mutable stderrText : string = ""
+                let mutable stdoutOk = true
+                let mutable stderrOk = true
+                (match stdoutDrain with
+                 | Some t ->
+                     try
+                         match t.Result with
+                         | Result.Ok data -> stdoutRaw <- data
+                         | Result.Error e ->
+                             stdoutOk <- false
+                             appendNote cleanupNote (sprintf "stdout drain failed: %s" e.Message)
+                     with ex ->
                          stdoutOk <- false
-                         appendNote cleanupNote (sprintf "stdout drain failed: %s" e.Message)
-                 with ex ->
-                     stdoutOk <- false
-                     appendNote cleanupNote (sprintf "stdout drain await failed: %s" ex.Message)
-             | None -> ())
-            (match stderrDrain with
-             | Some t ->
-                 try
-                     match t.Result with
-                     | Result.Ok s -> stderrText <- s
-                     | Result.Error e ->
+                         appendNote cleanupNote (sprintf "stdout drain await failed: %s" ex.Message)
+                 | None -> ())
+                (match stderrDrain with
+                 | Some t ->
+                     try
+                         match t.Result with
+                         | Result.Ok s -> stderrText <- s
+                         | Result.Error e ->
+                             stderrOk <- false
+                             appendNote cleanupNote (sprintf "stderr drain failed: %s" e.Message)
+                     with ex ->
                          stderrOk <- false
-                         appendNote cleanupNote (sprintf "stderr drain failed: %s" e.Message)
-                 with ex ->
-                     stderrOk <- false
-                     appendNote cleanupNote (sprintf "stderr drain await failed: %s" ex.Message)
-             | None -> ())
-            // 4. Dispose the process (idempotent; we never disposed before).
+                         appendNote cleanupNote (sprintf "stderr drain await failed: %s" ex.Message)
+                 | None -> ())
+
+                let stdoutText = Encoding.UTF8.GetString stdoutRaw
+                capturedStdoutRaw <- stdoutRaw
+                capturedStderrText <- stderrText
+                capturedStderrOk <- stderrOk
+                bodyResult <- BodyCompleted (verdict, stdoutRaw, stdoutText, stderrText, stdoutOk, stderrOk)
+        with ex ->
+            appendNote cleanupNote (sprintf "body exception: %s" ex.Message)
+            bodyResult <- BodyUnexpected ex.Message
+    finally
+        // Cleanup runs BEFORE the public outcome is constructed.
+        // killTree / waitBounded / disposeProc are null-safe, so the
+        // finally block is also safe when startAsync never produced a
+        // process.
+        let _ = killTree proc cleanupNote
+        let _ = waitBounded proc cleanupNote
+        // Failure injection for the dispose stage: record the injected
+        // note but still attempt the real dispose so the runtime
+        // resources are released.
+        match InjectDisposeFailure() with
+        | Some ex ->
+            appendNote cleanupNote (sprintf "dispose injected failure: %s" ex.Message)
             disposeProc proc cleanupNote
-            // 5. Construct the outcome from the verdict, drain flags,
-            //    and cleanup note — all observations already collected.
+        | None ->
+            disposeProc proc cleanupNote
+
+    // Post-finally outcome construction.  The outcome is built from
+    // the captured body result and the now-final cleanup note.  No
+    // further cleanup may run after this point.
+    let outcome =
+        match bodyResult with
+        | BodySpawnError msg -> SpawnFailure (msg, cleanupNote.Value)
+        | BodyUnexpected msg ->
+            BodyFailure (sprintf "body exception: %s [%s]" msg cleanupNote.Value, cleanupNote.Value)
+        | BodyCompleted (verdict, _stdoutRaw, _stdoutText, _stderrText, stdoutOk, stderrOk) ->
             let cleanup = { Notes = cleanupNote.Value }
-            let outcome = finalize verdict stdoutOk stderrOk cleanup
-            Ok (outcome, stdoutRaw, stderrText, (defaultArg pid 0), stderrOk, cleanupNote.Value)
-    // Note: every code path that constructs a Process has already
-    // disposed via ``disposeProc proc cleanupNote`` before the
-    // outcome was built.  No post-outcome cleanup runs.
+            finalize verdict stdoutOk stderrOk cleanup
+
+    Ok (outcome, capturedStdoutRaw, capturedStderrText, (defaultArg pid 0), capturedStderrOk, cleanupNote.Value)
 
 let runProcessBytes (argv: string list) (workingDir: string option) (cancellationToken: CancellationToken) : BytesResult =
     match runCore argv workingDir cancellationToken with

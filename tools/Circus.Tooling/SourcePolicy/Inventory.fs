@@ -31,7 +31,8 @@ let discoverRoot (startDir: string) : GitRoot =
     | SpawnFailure _
     | CleanupFailure _
     | OutputFailure _
-    | Cancelled _ -> NotARepository
+    | Cancelled _
+    | BodyFailure _ -> NotARepository
 
 type InventoryEntry = { RelativePath: string; IsTracked: bool }
 
@@ -73,6 +74,7 @@ let private fromOutcome (outcome: ProcessOutcome) (stderr: string) : InventoryFa
     | Cancelled d -> GitCancelled d
     | CleanupFailure d -> GitCleanupFailure d
     | OutputFailure (d, _) -> GitOutputFailure d
+    | BodyFailure (d, _) -> GitCleanupFailure (sprintf "body exception: %s" d)
     | Exited (n, _) -> GitNonzeroExit (n, stderr)
 
 let private runGitBytes (repoRoot: string) (args: string list) : InventoryParse =

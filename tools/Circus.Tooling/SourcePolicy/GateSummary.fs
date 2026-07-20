@@ -84,6 +84,7 @@ let private statusForOutcome (outcome: ProcessOutcome) : string * int =
     | SpawnFailure _ -> "unavailable", -1
     | CleanupFailure _ -> "unavailable", -1
     | OutputFailure _ -> "unavailable", -1
+    | BodyFailure _ -> "unavailable", -1
     | Cancelled _ -> "unavailable", -1
 
 let private runGit (args: string list) (workingDir: string) : Result<string, int> =
@@ -96,6 +97,7 @@ let private runGit (args: string list) (workingDir: string) : Result<string, int
     | SpawnFailure _ -> Result.Error -1
     | CleanupFailure _ -> Result.Error -1
     | OutputFailure _ -> Result.Error -1
+    | BodyFailure _ -> Result.Error -1
     | Cancelled _ -> Result.Error -1
 
 let private testedCommitOid (workingDir: string) : string =
