@@ -15,10 +15,16 @@ let classify (text: string) : ShebangClassification =
         let bytes = System.Text.Encoding.UTF8.GetBytes text
         let len = min 512 bytes.Length
         let leading = System.Text.Encoding.UTF8.GetString(bytes, 0, len)
-        if leading.Length > 0 && leading.[0] = '￿' then
+        if leading.Length > 0 && int leading.[0] = 0xFEFF then
             ShebangBomRejected leading
         elif leading.Length >= 2 && leading.[0] = '#' && leading.[1] = '!' then
-            let stripped = leading.Substring 2
+            // Trim the first physical line so a trailing LF inside the
+            // 512-byte prefix window does not break the head match.
+            let newlineIdx = leading.IndexOf '\n'
+            let shebangLine =
+                if newlineIdx >= 0 then leading.Substring(0, newlineIdx)
+                else leading
+            let stripped = shebangLine.Substring 2
             let parts = stripped.Split([| ' ' |], System.StringSplitOptions.RemoveEmptyEntries)
             if parts.Length = 0 then ShebangUnknown leading
             else

@@ -19,6 +19,9 @@
     <Compile Include="SourcePolicy/PathsTests.fs" />
     <Compile Include="SourcePolicy/DeterminismTests.fs" />
     <Compile Include="SourcePolicy/CliTests.fs" />
+    <Compile Include="SourcePolicy/GateSummaryTests.fs" />
+    <Compile Include="SourcePolicy/GateSummaryVerifyTests.fs" />
+    <Compile Include="SourcePolicy/ContainerPolicyTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

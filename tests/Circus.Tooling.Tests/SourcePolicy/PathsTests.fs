@@ -3,6 +3,7 @@ module Circus.Tooling.Tests.SourcePolicy.PathsTests
 open Expecto
 open Circus.Tooling.SourcePolicy.Paths
 
+[<Tests>]
 let tests =
     testList "Path safety" [
         test "absolute path is rejected" {

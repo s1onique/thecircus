@@ -3,6 +3,7 @@ module Circus.Tooling.Tests.SourcePolicy.ClassificationTests
 open Expecto
 open Circus.Tooling.SourcePolicy.Language
 
+[<Tests>]
 let tests =
     testList "Approved and forbidden language classification" [
         test ".fs is F# approved" {

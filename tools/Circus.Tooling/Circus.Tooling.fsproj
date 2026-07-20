@@ -4,12 +4,15 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>circus-tooling</AssemblyName>
     <RootNamespace>Circus.Tooling</RootNamespace>
+    <!-- RID-neutral framework-dependent build.  RID-specific publication
+         is reserved for explicit `dotnet publish -r <rid>` invocations
+         and lives outside the canonical development build.  See the
+         Makefile ``publish-tooling-linux-x64`` target. -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <PublishTrimmed>false</PublishTrimmed>
-    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
     <InvariantGlobalization>false</InvariantGlobalization>
-    <Nullable>enable</Nullable>
+    <Nullable>disable</Nullable>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <AssemblyInformationalVersion>1.0.0</AssemblyInformationalVersion>
     <Version>1.0.0</Version>
@@ -33,6 +36,7 @@
     <Compile Include="SourcePolicy\HumanReport.fs" />
     <Compile Include="SourcePolicy\ContainerPolicy.fs" />
     <Compile Include="SourcePolicy\GateSummary.fs" />
+    <Compile Include="SourcePolicy\GateSummaryVerify.fs" />
     <Compile Include="SourcePolicy\Cli.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

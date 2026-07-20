@@ -4,12 +4,21 @@ open Expecto
 open Circus.Tooling.SourcePolicy.Baseline
 
 let private writeAndLoad (content: string) =
-    let tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "baseline-" + System.Guid.NewGuid().ToString("n") + ".csv")
-    System.IO.File.WriteAllText(tmp, content.Replace("\n", System.Environment.NewLine))
+    // ``load`` takes a repository root and reads
+    // ``<repoRoot>/factory/source-policy-baseline.csv``.  Build a
+    // scratch repo root containing that file so the production API is
+    // exercised end-to-end.
+    let tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+        "baseline-test-" + System.Guid.NewGuid().ToString("n"))
+    System.IO.Directory.CreateDirectory tmp |> ignore
+    System.IO.Directory.CreateDirectory(System.IO.Path.Combine(tmp, "factory")) |> ignore
+    let csvPath = System.IO.Path.Combine(tmp, "factory", "source-policy-baseline.csv")
+    System.IO.File.WriteAllText(csvPath, content)
     let result = load tmp
-    System.IO.File.Delete tmp
+    System.IO.Directory.Delete(tmp, true)
     result
 
+[<Tests>]
 let tests =
     testList "Baseline CSV parsing" [
         test "valid baseline with two rows loads" {
@@ -31,13 +40,13 @@ let tests =
             | _ -> failtestf "Expected Malformed"
         }
         test "forbidden baseline kind is Malformed" {
-            let csv = "path,violation_kind,physical_lines,sha256,owner,successor_act,reason\nx.py,forbidden_source,1,0000000000000000000000000000000000000000000000000000000000000000,o,ACT,r\n"
+            let csv = "path,violation_kind,physical_lines,sha256,owner,successor_act,reason\nx.py,forbidden_source,1,0000000000000000000000000000000000000000000000000000000000000ABC,o,ACT,r\n"
             match writeAndLoad csv with
             | Malformed _ -> ()
             | _ -> failtestf "Expected Malformed"
         }
         test "uppercase SHA is Malformed" {
-            let csv = "path,violation_kind,physical_lines,sha256,owner,successor_act,reason\nx.sh,oversized_shell,51,0000000000000000000000000000000000000000000000000000000000000000,o,ACT,r\n"
+            let csv = "path,violation_kind,physical_lines,sha256,owner,successor_act,reason\nx.sh,oversized_shell,51,0000000000000000000000000000000000000000000000000000000000000ABC,o,ACT,r\n"
             match writeAndLoad csv with
             | Malformed _ -> ()
             | _ -> failtestf "Expected Malformed"

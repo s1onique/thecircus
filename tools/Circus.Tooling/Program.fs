@@ -29,7 +29,15 @@ let main (argv: string[]) : int =
             match resolveRepoRoot () with
             | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
             | Ok repoRoot -> runContainerPolicy repoRoot
-        | GateSummaryCmd _ ->
+        | GateSummaryRegenerateCmd ->
             match resolveRepoRoot () with
             | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
-            | Ok repoRoot -> runGateSummary repoRoot
+            | Ok repoRoot -> runGateSummaryRegenerate repoRoot
+        | GateSummaryVerifyCmd ->
+            match resolveRepoRoot () with
+            | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
+            | Ok repoRoot -> runGateSummaryVerify repoRoot
+        | GateRunCmd ->
+            match resolveRepoRoot () with
+            | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
+            | Ok repoRoot -> runGate repoRoot

@@ -214,7 +214,7 @@ clean:
 # Source policy (ML-only F#/Elm enforcement) — ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01
 # =============================================================================
 
-CIRCUS_TOOLING := tools/Circus.Tooling/bin/Release/net10.0/linux-x64/circus-tooling
+CIRCUS_TOOLING := tools/Circus.Tooling/bin/Release/net10.0/circus-tooling
 
 .PHONY: build-source-policy
 build-source-policy:
@@ -229,8 +229,8 @@ source-policy-json: build-source-policy
 	$(CIRCUS_TOOLING) source-policy verify --format json
 
 .PHONY: test-source-policy
-test-source-policy:
-	$(DOTNET) build tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release
+test-source-policy: build-source-policy
+	$(DOTNET) run 	  --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj 	  -c Release -- --summary
 
 # =============================================================================
 # Native gate
@@ -282,13 +282,11 @@ dev-test-linux:
 dev-container-smoke:
 	$(MAKE) CONTAINER_CLI=docker CONTAINER_PLATFORM=linux/amd64 container-smoke
 
+# dev-gate-linux is intentionally a single F# command.  The
+# circus-tooling gate run runner executes every canonical local check
+# exactly once, regenerates the gate-summary artefact, and validates
+# the resulting JSON against the Leamas v1 wire contract.  See
+# ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-CORRECTION02.
 .PHONY: dev-gate-linux
-dev-gate-linux:
-	$(DOTNET) tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll container-policy verify
-	bash tests/ci/test_build_publish_shell.sh
-	bash tests/ci/test_action_pin_mutation.sh
-	$(DOTNET) tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll gate-summary regenerate
-	bash tests/ci/test_build_publish_shell.sh
-	bash tests/ci/test_action_pin_mutation.sh
-	echo ".factory/regenerate_gate_summary.py removed; gate-summary regeneration moved to F# tooling"
-	bash tests/ci/test_gate_summary_acceptance.sh
+dev-gate-linux: build-source-policy
+	$(DOTNET) tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll gate run

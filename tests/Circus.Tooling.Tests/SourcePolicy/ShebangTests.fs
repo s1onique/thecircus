@@ -3,6 +3,7 @@ module Circus.Tooling.Tests.SourcePolicy.ShebangTests
 open Expecto
 open Circus.Tooling.SourcePolicy.Shebang
 
+[<Tests>]
 let tests =
     testList "Shebang classification" [
         test "#!/bin/sh is POSIX" {

@@ -3,6 +3,7 @@ module Circus.Tooling.Tests.SourcePolicy.LineCountingTests
 open Expecto
 open Circus.Tooling.SourcePolicy.LineCounting
 
+[<Tests>]
 let tests =
     testList "LineCounting" [
         test "empty file returns 0" {

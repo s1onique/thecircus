@@ -17,6 +17,7 @@ let private cfg2 = {
     DetectUnknownExes = true
 }
 
+[<Tests>]
 let tests =
     testList "Determinism" [
         test "default config is deterministic" {

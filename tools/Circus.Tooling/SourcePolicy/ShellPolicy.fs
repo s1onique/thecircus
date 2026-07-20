@@ -30,7 +30,7 @@ let private patterns : (AntiPattern * Regex) list =
     let re s = Regex(s, RegexOptions.Compiled ||| RegexOptions.Multiline)
     [ BashArray, re "\\bdeclare\\s+-a\\b"
       BashDoubleBracket, re "\\[\\[[^]]*\\]\\]"
-      BashSource, re "(^|[^A-Za-z0-9_])source\\b|\\.\\s+[A-Za-z_][A-Za-z0-9_/.]*\\s*(#|$)"
+      BashSource, re "(^|[^A-Za-z0-9_])source\\b|\\.\\s+[/A-Za-z_][A-Za-z0-9_/.]*\\s*(#|$)"
       BashEval, re "(^|[^A-Za-z0-9_])eval\\b"
       HeredocWithExec, re "<<[^<]*\\$\\(.*\\)"
       JsonParse, re "\\bjq\\s+[a-z]|python[23]?\\s+-c.*json"
