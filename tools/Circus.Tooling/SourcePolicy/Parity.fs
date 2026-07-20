@@ -1,6 +1,9 @@
 module Circus.Tooling.SourcePolicy.Parity
 
 /// Strict parser and validator for ``factory/container-policy-parity.csv``.
+/// CORRECTION01 P1-1: Eliminates prefix aliasing in rule identity comparison.
+/// The authoritative identity source is ContainerPolicy.CheckIds; parity rows
+/// must use exact identifiers with no prefix extraction.
 
 open System
 open System.IO
@@ -19,6 +22,26 @@ let RequiredHeader : string list =
       "status" ]
 
 let ValidStatuses : string list = [ "complete" ]
+
+/// Valid ContainerPolicyRuleId pattern: exactly "CP-" followed by digits only.
+/// P1-1: This is the ONLY allowed identity format. No prefix extraction, no aliases.
+let private RuleIdPattern = Regex(@"^CP-\d+$")
+
+/// Validates that an identity is a well-formed ContainerPolicyRuleId.
+/// Returns None if the identity is malformed (contains extra characters,
+/// whitespace, case variants, or prefix aliases).
+/// P1-1: Exact identity matching - no prefix extraction.
+let private parseRuleId (id: string) : string option =
+    if RuleIdPattern.IsMatch(id) then Some id else None
+
+/// Reason for malformed identity detection.
+let private malformedReason (id: string) : string =
+    if id.Length = 0 then "empty identity"
+    elif String.IsNullOrWhiteSpace(id) then "whitespace-only identity"
+    elif id <> id.Trim() then sprintf "identity has leading/trailing whitespace: '%s'" id
+    elif id <> id.ToUpperInvariant() && id.StartsWith("CP-", System.StringComparison.OrdinalIgnoreCase) then
+        sprintf "identity has incorrect case: '%s' (expected uppercase)" id
+    else sprintf "identity '%s' is not a valid CP-NN format" id
 
 type ParityRow = {
     LegacyCheckId: string
@@ -40,6 +63,7 @@ type ValidationReport = {
     MissingIdentities: string list
     UnexpectedIdentities: string list
     DuplicateIdentities: string list
+    DuplicateProductionIds: string list
     FieldMismatches: (string * string * string) list
     IdentityPathMismatches: (string * string * string) list
     IdentityPathFunctionMismatches: (string * string) list
@@ -47,6 +71,10 @@ type ValidationReport = {
     RowParseFailures: RowError list
     HeaderOk: bool
     HeaderFailures: string list
+    /// Identities with malformed format (trailing text, whitespace, case variants, etc.)
+    MalformedIdentities: string list
+    /// Identity reasons for malformed entries
+    MalformedIdentityReasons: (string * string) list
 }
 
 type ValidationOutcome =
@@ -179,18 +207,15 @@ let parse (path: string) : Result<ParityRow list, string> =
         with ex ->
             Result.Error(sprintf "parity CSV read failed: %s: %s" (ex.GetType().FullName) ex.Message)
 
-let private canonicalId (id: string) : string =
-    let m = Regex("^(CP-\d+)").Match(id)
-    if m.Success then m.Groups.[1].Value else id
-
+/// Extract function name from implementation_location string.
+/// P1-1: Unchanged - still uses regex to extract function name.
 let private extractFunctionName (implLoc: string) : string option =
     let m = Regex(@"\(([^)]+)\)").Match(implLoc)
     if m.Success then Some m.Groups.[1].Value else None
 
-/// Map keyed by canonical ``CP-NN`` short prefix -> expected function
-/// name.  Using the short prefix keeps the lookup consistent with
-/// ``canonicalId`` so a missing trailing ``_name`` does not silently
-/// bypass the function-name assertion.
+/// P1-1: Authoritative production rule metadata.
+/// Map keyed by exact CP-NN identity -> expected function name.
+/// This is the ONLY authority for identity comparison.
 let private ruleFunctionName : Map<string, string> =
     Map.ofList [
         "CP-01", "checkRequiredFiles"
@@ -226,37 +251,93 @@ let private ruleFunctionName : Map<string, string> =
         "CP-31", "checkGateSummaryAcceptance"
     ]
 
+/// P1-1: Exact identity validation.
+/// Derives production_rule_count and parity_row_count mechanically.
+/// Uses ContainerPolicy.CheckIds as the authoritative source.
 let validate (rows: ParityRow list) : ValidationOutcome =
-    let csvIds = rows |> List.map (fun r -> canonicalId r.LegacyCheckId)
-    let registryIds = ContainerPolicy.CheckIds |> List.map canonicalId
+    // P1-1: Authoritative production identity set from ContainerPolicy.CheckIds
+    let productionRuleIds = ContainerPolicy.CheckIds
 
-    let dupIds =
+    // P1-1: Production rule count derived mechanically
+    let productionRuleCount = List.length productionRuleIds
+
+    // P1-1: Parity row count derived mechanically
+    let parityRowCount = List.length rows
+
+    // P1-1: Extract exact identities from parity rows (NO prefix extraction)
+    let csvIds = rows |> List.map (fun r -> r.LegacyCheckId)
+    let csvFsharpIds = rows |> List.map (fun r -> r.FsharpCheckId)
+
+    // P1-1: Check for malformed identities (prefix aliases, trailing text, etc.)
+    let malformedCsv, malformedCsvReasons =
+        csvIds
+        |> List.map (fun id -> id, parseRuleId id, malformedReason id)
+        |> List.partition (fun (_, parsed, _) -> parsed.IsSome)
+    let malformedCsvIds = malformedCsv |> List.map (fun (id, _, _) -> id) |> List.sort |> List.distinct
+    let malformedCsvReasons =
+        malformedCsv
+        |> List.map (fun (id, _, reason) -> id, reason)
+        |> List.sortBy fst
+
+    let malformedFsharp, malformedFsharpReasons =
+        csvFsharpIds
+        |> List.map (fun id -> id, parseRuleId id, malformedReason id)
+        |> List.partition (fun (_, parsed, _) -> parsed.IsSome)
+    let malformedFsharpIds = malformedFsharp |> List.map (fun (id, _, _) -> id) |> List.sort |> List.distinct
+    let malformedFsharpReasons =
+        malformedFsharp
+        |> List.map (fun (id, _, reason) -> id, reason)
+        |> List.sortBy fst
+
+    let allMalformed = (malformedCsvIds @ malformedFsharpIds) |> List.sort |> List.distinct
+    let allMalformedReasons = (malformedCsvReasons @ malformedFsharpReasons) |> List.sortBy fst |> List.distinctBy fst
+
+    // P1-1: Duplicate parity IDs detected using exact equality (NO prefix extraction)
+    let dupCsvIds =
         csvIds
         |> List.groupBy id
         |> List.choose (fun (k, g) -> if List.length g > 1 then Some k else None)
 
-    let unexpected = csvIds |> List.filter (fun id -> not (List.contains id registryIds)) |> List.sort |> List.distinct
-    let missing = registryIds |> List.filter (fun id -> not (List.contains id csvIds)) |> List.sort |> List.distinct
+    // P1-1: Duplicate production IDs detected (production rules should have unique identities)
+    let dupProductionIds =
+        productionRuleIds
+        |> List.groupBy id
+        |> List.choose (fun (k, g) -> if List.length g > 1 then Some k else None)
 
+    // P1-1: Unexpected identities in CSV (using EXACT match, no prefix extraction)
+    let unexpected =
+        csvIds
+        |> List.filter (fun id ->
+            not (List.contains id productionRuleIds) && parseRuleId id |> Option.isSome)
+        |> List.sort |> List.distinct
+
+    // P1-1: Missing identities from CSV (using EXACT match, no prefix extraction)
+    let missing =
+        productionRuleIds
+        |> List.filter (fun id -> not (List.contains id csvIds))
+        |> List.sort |> List.distinct
+
+    // P1-1: Field mismatches using exact identity comparison
     let fieldMismatches =
         rows
-        |> List.filter (fun r -> canonicalId r.LegacyCheckId <> canonicalId r.FsharpCheckId)
-        |> List.map (fun r -> r.LegacyCheckId, r.FsharpCheckId, "<short prefix mismatch>")
+        |> List.filter (fun r -> r.LegacyCheckId <> r.FsharpCheckId)
+        |> List.map (fun r -> r.LegacyCheckId, r.FsharpCheckId, "legacy_check_id != fsharp_check_id")
 
     let identityPathMismatches =
         rows
         |> List.filter (fun r -> not (r.ImplementationLocation.Contains "ContainerPolicy.fs"))
         |> List.map (fun r -> r.LegacyCheckId, r.ImplementationLocation, "<must reference ContainerPolicy.fs>")
 
+    // P1-1: Function name mismatches using exact identity lookup
     let identityPathFunctionMismatches =
         rows
         |> List.choose (fun r ->
-            let key = canonicalId r.LegacyCheckId
-            match Map.tryFind key ruleFunctionName with
+            // Use exact identity for lookup
+            match Map.tryFind r.LegacyCheckId ruleFunctionName with
             | Some expected ->
                 match extractFunctionName r.ImplementationLocation with
                 | Some actual when actual = expected -> None
-                | _ -> Some (r.LegacyCheckId, sprintf "expected %s; got %s" expected (defaultArg (extractFunctionName r.ImplementationLocation) "<missing>"))
+                | actual -> Some (r.LegacyCheckId, sprintf "expected %s; got %s" expected (defaultArg actual "<missing>"))
             | None -> None)
 
     let invalidStatusRows =
@@ -265,25 +346,49 @@ let validate (rows: ParityRow list) : ValidationOutcome =
         |> List.filter (fun (_, r) -> not (List.contains r.Status ValidStatuses))
         |> List.map (fun (line, r) -> (line, r.Status))
 
-    let report =
-        { Rows = rows
-          MissingIdentities = missing
-          UnexpectedIdentities = unexpected
-          DuplicateIdentities = dupIds
-          FieldMismatches = fieldMismatches
-          IdentityPathMismatches = identityPathMismatches
-          IdentityPathFunctionMismatches = identityPathFunctionMismatches
-          InvalidStatusRows = invalidStatusRows
-          RowParseFailures = []
-          HeaderOk = true
-          HeaderFailures = [] }
+    // P1-1: Exact matches count derived mechanically
+    let exactMatches =
+        rows
+        |> List.filter (fun r ->
+            List.contains r.LegacyCheckId productionRuleIds &&
+            List.contains r.FsharpCheckId productionRuleIds &&
+            r.LegacyCheckId = r.FsharpCheckId &&
+            Map.containsKey r.LegacyCheckId ruleFunctionName)
+        |> List.length
 
+    let report = {
+        Rows = rows
+        MissingIdentities = missing
+        UnexpectedIdentities = unexpected
+        DuplicateIdentities = dupCsvIds
+        DuplicateProductionIds = dupProductionIds
+        FieldMismatches = fieldMismatches
+        IdentityPathMismatches = identityPathMismatches
+        IdentityPathFunctionMismatches = identityPathFunctionMismatches
+        InvalidStatusRows = invalidStatusRows
+        RowParseFailures = []
+        HeaderOk = true
+        HeaderFailures = []
+        MalformedIdentities = allMalformed
+        MalformedIdentityReasons = allMalformedReasons
+    }
+
+    // P1-1: All defect collections must be empty for passing result
     let failures : string list =
         []
+        |> List.append (if productionRuleCount <> parityRowCount then
+                           [sprintf "production_rule_count (%d) != parity_row_count (%d)" productionRuleCount parityRowCount]
+                        else [])
+        |> List.append (if exactMatches <> productionRuleCount then
+                           [sprintf "exact_matches (%d) != production_rule_count (%d)" exactMatches productionRuleCount]
+                        else [])
+        |> List.append (List.map (sprintf "malformed identity in CSV: %s") allMalformed)
+        |> List.append (List.map (fun (id, reason) -> sprintf "malformed identity '%s': %s" id reason) allMalformedReasons)
         |> List.append (List.map (sprintf "unexpected identity in CSV: %s") unexpected)
         |> List.append (List.map (sprintf "registered identity missing from CSV: %s") missing)
-        |> List.append (List.map (sprintf "duplicate identity in CSV: %s") dupIds)
-        |> List.append (List.map (fun (id, csv, reg) -> sprintf "identity %s field disagreement: csv=%s registry=%s" id csv reg) fieldMismatches)
+        |> List.append (List.map (sprintf "duplicate identity in CSV: %s") dupCsvIds)
+        |> List.append (List.map (sprintf "duplicate production ID: %s") dupProductionIds)
+        |> List.append (List.map (fun (csv, fs, reason) -> sprintf "identity field mismatch: csv=%s fsharp=%s (%s)" csv fs reason) fieldMismatches)
         |> List.append (List.map (fun (id, csv, reg) -> sprintf "identity %s implementation_location disagreement: csv=%s registry=%s" id csv reg) identityPathMismatches)
         |> List.append (List.map (fun (id, msg) -> sprintf "identity %s implementation_function mismatch: %s" id msg) identityPathFunctionMismatches)
         |> List.append (List.map (fun (line, status) -> sprintf "line %d: invalid status '%s'" line status) invalidStatusRows)
@@ -298,30 +403,39 @@ let validateFile (path: string) : ValidationOutcome =
                   MissingIdentities = []
                   UnexpectedIdentities = []
                   DuplicateIdentities = []
+                  DuplicateProductionIds = []
                   FieldMismatches = []
                   IdentityPathMismatches = []
                   IdentityPathFunctionMismatches = []
                   InvalidStatusRows = []
                   RowParseFailures = []
                   HeaderOk = false
-                  HeaderFailures = [ e ] },
+                  HeaderFailures = [ e ]
+                  MalformedIdentities = []
+                  MalformedIdentityReasons = [] },
                [ e ])
     | Result.Ok rows -> validate rows
 
+/// P1-1: Enhanced summary includes all P1-1 accountability fields.
 let renderSummary (outcome: ValidationOutcome) : string =
     match outcome with
     | Ok r ->
-        sprintf "parity: PASS (identities=%d, missing=%d, unexpected=%d, duplicates=%d, field_mismatches=%d)"
+        sprintf "parity: PASS (production_rules=%d, parity_rows=%d, exact_matches=%d, missing=%d, unknown=%d, duplicates=%d, malformed=%d, production_dups=%d)"
             (List.length r.Rows)
+            (List.length r.Rows)
+            (r.FieldMismatches |> List.filter (fun (a, b, _) -> a = b) |> List.length)
             (List.length r.MissingIdentities)
             (List.length r.UnexpectedIdentities)
             (List.length r.DuplicateIdentities)
-            (List.length r.FieldMismatches)
+            (List.length r.MalformedIdentities)
+            (List.length r.DuplicateProductionIds)
     | Failed (r, fs) ->
-        sprintf "parity: FAIL (identities=%d, missing=%d, unexpected=%d, duplicates=%d, field_mismatches=%d, reasons=%s)"
+        sprintf "parity: FAIL (production_rules=%d, parity_rows=%d, missing=%d, unknown=%d, duplicates=%d, malformed=%d, production_dups=%d, reasons=%s)"
+            (List.length r.Rows)
             (List.length r.Rows)
             (List.length r.MissingIdentities)
             (List.length r.UnexpectedIdentities)
             (List.length r.DuplicateIdentities)
-            (List.length r.FieldMismatches)
+            (List.length r.MalformedIdentities)
+            (List.length r.DuplicateProductionIds)
             (String.concat "; " fs)
