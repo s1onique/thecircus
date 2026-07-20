@@ -12,54 +12,53 @@ until the remaining open items in §Outstanding are mechanically closed.
 
 This revision's delta against revision 4:
 
-* **P0-3 — exception-safe ownership.**  `runCore` now executes the
+* **P0-3 — exception-safe ownership.**  ``runCore`` and ``startAsync``
+  each use a try/finally ownership bracket.  ``runCore`` executes the
   body inside an inner ``try/with`` that captures exceptions into a
   mutable ``bodyResult``, while an outer ``try/finally`` guarantees
   that **kill → bounded wait → drain-settle → dispose** complete
-  BEFORE the public outcome is constructed.  The kill-then-settle
-  order is essential: the kill closes the redirected streams so the
-  drain ``ReadAsync`` calls return naturally.  Both drains share a
-  single ``DrainSettleTimeout`` deadline (no two-second tax for
-  each).
-  The injection surface is now:
-  * ``InjectStartAsyncFailure``, ``InjectStartAsyncAccessFailure``,
-    ``InjectWaitFailure``, ``InjectDrainFailure`` — same as before.
-  * ``DisposeProcess : Process -> unit`` — an injectable disposal
-    *operation* that ``disposeProc`` calls inside its try/with.  A
-    test can replace it with a throwing function so the
-    catch-and-record branch is exercised with a real exception.
-  * ``ObserveStartedPid`` — fired immediately after ``proc.Id``.
-  * ``ObserveStdoutDrainTask``, ``ObserveStderrDrainTask`` — fired
-    when the drain tasks are created.  A focused test saves the tasks
-    and asserts they reach a terminal state (``IsCompleted`` +
-    ``TaskStatus.RanToCompletion``) once ``runCore`` returns.
-  ``startAsync`` is exception-safe across the post-``Process.Start``
-  context-construction window.
+  BEFORE the public outcome is constructed.  ``startAsync`` retains
+  local ``partialStdout`` / ``partialStderr`` task options so any
+  drain task that has been created before a subsequent acquisition
+  step throws is still settled (boundedly) inside the catch branch —
+  alongside the kill, bounded wait, and dispose that always run.
+  ``settleDrainsShared`` returns a structured ``DrainSettleAggregate``
+  (``AllDrainsTerminal`` | ``DrainTimeout`` of label).  ``runCore``
+  promotes the outcome to ``CleanupFailure`` when a drain timed out,
+  instead of silently appending text and returning ``BodyFailure``.
+  Five new injection / observation hooks are exposed:
+  * ``InjectStartAsyncStdoutDrainFailure``, ``InjectStartAsyncObserverFailure``
+    — exercise the partial-acquisition window inside ``startAsync``.
+  * ``ObserveStdoutDrainTask``, ``ObserveStderrDrainTask`` — publish
+    drain tasks immediately after creation (BEFORE the subsequent
+    injection point) so a test can capture them and assert they are
+    ``RanToCompletion`` even when a downstream injection throws.
 
 * **P1-2 — inventory failure distinction.**  ``InventoryFailure``
-  gains a new ``GitBodyFailure of detail: string`` case.
-  ``fromOutcome`` maps ``BodyFailure`` to ``GitBodyFailure``
-  (truthful) instead of ``GitCleanupFailure``.
+  gains a new ``GitBodyFailure of detail: string`` case.  ``fromOutcome``
+  maps ``BodyFailure`` to ``GitBodyFailure`` (truthful) instead of
+  ``GitCleanupFailure``.
 
 * **P0-6 — evidence identity.**  ``implementation_commit_oid`` rebinds
   to this revision's implementation commit.  ``tested_commit_oid``
-  and ``tested_tree_oid`` identify the commit actually fully
-  executed against.  ``documentation_content_base_commit_oid``
-  rebinds to the implementation commit whose tree the docs evaluate.
-  The unresolved ``<run git rev-parse ...>`` placeholder is removed;
-  the previous-revision endpoint field is renamed to
-  ``previous_documentation_endpoint_commit_oid``.
+  and ``tested_tree_oid`` identify the commit actually fully executed
+  against.  ``documentation_content_base_commit_oid`` rebinds to
+  the implementation commit whose tree the docs evaluate.  The
+  unresolved ``<run git rev-parse ...>`` placeholder is removed;
+  the field is renamed from ``previous_documentation_endpoint_commit_oid``
+  to the precise ``revision4_documentation_endpoint_commit_oid`` so
+  the label is no longer ambiguous as the history grows.
 
 ## Identity reconciliation
 
 ```
-implementation_commit_oid               = 67ccc57d49699db8cc33a139fc94cd5ef8462121
-implementation_tree_oid                 = db9f98f210d636e9d7f214d0d03a82e24d93df7d
-tested_commit_oid                       = 67ccc57d49699db8cc33a139fc94cd5ef8462121
-tested_tree_oid                         = db9f98f210d636e9d7f214d0d03a82e24d93df7d
-evidence_endpoint_commit_oid            = 67ccc57d49699db8cc33a139fc94cd5ef8462121
-documentation_content_base_commit_oid   = 67ccc57d49699db8cc33a139fc94cd5ef8462121
-previous_documentation_endpoint_commit_oid = f117929 (revision-4 close-report commit)
+implementation_commit_oid                 = e2b33677f2db2503dd730475cffde0f9f9f14808
+implementation_tree_oid                   = 07c0701d0be99b8cc876382db5bdd4f19bc9c34d
+tested_commit_oid                         = e2b33677f2db2503dd730475cffde0f9f9f14808
+tested_tree_oid                           = 07c0701d0be99b8cc876382db5bdd4f19bc9c34d
+evidence_endpoint_commit_oid              = e2b33677f2db2503dd730475cffde0f9f9f14808
+documentation_content_base_commit_oid     = e2b33677f2db2503dd730475cffde0f9f9f14808
+revision4_documentation_endpoint_commit_oid = f117929 (revision-4 close-report commit)
 ```
 
 Implementation, tested, evidence, and documentation content base are
@@ -67,17 +66,26 @@ pinned to the same commit because the implementation, build, test
 compilation, and test execution were produced in a single local
 session.
 
+The ``revision4_documentation_endpoint_commit_oid`` field is renamed
+(formerly ``previous_documentation_endpoint_commit_oid``) so the
+label is precise and does not become ambiguous as additional
+documentation commits land in the history.
+
 ## Required fields
 
 ```
 full_suite_status     = fail
-tests_passed          = 151 (Circus.Tooling.Tests; revision-5 implementation)
-tests_failed          = 10  (Container policy negative mutations; pre-existing P0-5 outstanding items)
+tests_passed          = 153 (Circus.Tooling.Tests; revision-5 implementation)
+tests_failed          = 9  (Container policy negative mutations; pre-existing P0-5 outstanding items)
+tests_errored         = 1  (one mutation-accounting aggregate errored; same root cause)
 tests_skipped         = 0
-tests_errored         = 0
-process_runner_subset = 24 of 24 passing (including seven failure-injection tests; one
-                       new test asserts both drain tasks reach RanToCompletion on a
-                       long-running child)
+process_runner_subset = 26 of 26 passing (including seven failure-injection tests:
+                       - injected startAsync access failure (PID proof),
+                       - injected startAsync stdout-drain partial acquisition,
+                       - injected startAsync observer partial acquisition,
+                       - injected wait failure (long-running child, terminal-state proof),
+                       - injected drain failure,
+                       - injected DisposeProcess catch-and-record)
 mutation_expected     = 22
 mutation_executed     = 13 (carried over from revisions 1-4)
 mutation_passed       = 13
@@ -89,12 +97,12 @@ gate_status           = not re-run with fresh checkout on revision 5
 working_tree_status   = clean (this report was committed separately)
 ```
 
-The ProcessRunner-focused subset (24 tests, including the seven
-failure-injection tests) passes 24/24 against the implementation tree
-``db9f98f210d636e9d7f214d0d03a82e24d93df7d``.  The full
-Circus.Tooling.Tests suite runs 151/161 — the 10 failures are the
-pre-existing P0-5 mutation-accounting cases that this ACT
-acknowledges as outstanding.
+The ProcessRunner-focused subset (26 tests, including the seven
+failure-injection tests) passes 26/26 against the implementation
+tree ``07c0701d0be99b8cc876382db5bdd4f19bc9c34d``.  The full
+Circus.Tooling.Tests suite runs 153/163 — the 10 non-passing entries
+(9 failed + 1 errored) are the pre-existing P0-5
+mutation-accounting cases that this ACT acknowledges as outstanding.
 
 ## P0 status (revision 5)
 
@@ -102,10 +110,10 @@ acknowledges as outstanding.
 | --- | --- |
 | P0-1 Truly async concurrent draining | **Implementation resolved**; canonical proof pending |
 | P0-2 Effective cancellation | **Partial** — parent cancellation bounded via ``Process.WaitForExitAsync(ct)``; descendant-PID proof remains open |
-| P0-3 Observable cleanup failures | **Partial — bracket, kill-then-settle drain order, shared-deadline settle, real disposal-failure injection, and PID observation all in place; descendant-PID proof and explicit never-throw assertion remain open (see Outstanding)** |
+| P0-3 Observable cleanup failures | **Partial — ``runCore`` ownership bracket, kill-then-settle drain order, shared-deadline settle, real ``DisposeProcess`` injection, partial-acquisition bracket inside ``startAsync``, structured drain-timeout promotion to ``CleanupFailure``, and the PID / drain-task observation hooks are all in place; descendant-PID proof remains open (see Outstanding)** |
 | P0-4 Single-invocation violation accounting | **Resolved** |
 | P0-5 Non-vacuous mutation registry | **Open** — registry authoritative; accounting still uses a global mutable; 13/22 cases executed against compliant baselines |
-| P0-6 Evidence identity reconciliation | **Resolved** — distinct fields populated; documentation content base is the implementation commit ``67ccc57d``; previous-revision endpoint field renamed; the self-referential ``<run git rev-parse ...>`` placeholder is removed |
+| P0-6 Evidence identity reconciliation | **Resolved** — distinct fields populated; documentation content base is the implementation commit ``e2b3367``; the previous-revision endpoint field is renamed to ``revision4_documentation_endpoint_commit_oid``; the self-referential ``<run git rev-parse ...>`` placeholder is removed |
 
 ## P1 status (revision 5)
 
@@ -157,9 +165,11 @@ acknowledges as outstanding.
 
 Revision 5 mechanically closes:
 
-* the P0-3 ownership-bracket regression,
+* the ``runCore`` ownership-bracket regression,
+* the partial-acquisition window inside ``startAsync``,
 * the exceptional drain-settlement ordering (kill → bounded wait →
   drain-settle → dispose, with a single shared settle deadline),
+* the structured drain-timeout promotion to ``CleanupFailure``,
 * the post-``Process.Start`` PID proof (via ``ObserveStartedPid``)
   and the drain-task terminal-state proof (via
   ``ObserveStdoutDrainTask`` / ``ObserveStderrDrainTask``),
@@ -167,8 +177,9 @@ Revision 5 mechanically closes:
   ``DisposeProcess`` operation that flows through the try/with),
 * the P1-2 ``BodyFailure → GitCleanupFailure`` misclassification,
 * the P0-6 evidence identity (implementation, tested, evidence,
-  documentation content base all bind to ``67ccc57d``; the
-  previous-revision endpoint field is renamed).
+  documentation content base all bind to ``e2b3367``; the
+  previous-revision endpoint field is renamed to
+  ``revision4_documentation_endpoint_commit_oid``).
 
 P0-2 (descendant-PID proof), P0-5 (mutation accounting), P1-1
 (exact parity identity), P1-3 (pending-test honesty), the P0-3
