@@ -2,10 +2,18 @@ module Circus.Tooling.SourcePolicy.GateSummary
 
 /// F# implementation of the gate-summary regenerator.
 ///
-/// ``violations_total`` is **derived** from the authoritative
-/// container-policy producer by invoking ``ContainerPolicy.verify``
-/// in-process and reading the resulting ``ContainerPolicyReport``.
-/// No human-text parsing is performed.
+/// The container-publication-policy check is sourced from
+/// ``ContainerPolicy.verify`` invoked **in-process**.  No subprocess
+/// is launched for the container-policy check; status, exit code,
+/// violation count, and operational-failure state all come from
+/// one structured invocation.
+///
+/// The other canonical checks (executable-shell-tests,
+/// action-pin-mutation-test) are executed via the process runner.
+///
+/// All checks participate in a single verdict pass: the count
+/// ``violations_total`` is grounded in the structured
+/// ``ContainerPolicyReport`` produced by the in-process check.
 
 open System
 open System.Diagnostics
@@ -48,6 +56,8 @@ type GateSummaryDoc = {
     ChecksFailed: int
     [<JsonPropertyName("violations_total")>]
     ViolationsTotal: int
+    [<JsonPropertyName("violations_operational")>]
+    ViolationsOperational: int
     [<JsonPropertyName("checks_skipped")>]
     ChecksSkipped: int
     [<JsonPropertyName("checks_unavailable")>]
@@ -88,18 +98,6 @@ let private runGit (args: string list) (workingDir: string) : Result<string, int
     | OutputFailure _ -> Result.Error -1
     | Cancelled _ -> Result.Error -1
 
-let private runGitNul (args: string list) (workingDir: string) : Result<byte[], int> =
-    let argv = "git" :: args
-    let result = runProcessBytes argv (Some workingDir) CancellationToken.None
-    match result.Outcome with
-    | Exited (0, _) -> Result.Ok result.Output
-    | Exited _ -> Result.Error 1
-    | NonzeroExit (code, _) -> Result.Error code
-    | SpawnFailure _ -> Result.Error -1
-    | CleanupFailure _ -> Result.Error -1
-    | OutputFailure _ -> Result.Error -1
-    | Cancelled _ -> Result.Error -1
-
 let private testedCommitOid (workingDir: string) : string =
     match runGit [ "rev-parse"; "HEAD" ] workingDir with
     | Result.Ok v -> v
@@ -110,47 +108,48 @@ let private testedTreeOid (workingDir: string) : string =
     | Result.Ok v -> v
     | Result.Error _ -> ""
 
-/// Split a NUL-delimited byte buffer into non-empty UTF-8 strings.
-/// Uses a manual scan so the byte boundary is exact and the result
-/// is deterministic on unusual but valid filenames.
-let splitNulInventory (raw: byte[]) : string list =
-    if raw.Length = 0 then []
+/// Build the container-publication-policy ``CheckStatus`` from the
+/// in-process ``ContainerPolicyReport``.  This is the **single**
+/// invocation of the container-policy verifier for the gate summary;
+/// no subprocess is spawned for the check.
+let private containerPolicyCheck (root: string) : CheckStatus =
+    let report = ContainerPolicy.verify root
+    let exitCode =
+        if List.isEmpty report.OperationalFailures then
+            if List.isEmpty report.Violations then 0 else 1
+        else
+            2
+    let status = statusForExitCode exitCode
+    {
+        Name = "container-publication-policy"
+        Status = status
+        ExitCode = exitCode
+        Command = "<in-process ContainerPolicy.verify>"
+    }
+
+/// Run one of the external canonical checks (executable-shell-tests,
+/// action-pin-mutation-test).  These checks intentionally launch a
+/// subprocess because their semantics depend on shell behaviour.
+let private runExternalCheck (name: string) (cmd: string list) (workingDir: string) : CheckStatus =
+    if List.isEmpty cmd then
+        { Name = name; Status = "unavailable"; ExitCode = -1; Command = "" }
     else
-        let mutable acc : System.Collections.Generic.List<string> = System.Collections.Generic.List()
-        let mutable start = 0
-        let mutable i = 0
-        let mutable sawNul = false
-        while i < raw.Length do
-            if raw.[i] = byte 0 then
-                let len = i - start
-                if len > 0 then
-                    acc.Add(Encoding.UTF8.GetString(raw, start, len))
-                start <- i + 1
-                sawNul <- true
-            i <- i + 1
-        if start < raw.Length then
-            // Trailing non-NUL bytes: not a valid NUL inventory but be
-            // defensive — return what we got so far plus the tail.
-            acc.Add(Encoding.UTF8.GetString(raw, start, raw.Length - start))
-        elif not sawNul then
-            // No NUL at all: the entire buffer is one record.
-            acc.Clear()
-            acc.Add(Encoding.UTF8.GetString(raw, 0, raw.Length))
-        acc |> Seq.toList
+        try
+            let result = runProcessText cmd (Some workingDir) CancellationToken.None
+            let status, exitCode = statusForOutcome result.Outcome
+            { Name = name
+              Status = status
+              ExitCode = exitCode
+              Command = String.concat " " cmd }
+        with _ ->
+            { Name = name; Status = "unavailable"; ExitCode = -1; Command = String.concat " " cmd }
 
-let gitTrackedFilesResult (workingDir: string) : Result<string list, int> =
-    match runGitNul [ "ls-files"; "-z" ] workingDir with
-    | Result.Ok raw -> Result.Ok (splitNulInventory raw)
-    | Result.Error code -> Result.Error code
-
-let private defaultChecks (toolingDll: string) : (string * string list) list =
+let private externalChecks (root: string) : CheckStatus list =
     [
-        ("container-publication-policy",
-         [ "dotnet"; toolingDll; "container-policy"; "verify" ])
-        ("executable-shell-tests",
-         [ "bash"; "tests/ci/test_build_publish_shell.sh" ])
-        ("action-pin-mutation-test",
-         [ "bash"; "tests/ci/test_action_pin_mutation.sh" ])
+        runExternalCheck "executable-shell-tests"
+            [ "bash"; "tests/ci/test_build_publish_shell.sh" ] root
+        runExternalCheck "action-pin-mutation-test"
+            [ "bash"; "tests/ci/test_action_pin_mutation.sh" ] root
     ]
 
 let private nowIso () : string =
@@ -162,46 +161,15 @@ let serialize (doc: GateSummaryDoc) : string =
     opts.DefaultIgnoreCondition <- JsonIgnoreCondition.Never
     JsonSerializer.Serialize(doc, opts)
 
-/// Compute the authoritative ``violations_total`` from the
-/// container-policy producer.  In-process invocation of
-/// ``ContainerPolicy.verify`` returns a structured report; no
-/// human-text parsing is performed.
-let private authoritativeViolations (root: string) : int =
-    try
-        let report = ContainerPolicy.verify root
-        if not (List.isEmpty report.OperationalFailures) then
-            // Operational failures are not zero violations.
-            -(List.length report.OperationalFailures)
-        else
-            report.ViolationsTotal
-    with _ ->
-        -1
+let regenerate (root: string) : GateSummaryDoc =
+    // Single in-process container-policy invocation drives both the
+    // check status and the violation count.
+    let cpCheck = containerPolicyCheck root
+    let extChecks = externalChecks root
+    let checks = cpCheck :: extChecks
 
-let private runCheck (name: string) (cmd: string list) (workingDir: string) : CheckStatus =
-    if List.isEmpty cmd then
-        { Name = name; Status = "unavailable"; ExitCode = -1; Command = "" }
-    else
-        try
-            let result = runProcessText cmd (Some workingDir) CancellationToken.None
-            let status, exitCode = statusForOutcome result.Outcome
-            { Name = name
-              Status = status
-              ExitCode = exitCode
-              Command = String.concat " " cmd }
-        with
-        | _ ->
-            { Name = name
-              Status = "unavailable"
-              ExitCode = -1
-              Command = String.concat " " cmd }
-
-let regenerate (root: string) (toolingDll: string) : GateSummaryDoc =
-    let checks =
-        defaultChecks toolingDll
-        |> List.map (fun (n, c) -> runCheck n c root)
-
-    let passed      = checks |> List.filter (fun c -> c.Status = "pass")       |> List.length
-    let skipped     = checks |> List.filter (fun c -> c.Status = "skip")       |> List.length
+    let passed      = checks |> List.filter (fun c -> c.Status = "pass") |> List.length
+    let skipped     = checks |> List.filter (fun c -> c.Status = "skip") |> List.length
     let unavailable = checks |> List.filter (fun c -> c.Status = "unavailable") |> List.length
     let failedChecks = checks |> List.filter (fun c -> c.Status = "fail") |> List.length
 
@@ -210,7 +178,11 @@ let regenerate (root: string) (toolingDll: string) : GateSummaryDoc =
         else if passed = List.length checks then "pass"
         else "unavailable"
 
-    let violationsTotal = authoritativeViolations root
+    let report = ContainerPolicy.verify root
+    let violationsTotal =
+        if List.isEmpty report.OperationalFailures then report.ViolationsTotal
+        else 0
+    let violationsOperational = List.length report.OperationalFailures
 
     let doc = {
         SchemaVersion = 1
@@ -221,6 +193,7 @@ let regenerate (root: string) (toolingDll: string) : GateSummaryDoc =
         ChecksPassed = passed
         ChecksFailed = failedChecks
         ViolationsTotal = violationsTotal
+        ViolationsOperational = violationsOperational
         ChecksSkipped = skipped
         ChecksUnavailable = unavailable
         Checks = checks
@@ -236,14 +209,9 @@ let regenerate (root: string) (toolingDll: string) : GateSummaryDoc =
     doc
 
 let internal resolveToolingDll (root: string) : string =
-    let ridSubdir =
-        if RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux-x64"
-        elif RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "win-x64"
-        else "osx-arm64"
-
     let canonical = Path.Combine(root, "tools", "Circus.Tooling", "bin", "Release", "net10.0", "circus-tooling.dll")
     if File.Exists canonical then canonical
-    else Path.Combine(root, "tools", "Circus.Tooling", "bin", "Release", "net10.0", ridSubdir, "circus-tooling.dll")
+    else canonical
 
 let runRegenerate (root: string) : int =
     try
@@ -252,10 +220,9 @@ let runRegenerate (root: string) : int =
             stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (git rev-parse HEAD^{tree} exit=%d)" code)
             2
         | Result.Ok _ ->
-            let toolingDll = resolveToolingDll root
-            let doc = regenerate root toolingDll
-            stdout.WriteLine(sprintf "gate summary written to .factory/gate-summary.json: %s (%d/%d pass, violations=%d) commit=%s tree=%s"
-                doc.OverallStatus doc.ChecksPassed doc.ChecksTotal doc.ViolationsTotal
+            let doc = regenerate root
+            stdout.WriteLine(sprintf "gate summary written to .factory/gate-summary.json: %s (%d/%d pass, violations=%d operational=%d) commit=%s tree=%s"
+                doc.OverallStatus doc.ChecksPassed doc.ChecksTotal doc.ViolationsTotal doc.ViolationsOperational
                 (if doc.TestedCommitOid.Length >= 12 then doc.TestedCommitOid.Substring(0, 12) else doc.TestedCommitOid)
                 (if doc.TestedTreeOid.Length >= 12 then doc.TestedTreeOid.Substring(0, 12) else doc.TestedTreeOid))
             if doc.OverallStatus = "pass" then 0

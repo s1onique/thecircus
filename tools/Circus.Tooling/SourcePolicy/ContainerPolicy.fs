@@ -15,6 +15,7 @@ open System.IO
 open System.Text.RegularExpressions
 
 open Circus.Tooling.SourcePolicy.Inventory
+open Circus.Tooling.SourcePolicy.NulInventory
 
 exception CheckFailed of string
 
@@ -665,11 +666,11 @@ let private checkActionPins (root: string) : Violation list =
 /// complete.
 let private checkTrackedSecrets (root: string) : Violation list =
     match gitTrackedFiles root with
-    | TrackedInventoryFailed code ->
+    | TrackedInventoryFailed d ->
         [ { Check = "CP-29_tracked_secrets"
             Id = "CP-29_tracked_secrets"
             Path = "<git inventory>"
-            Detail = sprintf "git ls-files failed (exit=%d); cannot prove the secret scan is complete" code } ]
+            Detail = sprintf "git ls-files failed (cannot prove the secret scan is complete): %s" (NulInventory.renderDiagnostic d) } ]
     | TrackedFiles tracked ->
         let secretPattern = Regex("(^|/)\\.env(\\.|$)|.*\\.(pem|key|p12|pfx|dockerconfigjson)$", RegexOptions.IgnoreCase)
         let leaked = tracked |> List.filter (fun p -> secretPattern.IsMatch p)

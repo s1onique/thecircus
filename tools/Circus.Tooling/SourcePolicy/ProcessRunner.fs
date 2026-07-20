@@ -1,28 +1,6 @@
 module Circus.Tooling.SourcePolicy.ProcessRunner
 
 /// Governed child-process runner used by the source-policy verifier.
-///
-/// CORRECTION01 contract:
-///
-///   * ``runProcessBytes`` / ``runProcessText`` start the process,
-///     kick off cancellation-aware async drains for both stdout and
-///     stderr, **then** wait for exit.  Streams drain concurrently
-///     via ``Stream.ReadAsync(..., cancellationToken)``.
-///
-///   * ``CancellationToken`` propagation triggers an owned-tree
-///     ``Process.Kill(true)`` followed by a **bounded**
-///     ``WaitForExit(timeout)``; timeout is reported as
-///     ``CleanupFailure``.
-///
-///   * Stream-read exceptions surface as ``OutputFailure``.
-///
-///   * Cleanup and disposal failures are observable through the
-///     ``cleanupNote`` field on every outcome shape.
-///
-///   * Outcome shapes distinguish ``SpawnFailure``, ``Exited``,
-///     ``NonzeroExit``, ``Cancelled``, ``CleanupFailure``, and
-///     ``OutputFailure``.  No raw exception is collapsed into a
-///     successful empty result.
 
 open System
 open System.Diagnostics
@@ -30,10 +8,6 @@ open System.IO
 open System.Text
 open System.Threading
 open System.Threading.Tasks
-
-// -----------------------------------------------------------------------------
-// Result type
-// -----------------------------------------------------------------------------
 
 type ProcessOutcome =
     | SpawnFailure of detail: string * cleanupNote: string
@@ -58,31 +32,6 @@ type TextResult = {
     Pid: int option
     DescendantPid: int option
 }
-
-// -----------------------------------------------------------------------------
-// Cancellation
-// -----------------------------------------------------------------------------
-
-type private CancellationObserver(token: CancellationToken) =
-    let mutable cancelled = false
-    let registration : CancellationTokenRegistration option =
-        if token.CanBeCanceled then
-            (token.Register(fun () -> cancelled <- true) |> Some)
-        else
-            None
-    member _.IsCancellationRequested = cancelled
-    member _.Unregister () =
-        match registration with
-        | Some r -> r.Dispose()
-        | None -> ()
-    member _.Dispose () =
-        match registration with
-        | Some r -> r.Dispose()
-        | None -> ()
-
-// -----------------------------------------------------------------------------
-// Cleanup primitives
-// -----------------------------------------------------------------------------
 
 let internal CleanupTimeout : TimeSpan = TimeSpan.FromSeconds(5.0)
 
@@ -113,14 +62,6 @@ let private disposeProc (proc: Process) (note: string ref) : unit =
     with ex ->
         appendNote note (sprintf "dispose failed: %s" ex.Message)
 
-// -----------------------------------------------------------------------------
-// Async drain — cancellation-aware
-// -----------------------------------------------------------------------------
-
-/// Drains ``BaseStream`` into an owned byte buffer using
-/// cancellation-aware ``Stream.ReadAsync``.  Exceptions are returned
-/// in the result so the caller can surface them as ``OutputFailure``
-/// rather than silently terminating the drain.
 let private drainBytesAsync (stream: Stream) (cancellationToken: CancellationToken) : Task<Result<byte[], exn>> =
     task {
         use ms = new MemoryStream()
@@ -138,15 +79,12 @@ let private drainBytesAsync (stream: Stream) (cancellationToken: CancellationTok
             | ex ->
                 firstError <- Some ex
                 finished <- true
-        let result =
+        return
             match firstError with
             | Some e -> Result.Error e
             | None -> Result.Ok (ms.ToArray())
-        return result
     }
 
-/// Drains ``BaseStream`` into an owned UTF-8 string.  Uses the same
-/// cancellation-aware ``Stream.ReadAsync`` as the byte variant.
 let private drainTextAsync (stream: Stream) (cancellationToken: CancellationToken) : Task<Result<string, exn>> =
     task {
         use ms = new MemoryStream()
@@ -164,16 +102,11 @@ let private drainTextAsync (stream: Stream) (cancellationToken: CancellationToke
             | ex ->
                 firstError <- Some ex
                 finished <- true
-        let result =
+        return
             match firstError with
             | Some e -> Result.Error e
             | None -> Result.Ok (Encoding.UTF8.GetString(ms.ToArray()))
-        return result
     }
-
-// -----------------------------------------------------------------------------
-// Build argv
-// -----------------------------------------------------------------------------
 
 let buildStartInfo (argv: string list) (workingDir: string option) : ProcessStartInfo =
     match argv with
@@ -192,24 +125,15 @@ let buildStartInfo (argv: string list) (workingDir: string option) : ProcessStar
         | None -> ()
         psi
 
-// -----------------------------------------------------------------------------
-// Process lifecycle core — supports both byte and text stdout capture.
-// Only ONE drain per stream is started to avoid concurrent reads on the
-// same pipe consuming each other's bytes.
-// -----------------------------------------------------------------------------
-
-type private DrainMode = BytesOnly | TextOnly
-
 type private AsyncProcessContext = {
     Proc: Process
     Pid: int
-    StdoutDrain: Task<Result<byte[], exn>>
-    StderrDrain: Task<Result<string, exn>>
-    StdoutAsText: Task<Result<string, exn>> option
-    Observer: CancellationObserver
+    StdoutBytes: Task<Result<byte[], exn>>
+    StderrText: Task<Result<string, exn>>
+    StdoutText: Task<Result<string, exn>>
 }
 
-let private startAsync (argv: string list) (workingDir: string option) (ct: CancellationToken) (mode: DrainMode) (note: string ref) : Result<AsyncProcessContext, string> =
+let private startAsync (argv: string list) (workingDir: string option) (ct: CancellationToken) (note: string ref) : Result<AsyncProcessContext, string> =
     if List.isEmpty argv then
         Result.Error "argv is empty"
     else
@@ -223,193 +147,165 @@ let private startAsync (argv: string list) (workingDir: string option) (ct: Canc
             appendNote note "Process.Start returned null"
             Result.Error "Process.Start returned null"
         else
-            let observer = CancellationObserver(ct)
             let pid = proc.Id
-            // Always capture stdout as bytes (lossless).  When the caller
-            // only needs text, the same buffer is decoded on demand inside
-            // the text variant of the entry point so we never race two
-            // consumers on the same underlying pipe.
             let stdoutBytes = drainBytesAsync proc.StandardOutput.BaseStream ct
-            let stdoutAsText =
-                match mode with
-                | TextOnly -> Some (task {
-                    let! r = stdoutBytes
+            let stderrText = drainTextAsync proc.StandardError.BaseStream ct
+            let stdoutText = task {
+                let! r = stdoutBytes
+                return
                     match r with
-                    | Result.Ok b -> return Result.Ok (Encoding.UTF8.GetString b)
-                    | Result.Error e -> return Result.Error e
-                  })
-                | BytesOnly -> None
-            let stderrDrain = drainTextAsync proc.StandardError.BaseStream ct
+                    | Result.Ok b -> Result.Ok (Encoding.UTF8.GetString b)
+                    | Result.Error e -> Result.Error e
+            }
             Result.Ok { Proc = proc; Pid = pid
-                        StdoutDrain = stdoutBytes
-                        StderrDrain = stderrDrain
-                        StdoutAsText = stdoutAsText
-                        Observer = observer }
+                        StdoutBytes = stdoutBytes
+                        StderrText = stderrText
+                        StdoutText = stdoutText }
 
-let private waitForExit (ctx: AsyncProcessContext) (note: string ref) : Result<int, string> =
+let private waitForExitAsync (ctx: AsyncProcessContext) (cancellationToken: CancellationToken) (note: string ref) : Async<Result<int, string>> =
+    async {
+        try
+            do! ctx.Proc.WaitForExitAsync(cancellationToken) |> Async.AwaitTask
+            let mutable code = 0
+            try code <- ctx.Proc.ExitCode with _ -> ()
+            return Result.Ok code
+        with
+        | :? OperationCanceledException ->
+            killTree ctx.Proc note
+            let ok = waitBounded ctx.Proc note
+            if ok then
+                appendNote note "cancelled by token"
+                return Result.Error "cancelled"
+            else
+                appendNote note "bounded cleanup wait timed out"
+                return Result.Error "cleanup_timeout"
+        | ex ->
+            killTree ctx.Proc note
+            let _ = waitBounded ctx.Proc note
+            appendNote note (sprintf "wait exception: %s" ex.Message)
+            return Result.Error (sprintf "wait_failed: %s" ex.Message)
+    }
+
+type private CleanupObservation = {
+    Notes: string
+}
+
+let private observeCleanup (proc: Process) (note: string ref) : CleanupObservation =
+    killTree proc note
+    let _ = waitBounded proc note
+    disposeProc proc note
+    { Notes = note.Value }
+
+let private finalize (verdict: Result<int, string>) (stdoutOk: bool) (stderrOk: bool) (cleanup: CleanupObservation) : ProcessOutcome =
+    let note = cleanup.Notes
+    if not stdoutOk then
+        OutputFailure (sprintf "stdout drain failed: %s" (if note = "" then "<no note>" else note), note)
+    elif not stderrOk then
+        OutputFailure (sprintf "stderr drain failed: %s" (if note = "" then "<no note>" else note), note)
+    else
+        match verdict with
+        | Result.Ok 0 -> Exited (0, note)
+        | Result.Ok n -> NonzeroExit (n, note)
+        | Result.Error "cancelled" -> Cancelled note
+        | Result.Error "cleanup_timeout" ->
+            CleanupFailure (sprintf "bounded cleanup wait timed out: %s" note)
+        | Result.Error other ->
+            CleanupFailure (sprintf "%s: %s" other note)
+
+/// Run the child process, await exit (cancellation-aware), perform
+/// cleanup, then drain stdout/stderr.  Returns the structured
+/// outcome, the raw stdout bytes, the stderr text, the parent PID,
+/// the stderr drain success flag, and the cleanup note.
+let private runCore
+    (argv: string list)
+    (workingDir: string option)
+    (cancellationToken: CancellationToken)
+    : Result<ProcessOutcome * byte[] * string * int * bool * string, string> =
+    let cleanupNote = ref ""
+    let mutable proc : Process = null
+    let mutable outcome : ProcessOutcome = SpawnFailure ("unknown", "")
+    let mutable stdoutRaw : byte[] = [||]
+    let mutable stderrText : string = ""
+    let mutable pid : int option = None
+    let mutable stderrOk : bool = true
+    let mutable stdoutOk : bool = true
+    let mutable verdict : Result<int, string> = Result.Ok 0
     try
-        if not ctx.Proc.HasExited then
-            ctx.Proc.WaitForExit()
-        Result.Ok ctx.Proc.ExitCode
-    with
-    | :? OperationCanceledException ->
-        killTree ctx.Proc note
-        let ok = waitBounded ctx.Proc note
-        if ok then
-            appendNote note "cancelled by token"
-            Result.Error "cancelled"
-        else
-            appendNote note "bounded cleanup wait timed out"
-            Result.Error "cleanup_timeout"
-    | ex ->
-        killTree ctx.Proc note
-        let _ = waitBounded ctx.Proc note
-        appendNote note (sprintf "wait exception: %s" ex.Message)
-        Result.Error (sprintf "wait_failed: %s" ex.Message)
-
-let private outcomeFor (verdict: Result<int, string>) (note: string ref) : ProcessOutcome =
-    match verdict with
-    | Result.Ok 0 -> Exited (0, note.Value)
-    | Result.Ok n -> NonzeroExit (n, note.Value)
-    | Result.Error "cancelled" -> Cancelled note.Value
-    | Result.Error "cleanup_timeout" ->
-        CleanupFailure (sprintf "bounded cleanup wait timed out: %s" note.Value)
-    | Result.Error other ->
-        CleanupFailure (sprintf "%s: %s" other note.Value)
-
-// -----------------------------------------------------------------------------
-// Public entry points
-// -----------------------------------------------------------------------------
+        try
+            match startAsync argv workingDir cancellationToken cleanupNote with
+            | Result.Error msg ->
+                outcome <- SpawnFailure (msg, cleanupNote.Value)
+            | Result.Ok ctx ->
+                proc <- ctx.Proc
+                pid <- Some ctx.Pid
+                verdict <-
+                    waitForExitAsync ctx cancellationToken cleanupNote
+                    |> Async.RunSynchronously
+                let cleanup = observeCleanup proc cleanupNote
+                // Drain AFTER cleanup so drain failures are appended
+                // to the cleanup note observable to the caller.
+                try
+                    match ctx.StdoutBytes.Result with
+                    | Result.Ok data -> stdoutRaw <- data
+                    | Result.Error e ->
+                        stdoutOk <- false
+                        appendNote cleanupNote (sprintf "stdout drain failed: %s" e.Message)
+                with ex ->
+                    stdoutOk <- false
+                    appendNote cleanupNote (sprintf "stdout drain await failed: %s" ex.Message)
+                try
+                    match ctx.StderrText.Result with
+                    | Result.Ok s -> stderrText <- s
+                    | Result.Error e ->
+                        stderrOk <- false
+                        appendNote cleanupNote (sprintf "stderr drain failed: %s" e.Message)
+                with ex ->
+                    stderrOk <- false
+                    appendNote cleanupNote (sprintf "stderr drain await failed: %s" ex.Message)
+                let refreshed = { cleanup with Notes = cleanupNote.Value }
+                outcome <- finalize verdict stdoutOk stderrOk refreshed
+        with ex ->
+            appendNote cleanupNote (sprintf "%s: %s" (ex.GetType().FullName) ex.Message)
+            outcome <- SpawnFailure (ex.Message, cleanupNote.Value)
+    finally
+        let _ = observeCleanup proc cleanupNote
+        ()
+    Ok (outcome, stdoutRaw, stderrText, (defaultArg pid 0), stderrOk, cleanupNote.Value)
 
 let runProcessBytes (argv: string list) (workingDir: string option) (cancellationToken: CancellationToken) : BytesResult =
-    let cleanupNote = ref ""
-    let observer = CancellationObserver(cancellationToken)
-    let mutable proc : Process = null
-    try
-        try
-            match startAsync argv workingDir cancellationToken BytesOnly cleanupNote with
-            | Result.Error msg ->
-                { Outcome = SpawnFailure (msg, cleanupNote.Value)
-                  Output = [||]
-                  Stderr = ""
-                  Pid = None
-                  DescendantPid = None }
-            | Result.Ok ctx ->
-                proc <- ctx.Proc
-                let verdict = waitForExit ctx cleanupNote
-                let mutable finalOutcome = outcomeFor verdict cleanupNote
-                let stdout =
-                    try
-                        match ctx.StdoutDrain.Result with
-                        | Result.Ok b -> b
-                        | Result.Error e ->
-                            appendNote cleanupNote (sprintf "stdout drain failed: %s" e.Message)
-                            finalOutcome <- OutputFailure (cleanupNote.Value, cleanupNote.Value)
-                            [||]
-                    with ex ->
-                        appendNote cleanupNote (sprintf "stdout drain await failed: %s" ex.Message)
-                        finalOutcome <- OutputFailure (cleanupNote.Value, cleanupNote.Value)
-                        [||]
-                let stderr =
-                    try
-                        match ctx.StderrDrain.Result with
-                        | Result.Ok s -> s
-                        | Result.Error e ->
-                            appendNote cleanupNote (sprintf "stderr drain failed: %s" e.Message)
-                            finalOutcome <- OutputFailure (cleanupNote.Value, cleanupNote.Value)
-                            ""
-                    with ex ->
-                        appendNote cleanupNote (sprintf "stderr drain await failed: %s" ex.Message)
-                        finalOutcome <- OutputFailure (cleanupNote.Value, cleanupNote.Value)
-                        ""
-                if observer.IsCancellationRequested &&
-                   not (match finalOutcome with Cancelled _ | CleanupFailure _ -> true | _ -> false) then
-                    finalOutcome <- Cancelled cleanupNote.Value
-                { Outcome = finalOutcome
-                  Output = stdout
-                  Stderr = stderr
-                  Pid = Some ctx.Pid
-                  DescendantPid = None }
-        with ex ->
-            appendNote cleanupNote (sprintf "%s: %s" (ex.GetType().FullName) ex.Message)
-            { Outcome = SpawnFailure (ex.Message, cleanupNote.Value)
-              Output = [||]
-              Stderr = ""
-              Pid = None
-              DescendantPid = None }
-    finally
-        killTree proc cleanupNote
-        let _ = waitBounded proc cleanupNote
-        disposeProc proc cleanupNote
-        observer.Unregister ()
-        observer.Dispose ()
+    match runCore argv workingDir cancellationToken with
+    | Result.Ok (outcome, output, stderr, pid, _, _) ->
+        { Outcome = outcome
+          Output = output
+          Stderr = stderr
+          Pid = if pid = 0 then None else Some pid
+          DescendantPid = None }
+    | Result.Error _ ->
+        { Outcome = SpawnFailure ("internal: runCore returned error", "")
+          Output = [||]
+          Stderr = ""
+          Pid = None
+          DescendantPid = None }
 
 let runProcessText (argv: string list) (workingDir: string option) (cancellationToken: CancellationToken) : TextResult =
-    let cleanupNote = ref ""
-    let observer = CancellationObserver(cancellationToken)
-    let mutable proc : Process = null
-    try
-        try
-            match startAsync argv workingDir cancellationToken TextOnly cleanupNote with
-            | Result.Error msg ->
-                { Outcome = SpawnFailure (msg, cleanupNote.Value)
-                  Output = ""
-                  Stderr = ""
-                  Pid = None
-                  DescendantPid = None }
-            | Result.Ok ctx ->
-                proc <- ctx.Proc
-                let verdict = waitForExit ctx cleanupNote
-                let mutable finalOutcome = outcomeFor verdict cleanupNote
-                let stdout =
-                    try
-                        let drain =
-                            match ctx.StdoutAsText with
-                            | Some t -> t
-                            | None -> failwith "internal: text drain missing"
-                        match drain.Result with
-                        | Result.Ok s -> s
-                        | Result.Error e ->
-                            appendNote cleanupNote (sprintf "stdout drain failed: %s" e.Message)
-                            finalOutcome <- OutputFailure (cleanupNote.Value, cleanupNote.Value)
-                            ""
-                    with ex ->
-                        appendNote cleanupNote (sprintf "stdout drain await failed: %s" ex.Message)
-                        finalOutcome <- OutputFailure (cleanupNote.Value, cleanupNote.Value)
-                        ""
-                let stderr =
-                    try
-                        match ctx.StderrDrain.Result with
-                        | Result.Ok s -> s
-                        | Result.Error e ->
-                            appendNote cleanupNote (sprintf "stderr drain failed: %s" e.Message)
-                            finalOutcome <- OutputFailure (cleanupNote.Value, cleanupNote.Value)
-                            ""
-                    with ex ->
-                        appendNote cleanupNote (sprintf "stderr drain await failed: %s" ex.Message)
-                        finalOutcome <- OutputFailure (cleanupNote.Value, cleanupNote.Value)
-                        ""
-                if observer.IsCancellationRequested &&
-                   not (match finalOutcome with Cancelled _ | CleanupFailure _ -> true | _ -> false) then
-                    finalOutcome <- Cancelled cleanupNote.Value
-                { Outcome = finalOutcome
-                  Output = stdout
-                  Stderr = stderr
-                  Pid = Some ctx.Pid
-                  DescendantPid = None }
-        with ex ->
-            appendNote cleanupNote (sprintf "%s: %s" (ex.GetType().FullName) ex.Message)
-            { Outcome = SpawnFailure (ex.Message, cleanupNote.Value)
-              Output = ""
-              Stderr = ""
-              Pid = None
-              DescendantPid = None }
-    finally
-        killTree proc cleanupNote
-        let _ = waitBounded proc cleanupNote
-        disposeProc proc cleanupNote
-        observer.Unregister ()
-        observer.Dispose ()
+    match runCore argv workingDir cancellationToken with
+    | Result.Ok (outcome, output, stderr, pid, stderrOk, _) ->
+        let text =
+            if stderrOk then
+                Encoding.UTF8.GetString(output)
+            else
+                ""
+        { Outcome = outcome
+          Output = text
+          Stderr = stderr
+          Pid = if pid = 0 then None else Some pid
+          DescendantPid = None }
+    | Result.Error _ ->
+        { Outcome = SpawnFailure ("internal: runCore returned error", "")
+          Output = ""
+          Stderr = ""
+          Pid = None
+          DescendantPid = None }
 
 let isPidAlive (pid: int) : bool =
     try

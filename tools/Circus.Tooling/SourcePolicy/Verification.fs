@@ -5,6 +5,7 @@ open System.IO
 open Circus.Tooling.SourcePolicy.Language
 open Circus.Tooling.SourcePolicy.Paths
 open Circus.Tooling.SourcePolicy.Inventory
+open Circus.Tooling.SourcePolicy.NulInventory
 open Circus.Tooling.SourcePolicy.Classifier
 open Circus.Tooling.SourcePolicy.Domain
 open Circus.Tooling.SourcePolicy.Shebang
@@ -175,25 +176,25 @@ let private isPolicyRelevant (p: string) : bool =
 
 let verify (cfg: VerifyConfig) : VerificationOutcome =
     match Inventory.enumerate cfg.RepoRoot with
-    | Error detail ->
+    | InventoryDiagnostic d ->
         { RepositoryRoot = cfg.RepoRoot
           FilesExamined = 0
           BaselineEntries = 0
           Findings =
             [ { Path = "<repo>"; Code = GitInventoryFailure; Line = None
-                Detail = detail; Rule = "git/ls-files"
+                Detail = NulInventory.renderDiagnostic d; Rule = "git/ls-files"
                 Expected = Some "ok"; Actual = Some "failed" } ] }
-    | Ok rawEntries ->
+    | InventoryEntries rawEntries ->
         match Inventory.splitTrackedUntracked cfg.RepoRoot rawEntries with
-        | Error detail ->
+        | InventoryDiagnostic d ->
             { RepositoryRoot = cfg.RepoRoot
               FilesExamined = 0
               BaselineEntries = 0
               Findings =
                 [ { Path = "<repo>"; Code = GitInventoryFailure; Line = None
-                    Detail = detail; Rule = "git/ls-files"
+                    Detail = NulInventory.renderDiagnostic d; Rule = "git/ls-files"
                     Expected = Some "ok"; Actual = Some "failed" } ] }
-        | Ok entries ->
+        | InventoryEntries entries ->
             let baselineLoad : Baseline.LoadResult = Baseline.load cfg.RepoRoot
             let baselineEntries, baselineFindings =
                 match baselineLoad with
