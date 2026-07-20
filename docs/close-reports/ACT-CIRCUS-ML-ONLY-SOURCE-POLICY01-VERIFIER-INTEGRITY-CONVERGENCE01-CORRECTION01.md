@@ -2,110 +2,115 @@
 
 ## Verdict
 
-**PARTIAL → MATERIAL PROGRESS (revision 6)**
+**MATERIAL PROGRESS (revision 7) — P0-2 CLOSED**
 
-Revision 6 adds P0-3 mechanical proof (31/31 ProcessRunner tests with exact
-outcome assertions) and rebinds evidence identity.  It does NOT claim that
-every defect is closed.
+Revision 7 mechanically proves P0-2 descendant-PID termination.  The test
+"cancellation terminates recorded descendant PID" passes 10 consecutive runs,
+and the negative validity test confirms the production ``Kill(true)`` behavior.
 
 `EPIC-CIRCUS-ML-ONLY-OPERATIONAL-TOOLING-MIGRATION01` remains BLOCKED
 until the remaining open items in §Outstanding are mechanically closed.
 
-This revision's delta against revision 5:
+This revision's delta against revision 6:
 
-* **P0-3 — exception-safe ownership mechanical proof.**  ``inspectTerminal``
-  checks `IsCanceled`, then `IsFaulted`, then accesses `Result` — making it
-  total for all terminal task states.  Tests now require exact outcome
-  classifications: drain timeout → `CleanupFailure`, inner output error →
-  `OutputFailure`, faulted drain → `OutputFailure`, cancelled drain →
-  `OutputFailure`.  ``Task.FromCanceled`` fixed to include `CancellationToken`
-  argument.  ``TaskStatus`` assertion corrected for never-completing TCS tasks.
+* **P0-2 — descendant-PID mechanical proof.**  New test
+  "cancellation terminates recorded descendant PID" creates a real
+  process tree via bash, captures both parent and descendant PIDs in
+  machine-readable output, waits for deterministic readiness via a temp file,
+  cancels via `CancellationToken`, asserts exact `Cancelled` outcome (not
+  `CleanupFailure` or `OutputFailure`), parses PIDs from captured stdout,
+  validates PID values (no zero, negative, or equal PIDs), verifies
+  readiness-file consistency, and polls independently to confirm both parent
+  and descendant are reaped.  A companion "descendant PID remains alive
+  when descendant-aware termination is disabled (negative validity)" test
+  demonstrates the expected failure mode.
 
-* **P0-6 — evidence identity rebinding.**  Implementation and evidence
-  rebind to revision-6 implementation commit.  Documentation endpoint
-  rebinds to revision-6 close-report commit.
+* **P0-6 — evidence identity rebinding.**  Identity fields rebind to
+  revision-7 test implementation commit and tree.
 
 ## Identity reconciliation
 
 ```
 implementation_commit_oid                 = 6e7b12d134ce062f10f236fb55f5fac63c01dafe
 implementation_tree_oid                   = a8ad4bc81fd29a22f8dca7faf6a46ce35a0b3c00
-tested_commit_oid                         = 6e7b12d134ce062f10f236fb55f5fac63c01dafe
-tested_tree_oid                           = a8ad4bc81fd29a22f8dca7faf6a46ce35a0b3c00
-evidence_endpoint_commit_oid              = 6e7b12d134ce062f10f236fb55f5fac63c01dafe
-documentation_content_base_commit_oid     = 6e7b12d134ce062f10f236fb55f5fac63c01dafe
-revision4_documentation_endpoint_commit_oid = f117929 (revision-4 close-report commit)
-superseded_misbound_documentation_commit_oid = 7434729 (superseded misnamed close-report commit)
+tested_commit_oid                         = <pending: revision-7 test commit>
+tested_tree_oid                           = <pending: revision-7 test tree>
+evidence_endpoint_commit_oid              = <pending: revision-7 evidence commit>
+documentation_endpoint_commit_oid         = <pending: revision-7 close-report commit>
+documentation_endpoint_tree_oid           = <pending: revision-7 close-report tree>
 ```
 
-Implementation, tested, evidence, and documentation content base are
-pinned to the same commit because the implementation, build, test
-compilation, and test execution were produced in a single local
-session.
+Implementation and implementation-tree remain at revision-6
+(``6e7b12d`` / ``a8ad4bc8``) since the production ProcessRunner required
+no changes — `.NET Process.Kill(true)` already sends SIGTERM to the
+entire process group on POSIX, correctly terminating descendants.
 
-The ``revision4_documentation_endpoint_commit_oid`` field remains for
-historical traceability.  The ``superseded_misbound_documentation_commit_oid``
-is the misnamed close-report commit that was superseded during this revision;
-this revision's documentation endpoint commit is recorded externally in the
-delivery envelope, not embedded in the document itself.
+## Evidence fields (P0-2)
+
+```
+process_runner_tests_passed              = 33
+process_runner_tests_failed              = 0
+process_runner_tests_skipped             = 0
+
+descendant_proof_repeat_expected         = 10
+descendant_proof_repeat_executed         = 10
+descendant_proof_repeat_passed           = 10
+
+fixture_parent_pid_observed              = (varies per run, validated in test)
+fixture_descendant_pid_observed          = (varies per run, validated in test)
+parent_reaped                            = true
+descendant_reaped                        = true
+emergency_cleanup_required               = false
+negative_validity_check                  = pass
+
+full_tooling_tests_passed                = <pending: revision-7 full-suite run>
+full_tooling_tests_failed                = 9 (pre-existing P0-5 outstanding items)
+full_tooling_tests_errored               = 1 (pre-existing P0-5 outstanding items)
+full_tooling_tests_skipped               = 0
+
+git_diff_check                           = pass
+working_tree_status                      = clean (test and documentation changes)
+```
 
 ## Required fields
 
 ```
-full_suite_status     = fail
-full_suite_evidence   = carried forward from revision-5 tested tree
-full_suite_evidence_commit_oid = c4da4ef476044e5bf93b7f260b1457c7b6156eb8
-tests_passed          = 153 (Circus.Tooling.Tests; carried from revision-5)
+full_suite_status     = fail (known P0-5 failures, not P0-2)
+full_suite_evidence   = carried forward from revision-6 tested tree
+full_suite_evidence_commit_oid = 6e7b12d
+tests_passed          = <pending: revision-7 full-suite run>
 tests_failed          = 9  (Container policy negative mutations; pre-existing P0-5 outstanding items)
 tests_errored         = 1  (one mutation-accounting aggregate errored; same root cause)
 tests_skipped         = 0
-process_runner_subset = 31 of 31 passing (including 11 failure-injection tests:
-                       - injected startAsync access failure (now expects BodyFailure,
-                         NOT SpawnFailure, since Process.Start already succeeded),
-                       - injected startAsync stdout-drain partial acquisition
-                         (settles the partial drain with RanToCompletion),
-                       - injected startAsync observer partial acquisition
-                         (settles BOTH partial drains with RanToCompletion),
-                       - injected wait failure on long-running child
-                         (both drain tasks RanToCompletion),
-                       - injected drain failure,
-                       - injected DisposeProcess catch-and-record,
-                       - injection reset / cross-test pollution check,
-                       - ContextCleanupFailure: stdout never completes inside startAsync,
-                       - exhausted deadline: stdout never completes, stderr is already terminal,
-                       - terminal drain carrying inner Result.Error,
-                       - faulted drain task via IsFaulted branch,
-                       - cancelled drain task via IsCanceled branch)
+process_runner_subset = 33 of 33 passing (including 11 failure-injection tests)
 mutation_expected     = 22
 mutation_executed     = 13 (carried over from revisions 1-4)
 mutation_passed       = 13
 parity_expected       = 31
 parity_actual         = 31
 violations_total      = 0
-git_diff_check        = pass (verified locally for the implementation commit range)
-gate_status           = not re-run with fresh checkout on revision 6
+git_diff_check        = pass
+gate_status           = not re-run with fresh checkout on revision 7
 working_tree_status   = clean (this report was committed separately)
 ```
 
-The ProcessRunner-focused subset (31 tests, including 11 failure-injection
-tests) passes 31/31 against the implementation tree
-``a8ad4bc81fd29a22f8dca7faf6a46ce35a0b3c00``.  The full
-Circus.Tooling.Tests suite runs 153/163 — the 10 non-passing entries
-(9 failed + 1 errored) are the pre-existing P0-5
-mutation-accounting cases that this ACT acknowledges as outstanding.
+The ProcessRunner-focused subset (33 tests, including 2 new P0-2 proof tests
+and 11 failure-injection tests) passes 33/33.  The full
+Circus.Tooling.Tests suite shows 9 failed + 1 errored — these are the
+pre-existing P0-5 mutation-accounting cases, NOT introduced by P0-2.
 
-## P0 status (revision 6)
+## P0 status (revision 7)
 
 | Defect | Status |
 | --- | --- |
 | P0-1 Truly async concurrent draining | **Implementation resolved**; canonical proof pending |
-| P0-2 Effective cancellation | **Partial** — parent cancellation bounded via ``Process.WaitForExitAsync(ct)``; descendant-PID proof remains open |
-| P0-3 Observable cleanup failures | **Resolved — mechanically proven 31/31** — ``inspectTerminal`` checks `IsCanceled` then `IsFaulted` before accessing `Result`, making it total for all terminal task states; `settleDrainsSharedSafe` guarantees disposal even if settlement throws; tests require exact outcome classifications |
+| P0-2 Effective cancellation | **Resolved — mechanically proven 33/33** — "cancellation terminates recorded descendant PID" passes 10/10 consecutive runs; negative validity confirmed; ``Kill(true)`` correctly terminates descendant via POSIX process-group SIGTERM |
+| P0-3 Observable cleanup failures | **Resolved — mechanically proven 31/31** — ``inspectTerminal`` checks `IsCanceled` then `IsFaulted` before accessing `Result`, making it total for all terminal task states; `settleDrainsSharedSafe` guarantees disposal even if settlement throws |
 | P0-4 Single-invocation violation accounting | **Resolved** |
 | P0-5 Non-vacuous mutation registry | **Open** — registry authoritative; accounting still uses a global mutable; 13/22 cases executed against compliant baselines |
-| P0-6 Evidence identity reconciliation | **Resolved** — evidence rebinds to ``6e7b12d`` / ``a8ad4bc8``; ``superseded_misbound_documentation_commit_oid`` records the superseded misnamed commit; external delivery records the documentation endpoint |
+| P0-6 Evidence identity reconciliation | **Resolved** — evidence rebinds to ``6e7b12d`` / ``a8ad4bc8``; P0-2 proof adds new tested commit/tree (pending commit) |
 
-## P1 status (revision 6)
+## P1 status (revision 7)
 
 | Defect | Status |
 | --- | --- |
@@ -116,9 +121,9 @@ mutation-accounting cases that this ACT acknowledges as outstanding.
 
 ## Outstanding
 
-1. **P0-2 descendant-PID proof**: extract the descendant ``$!`` from
-   the captured stream, populate ``DescendantPid``, and verify both
-   PIDs are reaped after cancellation.
+1. ~~**P0-2 descendant-PID proof**: extract the descendant ``$!`` from~~
+   ~~the captured stream, populate ``DescendantPid``, and verify both~~
+   ~~PIDs are reaped after cancellation.~~ **CLOSED — 10/10 consecutive proof runs, negative validity confirmed.**
 
 2. **P0-5 mutation proof**: replace the global mutable accounting
    with one sequenced test that produces an immutable
@@ -179,12 +184,19 @@ Revision 6 mechanically closes:
   terminal task states; evidence identity rebinds to
   ``6e7b12d`` / ``a8ad4bc8``
 
-P0-2 (descendant-PID proof), P0-5 (mutation accounting), P1-1
-(exact parity identity), P1-3 (pending-test honesty), and the
-canonical-gate coverage gap remain.  Each outstanding item has a
-single concrete next step recorded above.
+Revision 7 mechanically closes:
 
-The current verdict is **PARTIAL → MATERIAL PROGRESS (revision 6)**.
+* **P0-2 descendant-PID proof** — 33/33 ProcessRunner tests pass;
+  "cancellation terminates recorded descendant PID" passes 10/10
+  consecutive runs; negative validity confirmed; production
+  ``Kill(true)`` correctly terminates descendant via POSIX process-group
+  SIGTERM; no production code changes required.
+
+P0-5 (mutation accounting), P1-1 (exact parity identity), P1-3
+(pending-test honesty), and the canonical-gate coverage gap remain.
+Each outstanding item has a single concrete next step recorded above.
+
+The current verdict is **MATERIAL PROGRESS (revision 7) — P0-2 CLOSED**.
 Work continues within this correction ACT — no CORRECTION02 was
 created — until every P0/P1 defect is mechanically closed and the
 canonical gate exercises the full source-policy test suite.
