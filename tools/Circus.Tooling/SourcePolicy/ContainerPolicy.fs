@@ -781,6 +781,19 @@ let private checks : (string * (string -> Violation list)) list = [
 /// Public surface: all check IDs so tests can mutate each one in turn.
 let CheckIds : string list = checks |> List.map fst
 
+/// Production metadata for container policy checks.
+/// P1-1: Single authoritative source for identity and function mapping.
+type CheckMetadata = {
+    Id: string
+    ImplementationFunction: string
+}
+
+/// P1-1: Authoritative production metadata derived from the checks list.
+/// Uses exact concrete check identities.
+let CheckMetadata : CheckMetadata list =
+    checks
+    |> List.map (fun (id, fn) -> { Id = id; ImplementationFunction = fn.Name })
+
 /// Public surface: run a single check by id.
 let runCheckById (id: string) (root: string) : Violation list =
     match checks |> List.tryFind (fun (cid, _) -> cid = id) with
