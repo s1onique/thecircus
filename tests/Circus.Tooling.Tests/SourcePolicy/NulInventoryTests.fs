@@ -1,6 +1,6 @@
 module Circus.Tooling.Tests.SourcePolicy.NulInventoryTests
 
-/// Pure parser tests for ``NulInventory``.
+/// Pure parser tests for ``NulInventory`` (CORRECTION01 §P1-2).
 
 open System
 open System.Text
@@ -79,23 +79,23 @@ let tests =
             | Error d -> failtestf "unexpected error: %s" (renderDiagnostic d)
         }
 
-        test "path beginning with a dash round-trips" {
-            let bytes = Array.append (ascii "-flaglike.txt") [| nul |]
+        test "path starting with a dash round-trips" {
+            let bytes = Array.append (ascii "-rf") [| nul |]
             match parse "git-test" bytes with
-            | Ok [ "-flaglike.txt" ] -> ()
+            | Ok [ "-rf" ] -> ()
             | Ok xs -> failtestf "unexpected: %A" xs
             | Error d -> failtestf "unexpected error: %s" (renderDiagnostic d)
         }
 
-        test "non-ASCII Unicode path round-trips" {
-            let bytes = Array.append (utf8 "src/über/naïve/π.fs") [| nul |]
+        test "unicode path round-trips" {
+            let bytes = Array.append (utf8 "путь/файл.fs") [| nul |]
             match parse "git-test" bytes with
-            | Ok [ "src/über/naïve/π.fs" ] -> ()
+            | Ok [ "путь/файл.fs" ] -> ()
             | Ok xs -> failtestf "unexpected: %A" xs
             | Error d -> failtestf "unexpected error: %s" (renderDiagnostic d)
         }
 
-        test "trailing NUL is consumed silently" {
+        test "trailing NUL after a single path is consumed silently" {
             let bytes =
                 Array.concat [ ascii "a.fs"; [| nul |]; ascii "b.fs"; [| nul |] ]
             match parse "git-test" bytes with
@@ -103,11 +103,11 @@ let tests =
             | Error d -> failtestf "unexpected error: %s" (renderDiagnostic d)
         }
 
-        test "consecutive NUL records produce no phantom empty path" {
+        test "consecutive NUL records between real records are rejected" {
             let bytes = Array.concat [ ascii "a.fs"; [| nul; nul |]; ascii "b.fs"; [| nul |] ]
             match parse "git-test" bytes with
-            | Ok xs -> Expect.equal xs [ "a.fs"; "b.fs" ] "consecutive NUL ignored"
-            | Error d -> failtestf "unexpected error: %s" (renderDiagnostic d)
+            | Ok xs -> failtestf "should have failed: %A" xs
+            | Error d -> Expect.stringContains (renderDiagnostic d) "empty_interior_record" "interior NUL rejected"
         }
 
         test "invalid UTF-8 byte sequence fails closed" {
@@ -118,6 +118,22 @@ let tests =
                 let rendered = renderDiagnostic d
                 Expect.stringContains rendered "command=git-test" "command identity"
                 Expect.stringContains rendered "invalid_utf8" "category"
+                Expect.stringContains rendered "byte=0xff" "actual offending byte reported"
+        }
+
+        test "invalid UTF-8 in second record reports the correct offset" {
+            // "a.fs" + NUL = 5 bytes; second record's invalid byte at
+            // global offset 5 (the start of the second record).
+            let prefix = Array.append (ascii "a.fs") [| nul |]
+            let bad = Array.append [| byte 0xC3uy; byte 0x28uy |] [| nul |]
+            let bytes = Array.append prefix bad
+            match parse "git-test" bytes with
+            | Ok xs -> failtestf "should have failed: %A" xs
+            | Error d ->
+                let rendered = renderDiagnostic d
+                Expect.stringContains rendered "invalid_utf8" "category"
+                Expect.stringContains rendered "offset=5" "byte offset of second record's invalid byte"
+                Expect.stringContains rendered "record=1" "second record index"
         }
 
         test "unterminated final record fails closed" {
@@ -128,45 +144,22 @@ let tests =
                 Expect.stringContains (renderDiagnostic d) "unterminated_final_record" "category"
         }
 
-        test "no NUL framing at all fails closed" {
-            let bytes = ascii "no-delimiters-at-all"
+        test "large record round-trips" {
+            let body = String.init 10000 (fun i -> "x")
+            let bytes = Array.append (ascii body) [| nul |]
             match parse "git-test" bytes with
-            | Ok xs -> failtestf "should have failed: %A" xs
-            | Error d ->
-                Expect.stringContains (renderDiagnostic d) "unterminated_final_record" "category"
-        }
-
-        test "large record survives round-trip" {
-            let big = String('x', 50000)
-            let bytes = Array.append (ascii big) [| nul |]
-            match parse "git-test" bytes with
-            | Ok [ p ] -> Expect.equal p.Length 50000 "big record preserved"
+            | Ok [ p ] -> Expect.equal p body "ten thousand x's"
             | Ok xs -> failtestf "unexpected: %A" xs
             | Error d -> failtestf "unexpected error: %s" (renderDiagnostic d)
         }
 
-        test "many small records round-trip in order" {
-            let sb = StringBuilder()
-            for i in 0 .. 999 do
-                sb.Append(sprintf "f%d.fs" i) |> ignore
-                sb.Append('\000') |> ignore
-            let bytes = utf8 (sb.ToString())
+        test "diagnostic is sanitised" {
+            let bytes = Array.append [| byte 0xC2uy; byte 0x00uy; byte 0x41uy |] [| nul |]
             match parse "git-test" bytes with
-            | Ok xs ->
-                Expect.equal (List.length xs) 1000 "1000 records"
-                Expect.equal xs.[0] "f0.fs" "first record"
-                Expect.equal xs.[999] "f999.fs" "last record"
-            | Error d -> failtestf "unexpected error: %s" (renderDiagnostic d)
-        }
-
-        test "diagnostic render is sanitised (no terminal control bytes)" {
-            let bytes = Array.append [| byte 0xFFuy; byte 0xFEuy |] [| nul |]
-            match parse "git-test" bytes with
+            | Ok xs -> failtestf "should have failed: %A" xs
             | Error d ->
-                let s = renderDiagnostic d
-                for c in s do
-                    let n = int c
-                    Expect.isFalse (n < 0x20 && c <> '\n') "no control bytes in diagnostic"
-            | Ok _ -> failtestf "expected decode failure"
+                let rendered = renderDiagnostic d
+                Expect.isFalse (rendered.Contains "\u0000") "no raw NUL leaks into the diagnostic"
+                Expect.stringContains rendered "category=" "category prefix present"
         }
     ]

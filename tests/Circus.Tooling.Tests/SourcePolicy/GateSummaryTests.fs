@@ -1,10 +1,7 @@
 module Circus.Tooling.Tests.SourcePolicy.GateSummaryTests
 
 /// Focused tests for the canonical Leamas v1 wire contract emitted by
-/// ``Circus.Tooling.SourcePolicy.GateSummary``.  These are the
-/// "exact-key" tests required by ACT §4: they prove the artefact uses
-/// the snake_case field names the targeted-digest consumer parses,
-/// and never falls back to the default PascalCase serializer output.
+/// ``Circus.Tooling.SourcePolicy.GateSummary``.
 
 open System.IO
 open Expecto
@@ -38,7 +35,8 @@ let private sampleDoc () : GateSummaryDoc =
                   ExitCode = 0
                   Command = "bash tests/ci/test_action_pin_mutation.sh" }
             ]
-        TestedTreeOid = "0123456789abcdef0123456789abcdef01234567"
+        TestedCommitOid = "0123456789abcdef0123456789abcdef01234567"
+        TestedTreeOid = "fedcba9876543210fedcba9876543210fedcba98"
     }
 
 let private findFirst (s: string) (needle: string) : int =
@@ -69,7 +67,7 @@ let tests =
                 "schema_version"; "generated_at"; "tool"; "overall_status"
                 "checks_total"; "checks_passed"; "checks_failed"
                 "checks_skipped"; "checks_unavailable"
-                "checks"; "tested_tree_oid"
+                "checks"; "tested_commit_oid"; "tested_tree_oid"
             ] do
                 Expect.isGreaterThan (findFirst json field) -1 (sprintf "%s present" field)
         }

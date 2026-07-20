@@ -1,15 +1,6 @@
 module Circus.Tooling.SourcePolicy.NulInventory
 
 /// Pure NUL-delimited record parser.
-///
-/// ``git ls-files -z`` emits filenames as opaque, non-NUL byte
-/// sequences terminated by NUL.  The parser is pure over bytes: it
-/// never touches the file system, never spawns a process, and never
-/// depends on character encoding until the final UTF-8 decode step.
-///
-/// The UTF-8 decoder uses throw-on-invalid semantics so a single
-/// invalid byte surfaces as a deterministic diagnostic instead of
-/// being silently replaced with the Unicode replacement character.
 
 open System
 open System.Text
@@ -46,60 +37,59 @@ let private sanitiseAscii (s: string) : string =
             sb.Append c |> ignore
     sb.ToString()
 
-/// Strict UTF-8 decoder that throws on the first invalid byte.
-/// Returns ``Some (badByte, offset)`` on failure, ``None`` when the
-/// buffer decodes cleanly.  Throws are caught and translated to
-/// diagnostic-friendly values by the caller.
-let private decodeStrict (recordBytes: byte[]) (recordIndex: int) (commandId: string) : Result<string, DecodeDiagnostic> =
+let private decodeStrict (recordBytes: byte[]) (recordIndex: int) (commandId: string) (recordStartOffset: int) : Result<string, DecodeDiagnostic> =
     let strict = UTF8Encoding(false, true)
-    try
-        let s = strict.GetString(recordBytes)
-        if s = "" then
-            // Defensive: GetString on empty returns empty.  Treat as
-            // empty interior record.
+    if recordBytes.Length = 0 then
+        Result.Error
+            { CommandId = commandId
+              RecordIndex = recordIndex
+              ByteOffset = recordStartOffset
+              Category = EmptyInteriorRecord recordIndex
+              SafeBytesHex = "" }
+    else
+        try
+            let s = strict.GetString(recordBytes)
+            Result.Ok s
+        with
+        | :? DecoderFallbackException as ex ->
+            let localOffset =
+                if ex.Index >= 0 && ex.Index < recordBytes.Length then ex.Index
+                else 0
+            let globalOffset = recordStartOffset + localOffset
+            let badByte =
+                if not (isNull ex.BytesUnknown) && ex.BytesUnknown.Length > 0 then
+                    ex.BytesUnknown.[0]
+                elif localOffset < recordBytes.Length then
+                    recordBytes.[localOffset]
+                else
+                    recordBytes.[0]
             Result.Error
                 { CommandId = commandId
                   RecordIndex = recordIndex
-                  ByteOffset = 0
-                  Category = EmptyInteriorRecord recordIndex
-                  SafeBytesHex = "" }
-        else
-            Result.Ok s
-    with
-    | :? DecoderFallbackException as ex ->
-        // The strict encoder has already substituted a fallback char.
-        // We surface this as a generic invalid-byte diagnostic using
-        // the first byte of the record as the offending byte.
-        let badByte =
-            if recordBytes.Length > 0 then recordBytes.[0] else byte 0
-        Result.Error
-            { CommandId = commandId
-              RecordIndex = recordIndex
-              ByteOffset = 0
-              Category = InvalidUtf8 (badByte, 0)
-              SafeBytesHex = hexBytes recordBytes }
-    | ex ->
-        let badByte =
-            if recordBytes.Length > 0 then recordBytes.[0] else byte 0
-        Result.Error
-            { CommandId = commandId
-              RecordIndex = recordIndex
-              ByteOffset = 0
-              Category = InvalidUtf8 (badByte, 0)
-              SafeBytesHex = hexBytes recordBytes }
+                  ByteOffset = globalOffset
+                  Category = InvalidUtf8 (badByte, globalOffset)
+                  SafeBytesHex = hexBytes recordBytes }
+        | ex ->
+            let badByte = if recordBytes.Length > 0 then recordBytes.[0] else byte 0
+            Result.Error
+                { CommandId = commandId
+                  RecordIndex = recordIndex
+                  ByteOffset = recordStartOffset
+                  Category = InvalidUtf8 (badByte, recordStartOffset)
+                  SafeBytesHex = hexBytes recordBytes }
 
 let parse (commandId: string) (bytes: byte[]) : ParseResult =
     if bytes.Length = 0 then
         Ok []
     else
-        let records = ResizeArray<byte[]>()
+        let records = ResizeArray<byte[] * int>()
         let mutable start = 0
         let mutable i = 0
         let mutable sawNul = false
         while i < bytes.Length do
             if bytes.[i] = byte 0 then
                 let len = i - start
-                records.Add(Array.sub bytes start len)
+                records.Add (Array.sub bytes start len, start)
                 start <- i + 1
                 sawNul <- true
                 i <- i + 1
@@ -114,7 +104,7 @@ let parse (commandId: string) (bytes: byte[]) : ParseResult =
                   ByteOffset = start
                   Category = UnterminatedFinalRecord finalLen
                   SafeBytesHex = "" }
-        else if not sawNul then
+        elif not sawNul then
             Error
                 { CommandId = commandId
                   RecordIndex = -1
@@ -122,22 +112,35 @@ let parse (commandId: string) (bytes: byte[]) : ParseResult =
                   Category = UnterminatedFinalRecord bytes.Length
                   SafeBytesHex = "" }
         else
+            // A single NUL terminator with no payload is the empty
+            // inventory, not an empty interior record.  The empty
+            // record check is only meaningful when at least one
+            // non-empty record is also present.
+            let hasRealRecord =
+                records
+                |> Seq.exists (fun (rb, _) -> rb.Length > 0)
             let decoded = ResizeArray<string>()
             let mutable index = 0
             let mutable failure : DecodeDiagnostic option = None
-            for r in records do
+            for (rb, offset) in records do
                 if failure.IsSome then ()
-                elif r.Length = 0 then
-                    () // empty record from consecutive/trailing NULs; collapse
+                elif rb.Length = 0 && hasRealRecord then
+                    failure <- Some
+                        { CommandId = commandId
+                          RecordIndex = index
+                          ByteOffset = offset
+                          Category = EmptyInteriorRecord index
+                          SafeBytesHex = "" }
+                elif rb.Length = 0 then
+                    () // empty inventory case
                 else
-                    match decodeStrict r index commandId with
+                    match decodeStrict rb index commandId offset with
                     | Result.Ok s -> decoded.Add s
                     | Result.Error d -> failure <- Some d
                 index <- index + 1
             match failure with
             | Some d -> Error d
-            | None ->
-                Ok (List.ofSeq decoded)
+            | None -> Ok (List.ofSeq decoded)
 
 let renderDiagnostic (d: DecodeDiagnostic) : string =
     let categoryText =
