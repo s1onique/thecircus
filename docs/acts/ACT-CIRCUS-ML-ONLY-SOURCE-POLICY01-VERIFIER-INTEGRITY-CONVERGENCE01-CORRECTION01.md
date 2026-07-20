@@ -15,7 +15,7 @@ The predecessor verdict (PARTIAL → PASS) is **withdrawn**.
 `EPIC-CIRCUS-ML-ONLY-OPERATIONAL-TOOLING-MIGRATION01` remains BLOCKED.
 `ACT-CIRCUS-ML-ONLY-OPERATIONAL-TOOLING-INVENTORY01` MUST NOT begin until this correction PASSES.
 
-This correction closes every defect raised in the review verdict.
+This correction is the convergence point for every defect raised in the review verdict.  It does NOT claim that every defect is closed.
 It does not create the forbidden parent `CORRECTION08`.
 
 ## Objective

@@ -231,8 +231,7 @@ let private runCore
     let mutable stderrDrain : Task<Result<string, exn>> option = None
     let mutable pid : int option = None
     let mutable verdict : Result<int, string> = Result.Ok 0
-    try
-        match startAsync argv workingDir cancellationToken cleanupNote with
+    match startAsync argv workingDir cancellationToken cleanupNote with
         | Result.Error msg ->
             Ok (SpawnFailure (msg, cleanupNote.Value), [||], "", 0, true, cleanupNote.Value)
         | Result.Ok ctx ->
@@ -282,13 +281,9 @@ let private runCore
             let cleanup = { Notes = cleanupNote.Value }
             let outcome = finalize verdict stdoutOk stderrOk cleanup
             Ok (outcome, stdoutRaw, stderrText, (defaultArg pid 0), stderrOk, cleanupNote.Value)
-    finally
-        // Safety net ONLY: dispose again if we somehow still hold a
-        // live process handle (e.g. early exception).  Idempotent; not
-        // expected to add new cleanup observations.
-        if not (isNull proc) then
-            try proc.Dispose() with _ -> ()
-        ()
+    // Note: every code path that constructs a Process has already
+    // disposed via ``disposeProc proc cleanupNote`` before the
+    // outcome was built.  No post-outcome cleanup runs.
 
 let runProcessBytes (argv: string list) (workingDir: string option) (cancellationToken: CancellationToken) : BytesResult =
     match runCore argv workingDir cancellationToken with

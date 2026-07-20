@@ -39,18 +39,20 @@ tested_commit_oid                   = 3659686e1058429caff605b89035f597e4fe081a
 tested_tree_oid                     = 44c0369d2bd8433a9acf043ed38d7644a94abebb
 evidence_endpoint_commit_oid        = 3659686e1058429caff605b89035f597e4fe081a
 documentation_content_base_commit_oid = 3afcaf8950773093cdb36499e7ce60c2cf85ab79
-documentation_endpoint_commit_oid   = 3659686e1058429caff605b89035f597e4fe081a
-documentation_endpoint_tree_oid     = <run git rev-parse 3659686^{tree}>
+documentation_endpoint_commit_oid   = f117929 (revision-4 close-report commit)
+documentation_endpoint_tree_oid     = <run git rev-parse f117929^{tree}>
 ```
 
 Implementation, tested, and evidence endpoints are pinned to the
 same commit because the implementation, build, test compilation,
 and gate regeneration were produced in a single local session.
 
-The documentation endpoint is the close-report commit
-``3659686``.  The documentation content base commit is
-``3afcaf8`` (the previous revision's implementation) because the
-ACT text refers to that implementation as the basis of revision 3.
+The documentation endpoint is the revision-4 close-report commit
+``f117929``.  The previous revision's record incorrectly named
+``3659686`` (the implementation commit) as the documentation
+endpoint.  The documentation content base commit is
+``3afcaf8`` (the revision-3 implementation that the ACT text
+continues to reference).
 
 ## Required fields
 
