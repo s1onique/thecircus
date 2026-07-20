@@ -148,8 +148,8 @@ test-ingestion: test-application test-postgres test-api
 # =============================================================================
 
 .PHONY: verify-container-policy
-verify-container-policy:
-	echo "verify-container-policy removed; use circus-tooling source-policy verify"
+verify-container-policy: build-source-policy
+	$(DOTNET) tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll container-policy verify
 
 .PHONY: container-build-backend
 container-build-backend:
@@ -284,7 +284,10 @@ dev-container-smoke:
 
 .PHONY: dev-gate-linux
 dev-gate-linux:
-	echo "scripts/verify_container_policy.py removed; use circus-tooling source-policy verify"
+	$(DOTNET) tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll container-policy verify
+	bash tests/ci/test_build_publish_shell.sh
+	bash tests/ci/test_action_pin_mutation.sh
+	$(DOTNET) tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll gate-summary regenerate
 	bash tests/ci/test_build_publish_shell.sh
 	bash tests/ci/test_action_pin_mutation.sh
 	echo ".factory/regenerate_gate_summary.py removed; gate-summary regeneration moved to F# tooling"
