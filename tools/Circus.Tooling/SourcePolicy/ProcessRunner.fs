@@ -56,7 +56,12 @@ let mutable internal InjectDrainFailure : (unit -> exn option) = fun () -> None
 let mutable internal DisposeProcess : (Process -> unit) =
     fun (p: Process) -> p.Dispose()
 
+/// Kill strategy: true = tree kill (Kill(true)), false = process-only kill (Kill(false)).
+/// Production uses tree kill. Tests can inject process-only kill to prove descendant survives.
+let mutable internal KillTreeStrategy : bool = true
+
 let mutable internal ObserveStartedPid : int -> unit = fun _ -> ()
+let mutable internal ObserveDescendantPid : int -> unit = fun _ -> ()
 let mutable internal ObserveStdoutDrainTask : (Task<Result<byte[], exn>> -> unit) = ignore
 let mutable internal ObserveStderrDrainTask : (Task<Result<string, exn>> -> unit) = ignore
 
@@ -72,7 +77,7 @@ let mutable internal SubstituteStderrDrainTask : (Task<Result<string, exn>> -> T
 let private killTree (proc: Process) (note: string ref) : unit =
     try
         if not (isNull proc) && not proc.HasExited then
-            proc.Kill(true)
+            proc.Kill(KillTreeStrategy)
     with ex ->
         appendNote note (sprintf "kill failed: %s" ex.Message)
 

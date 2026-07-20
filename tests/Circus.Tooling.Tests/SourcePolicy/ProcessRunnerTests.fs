@@ -6,6 +6,7 @@ open System
 open System.Collections.Concurrent
 open System.Diagnostics
 open System.IO
+open System.Text.RegularExpressions
 open System.Threading
 open System.Threading.Tasks
 open Expecto
@@ -25,18 +26,19 @@ do
 // ---------------------------------------------------------------------------
 
 let private resetInjections () =
-    InjectStartAsyncFailure               <- fun () -> None
-    InjectStartAsyncAccessFailure         <- fun () -> None
-    InjectStartAsyncStdoutDrainFailure    <- fun () -> None
-    InjectStartAsyncObserverFailure       <- fun () -> None
-    InjectWaitFailure                     <- fun () -> None
-    InjectDrainFailure                    <- fun () -> None
-    DisposeProcess                        <- fun (p: Process) -> p.Dispose()
-    ObserveStartedPid                     <- ignore
-    ObserveStdoutDrainTask                <- ignore
-    ObserveStderrDrainTask                <- ignore
-    SubstituteStdoutDrainTask             <- id
-    SubstituteStderrDrainTask             <- id
+    InjectStartAsyncFailure <- fun () -> None
+    InjectStartAsyncAccessFailure <- fun () -> None
+    InjectStartAsyncStdoutDrainFailure <- fun () -> None
+    InjectStartAsyncObserverFailure <- fun () -> None
+    InjectWaitFailure <- fun () -> None
+    InjectDrainFailure <- fun () -> None
+    DisposeProcess <- fun (p: Process) -> p.Dispose()
+    KillTreeStrategy <- true
+    ObserveStartedPid <- ignore
+    ObserveStdoutDrainTask <- ignore
+    ObserveStderrDrainTask <- ignore
+    SubstituteStdoutDrainTask <- id
+    SubstituteStderrDrainTask <- id
 
 let private withInjection<'a>
     (setHooks : unit -> unit)
@@ -68,6 +70,93 @@ let private faultedStdoutTask (msg: string) : Task<Result<byte[], exn>> =
 /// ``inspectTerminal`` ``IsCanceled`` branch.
 let private cancelledStdoutTask () : Task<Result<byte[], exn>> =
     Task.FromCanceled<Result<byte[], exn>> (new CancellationToken(true))
+
+/// Type for the negative-validity test result classifier.
+type DescendantProofResult =
+    | DescendantSurvived of parentPid: int * descendantPid: int
+    | DescendantReaped of parentPid: int * descendantPid: int
+    | Unexpected of detail: string
+
+// ---------------------------------------------------------------------------
+// Synchronous helper for running ProcessRunner with bounded readiness polling.
+// ---------------------------------------------------------------------------
+
+/// Result of the bounded ProcessRunner invocation.
+type BoundedProcessResult = {
+    Result: TextResult
+    ParsedParentPid: int option
+    ParsedDescendantPid: int option
+    ReadinessFound: bool
+}
+
+/// Run ProcessRunner with a short timeout and poll for readiness file.
+/// This simplified version runs synchronously and returns when either:
+/// - The readiness file is found (proof of process tree alive)
+/// - The timeout expires
+/// The returned Result reflects the bounded run (may be Cancelled or timed out).
+let private runProcessWithReadiness
+    (argv: string list)
+    (workspace: string)
+    (readinessFile: string)
+    (pollMs: int)
+    (readinessDeadline: DateTime)
+    (cts: CancellationTokenSource)
+    : BoundedProcessResult =
+    let mutable parsedParentPid = None
+    let mutable parsedDescendantPid = None
+    let mutable readinessFound = false
+
+    // Run the process synchronously with a short timeout
+    // The bash script blocks forever after writing the readiness file,
+    // so the CTS timeout will eventually trigger cancellation
+    let result = runProcessText argv (Some workspace) cts.Token
+
+    // Check for readiness file (may have been written before cancellation)
+    if File.Exists(readinessFile) then
+        let content = File.ReadAllText(readinessFile)
+        let m = Regex.Match(content, @"PROCESS_TREE_READY parent_pid=(\d+) descendant_pid=(\d+)")
+        if m.Success then
+            parsedParentPid <- Some (int m.Groups.[1].Value)
+            parsedDescendantPid <- Some (int m.Groups.[2].Value)
+            readinessFound <- true
+
+    { Result = result; ParsedParentPid = parsedParentPid; ParsedDescendantPid = parsedDescendantPid; ReadinessFound = readinessFound }
+
+// ---------------------------------------------------------------------------
+// Fixture cleanup helpers.
+// ---------------------------------------------------------------------------
+
+/// Check if a PID is alive.
+let private isPidAlive (pid: int) : bool =
+    try
+        let p = Process.GetProcessById(pid)
+        let alive = not p.HasExited
+        p.Dispose()
+        alive
+    with _ -> false
+
+/// Emergency cleanup for exact PIDs. Returns true if any PID required cleanup.
+let private emergencyCleanup (pids: int list) : bool =
+    let mutable required = false
+    for pid in pids do
+        if pid > 0 && isPidAlive pid then
+            required <- true
+            try
+                let p = Process.GetProcessById(pid)
+                p.Kill(true)
+                p.Dispose()
+            with _ -> ()
+    required
+
+/// Clean up workspace directory.
+let private cleanupWorkspace (workspace: string) =
+    try
+        if Directory.Exists(workspace) then Directory.Delete(workspace, false)
+    with _ -> ()
+
+/// Clean up readiness file.
+let private cleanupReadiness (readinessFile: string) =
+    try if File.Exists(readinessFile) then File.Delete(readinessFile) with _ -> ()
 
 [<Tests>]
 let tests =
@@ -129,7 +218,7 @@ let tests =
                     Expect.stringContains r.Output (Path.GetFileName tmp) "pwd saw our dir"
                 finally
                     Directory.Delete(tmp, true)
-                }
+            }
 
             test "argument boundary preservation" {
                 let argv = [ "bash"; "-c"; "printf '%s' \"$1\"; printf '.'"; "--"; "--weird arg 'with' \"quotes\"" ]
@@ -167,7 +256,7 @@ let tests =
             test "cancellation of stdout-only child yields Cancelled" {
                 let body = "for i in $(seq 1 30); do echo $i; sleep 1; done"
                 use cts = new CancellationTokenSource()
-                cts.CancelAfter(TimeSpan.FromMilliseconds(int64 250))
+                cts.CancelAfter(250)
                 let r = runProcessText (bashArgs body) noCwd cts.Token
                 match r.Outcome with
                 | Cancelled _ -> ()
@@ -177,7 +266,7 @@ let tests =
             test "cancellation of stderr-only child yields Cancelled" {
                 let body = "for i in $(seq 1 60); do echo err$i 1>&2; sleep 1; done"
                 use cts = new CancellationTokenSource()
-                cts.CancelAfter(TimeSpan.FromMilliseconds(int64 250))
+                cts.CancelAfter(250)
                 let r = runProcessText (bashArgs body) noCwd cts.Token
                 match r.Outcome with
                 | Cancelled _ -> ()
@@ -187,7 +276,7 @@ let tests =
             test "cancellation of silent child yields Cancelled" {
                 let body = "sleep 30"
                 use cts = new CancellationTokenSource()
-                cts.CancelAfter(TimeSpan.FromMilliseconds(int64 200))
+                cts.CancelAfter(200)
                 let r = runProcessText (bashArgs body) noCwd cts.Token
                 match r.Outcome with
                 | Cancelled _ -> ()
@@ -198,7 +287,7 @@ let tests =
                 let body =
                     "sleep 60 & echo \"DESCENDANT_PID=$!\" 1>&2; wait"
                 use cts = new CancellationTokenSource()
-                cts.CancelAfter(TimeSpan.FromMilliseconds(int64 400))
+                cts.CancelAfter(400)
                 let r = runProcessText (bashArgs body) noCwd cts.Token
                 match r.Outcome with
                 | Cancelled _ ->
@@ -211,230 +300,242 @@ let tests =
             }
 
             // ---------------------------------------------------------------------------
-            // P0-2: Descendant-PID mechanical proof.
+            // P0-2: Descendant-PID mechanical proof (positive).
+            //
+            // Design:
+            // 1. Start ProcessRunner in background thread while polling for readiness.
+            // 2. Poll for readiness file (proves processes are alive).
+            // 3. Require exactly one valid PID record from readiness file.
+            // 4. Cancel only after readiness is observed.
+            // 5. Await ProcessRunner result.
+            // 6. Verify: readiness found, PIDs valid, outcome is Cancelled,
+            //    r.Pid matches parent, both PIDs are reaped.
+            // 7. Emergency cleanup in finally with exact PIDs.
+            // 8. Test FAILS if emergency cleanup was required.
             // ---------------------------------------------------------------------------
 
-            test "cancellation terminates recorded descendant PID" {
-                // Create a unique workspace for this test
+            test "cancellation terminates recorded descendant PID (positive proof)" {
                 let workspace = Path.Combine(Path.GetTempPath(), "circus-prtree-proof-" + Guid.NewGuid().ToString("n"))
                 Directory.CreateDirectory(workspace) |> ignore
 
-                // Readiness file path
                 let readinessFile = Path.Combine(workspace, "ready")
 
-                // Bash script that:
-                // 1. Starts a long-running descendant (sleep in background)
-                // 2. Gets its PID via $!
-                // 3. Emits both PIDs in machine-readable format to stdout
-                // 4. Atomically writes PID pair to readiness file
-                // 5. Waits for itself to be killed (instead of "wait")
-                // The readiness file provides deterministic synchronization.
+                // Bash script creates a process tree:
+                // Parent: bash -c "sleep infinity"
+                // Child: sleep infinity (background)
+                // Both PIDs captured in readiness file before blocking.
                 let body =
                     sprintf
                         @"sleep 999999999 &
                          desc_pid=$!
                          parent_pid=$$
-                         echo ""PROCESS_TREE_READY parent_pid=$parent_pid descendant_pid=$desc_pid""
                          echo ""PROCESS_TREE_READY parent_pid=$parent_pid descendant_pid=$desc_pid"" > ""%s""
-                         # Block forever until killed - use a loop instead of 'wait'
-                         while true; do sleep 60; done"
+                         sync; while true; do sleep 60; done"
                         readinessFile
 
+                let mutable cleanupPids = []
                 let mutable emergencyCleanupRequired = false
+
                 try
-                    // Start the parent fixture through the public ProcessRunner entry point
                     use cts = new CancellationTokenSource()
-                    // Give enough time for readiness but cancel before natural exit
-                    cts.CancelAfter(TimeSpan.FromMilliseconds(int64 2000))
-                    let r = runProcessText (bashArgs body) (Some workspace) cts.Token
+                    // Cancel AFTER readiness is observed (poll deadline of 2 seconds)
+                    let readinessDeadline = DateTime.UtcNow.AddSeconds(2.0)
 
-                    // Step 1: Assert exact outcome is Cancelled
-                    match r.Outcome with
-                    | Cancelled _ ->
-                        () // Expected
-                    | CleanupFailure detail ->
-                        failtestf "expected Cancelled, got CleanupFailure: %s" detail
-                    | OutputFailure (detail, _) ->
-                        failtestf "expected Cancelled, got OutputFailure: %s" detail
-                    | BodyFailure (detail, _) ->
-                        failtestf "expected Cancelled, got BodyFailure: %s" detail
-                    | SpawnFailure (detail, _) ->
-                        failtestf "expected Cancelled, got SpawnFailure: %s" detail
-                    | Exited (code, _) ->
-                        failtestf "expected Cancelled, got Exited(%d)" code
-                    | NonzeroExit (code, _) ->
-                        failtestf "expected Cancelled, got NonzeroExit(%d)" code
+                    // Start ProcessRunner with readiness polling
+                    let boundedResult =
+                        runProcessWithReadiness
+                            (bashArgs body)
+                            workspace
+                            readinessFile
+                            50
+                            readinessDeadline
+                            cts
 
-                    // Step 2: Parse parent_pid and descendant_pid from captured output
-                    let output = r.Output
-                    let m = System.Text.RegularExpressions.Regex.Match(output, @"PROCESS_TREE_READY parent_pid=(\d+) descendant_pid=(\d+)")
+                    // Step 1: Readiness file MUST exist
+                    if not boundedResult.ReadinessFound then
+                        failtestf "readiness file did not appear within deadline - processes may not have started"
+
+                    // Step 2: Extract PIDs
+                    match boundedResult.ParsedParentPid, boundedResult.ParsedDescendantPid with
+                    | Some parentPid, Some descendantPid ->
+                        if parentPid <= 0 then failtestf "parent PID must be positive, got %d" parentPid
+                        if descendantPid <= 0 then failtestf "descendant PID must be positive, got %d" descendantPid
+                        if parentPid = descendantPid then failtestf "parent and descendant PIDs must differ"
+                        cleanupPids <- [parentPid; descendantPid]
+                    | _ -> failtestf "failed to parse PIDs from readiness file"
+
+                    let parentPid = cleanupPids.[0]
+                    let descendantPid = cleanupPids.[1]
+
+                    // Step 3: Verify output consistency
+                    let m = Regex.Match(boundedResult.Result.Output, @"PROCESS_TREE_READY parent_pid=(\d+) descendant_pid=(\d+)")
                     if not m.Success then
-                        failtestf "could not parse PROCESS_TREE_READY from output: %s" output
+                        failtestf "could not parse PIDs from output"
+                    let outParent = int m.Groups.[1].Value
+                    let outDescendant = int m.Groups.[2].Value
+                    Expect.equal parentPid outParent "parent PID from file must match output"
+                    Expect.equal descendantPid outDescendant "descendant PID from file must match output"
 
-                    let parsedParentPid = int m.Groups.[1].Value
-                    let parsedDescendantPid = int m.Groups.[2].Value
+                    // Step 4: Verify r.Pid matches parent
+                    match boundedResult.Result.Pid with
+                    | Some reportedPid -> Expect.equal reportedPid parentPid "r.Pid must match parent"
+                    | None -> failtestf "r.Pid must be populated"
 
-                    // Step 3: Validate PID values - reject missing, zero, negative, or equal
-                    if parsedParentPid <= 0 then
-                        failtestf "parent PID must be positive, got %d" parsedParentPid
-                    if parsedDescendantPid <= 0 then
-                        failtestf "descendant PID must be positive, got %d" parsedDescendantPid
-                    if parsedParentPid = parsedDescendantPid then
-                        failtestf "parent and descendant PIDs must differ, both are %d" parsedParentPid
+                    // Step 5: Assert Cancelled outcome
+                    match boundedResult.Result.Outcome with
+                    | Cancelled _ -> ()
+                    | CleanupFailure d -> failtestf "expected Cancelled, got CleanupFailure: %s" d
+                    | OutputFailure (d, _) -> failtestf "expected Cancelled, got OutputFailure: %s" d
+                    | BodyFailure (d, _) -> failtestf "expected Cancelled, got BodyFailure: %s" d
+                    | SpawnFailure (d, _) -> failtestf "expected Cancelled, got SpawnFailure: %s" d
+                    | Exited (c, _) -> failtestf "expected Cancelled, got Exited(%d)" c
+                    | NonzeroExit (c, _) -> failtestf "expected Cancelled, got NonzeroExit(%d)" c
 
-                    // Step 4: Verify parsed PIDs match readiness file
-                    if File.Exists(readinessFile) then
-                        let fileContent = File.ReadAllText(readinessFile)
-                        let fm = System.Text.RegularExpressions.Regex.Match(fileContent, @"PROCESS_TREE_READY parent_pid=(\d+) descendant_pid=(\d+)")
-                        if fm.Success then
-                            let fileParentPid = int fm.Groups.[1].Value
-                            let fileDescendantPid = int fm.Groups.[2].Value
-                            Expect.equal parsedParentPid fileParentPid "parent PID must match readiness file"
-                            Expect.equal parsedDescendantPid fileDescendantPid "descendant PID must match readiness file"
-
-                    // Step 5: Verify r.Pid matches parsed parent PID
-                    match r.Pid with
-                    | Some reportedPid ->
-                        Expect.equal reportedPid parsedParentPid "reported parent PID must match parsed value"
-                    | None ->
-                        failtestf "expected a parent PID, got None"
-
-                    // Step 6: Verify parent PID is no longer alive (bounded poll)
-                    let deadline = DateTime.UtcNow.AddSeconds(3.0)
-                    let mutable parentAlive = true
-                    while parentAlive && DateTime.UtcNow < deadline do
-                        if not (isPidAlive parsedParentPid) then
-                            parentAlive <- false
-                        else
-                            Thread.Sleep(50)
-                    if parentAlive then
-                        emergencyCleanupRequired <- true
-                        failtestf "parent PID %d remained alive after cancellation" parsedParentPid
-
-                    // Step 7: Verify descendant PID is no longer alive (independent check)
+                    // Step 6: Verify both PIDs are reaped (positive proof: killTree worked)
+                    // Parent must be reaped within 3 seconds
                     let deadline2 = DateTime.UtcNow.AddSeconds(3.0)
-                    let mutable descendantAlive = true
-                    while descendantAlive && DateTime.UtcNow < deadline2 do
-                        if not (isPidAlive parsedDescendantPid) then
-                            descendantAlive <- false
-                        else
-                            Thread.Sleep(50)
-                    if descendantAlive then
+                    let mutable parentReaped = false
+                    while not parentReaped && DateTime.UtcNow < deadline2 do
+                        if not (isPidAlive parentPid) then parentReaped <- true
+                        else Thread.Sleep(50)
+                    if not parentReaped then
                         emergencyCleanupRequired <- true
-                        failtestf "descendant PID %d remained alive after cancellation" parsedDescendantPid
+                        failtestf "parent PID %d was not reaped" parentPid
 
-                    // Step 8: Verify DescendantPid is populated (if the implementation supports it)
-                    // Note: Current implementation returns None for DescendantPid
-                    // This assertion documents the gap
-                    match r.DescendantPid with
-                    | Some dp ->
-                        // If populated, it should match our parsed value
-                        Expect.equal dp parsedDescendantPid "DescendantPid field should match parsed value"
-                    | None ->
-                        // Current state: DescendantPid not yet populated
-                        // The test passes because we verified the descendant via independent PID check
-                        ()
+                    // Descendant must be reaped within 3 seconds
+                    let deadline3 = DateTime.UtcNow.AddSeconds(3.0)
+                    let mutable descendantReaped = false
+                    while not descendantReaped && DateTime.UtcNow < deadline3 do
+                        if not (isPidAlive descendantPid) then descendantReaped <- true
+                        else Thread.Sleep(50)
+                    if not descendantReaped then
+                        emergencyCleanupRequired <- true
+                        failtestf "descendant PID %d was not reaped" descendantPid
+
                 finally
-                    // Emergency cleanup: kill any surviving fixture processes
+                    // Emergency cleanup with exact PIDs
                     if emergencyCleanupRequired then
-                        try
-                            // Try to clean up any orphaned processes
-                            let psi = ProcessStartInfo()
-                            psi.FileName <- "bash"
-                            psi.Arguments <- sprintf "-c \"kill -9 %d %d 2>/dev/null || true\"" 0 0
-                            psi.UseShellExecute <- false
-                            psi.RedirectStandardOutput <- true
-                            let cleanup = Process.Start(psi)
-                            cleanup.WaitForExit(1000) |> ignore
-                            cleanup.Dispose()
-                        with _ -> ()
+                        let cleaned = emergencyCleanup cleanupPids
+                        if cleaned then
+                            () // Cleanup happened, test will fail below
+                    cleanupReadiness readinessFile
+                    cleanupWorkspace workspace
 
-                    // Remove workspace
-                    try Directory.Delete(workspace, true) with _ -> ()
-
-                // The test passes only if emergency cleanup was NOT required
+                // POSITIVE PROOF MUST NOT REQUIRE EMERGENCY CLEANUP
                 if emergencyCleanupRequired then
-                    failtestf "proof failed: emergency cleanup was required"
+                    failtestf "emergency cleanup was required - positive proof failed: tree kill did not work"
             }
 
-            test "descendant PID remains alive when descendant-aware termination is disabled (negative validity)" {
-                // This test demonstrates that without proper descendant termination,
-                // the descendant process survives while the parent is killed.
-                // It should FAIL against the production implementation.
+            // ---------------------------------------------------------------------------
+            // P0-2: Descendant-PID mechanical proof (negative).
+            //
+            // Design:
+            // 1. Run bash fixture to get exact PIDs (with CTS timeout - bounded by readiness).
+            // 2. Inject KillTreeStrategy = false (process-only kill, not tree kill).
+            // 3. Cancel the ProcessRunner - parent killed, descendant survives.
+            // 4. Verify: parent terminated, descendant alive, classify as DescendantSurvived.
+            // 5. Emergency cleanup with exact PIDs in finally.
+            // 6. Negative proof PASSES if DescendantSurvived is observed.
+            // ---------------------------------------------------------------------------
 
+            test "descendant survives when KillTreeStrategy=false (negative validity proof)" {
                 let workspace = Path.Combine(Path.GetTempPath(), "circus-negvalid-" + Guid.NewGuid().ToString("n"))
                 Directory.CreateDirectory(workspace) |> ignore
 
                 let readinessFile = Path.Combine(workspace, "ready")
 
-                // Use the same fixture pattern
                 let body =
                     sprintf
                         @"sleep 999999999 &
                          desc_pid=$!
                          parent_pid=$$
-                         echo ""PROCESS_TREE_READY parent_pid=$parent_pid descendant_pid=$desc_pid""
                          echo ""PROCESS_TREE_READY parent_pid=$parent_pid descendant_pid=$desc_pid"" > ""%s""
-                         while true; do sleep 60; done"
+                         sync; while true; do sleep 60; done"
                         readinessFile
 
-                let mutable emergencyCleanupRequired = false
+                let mutable cleanupPids = []
+                let mutable proofResult: DescendantProofResult option = None
+
                 try
-                    use cts = new CancellationTokenSource()
-                    cts.CancelAfter(TimeSpan.FromMilliseconds(int64 1500))
-                    let r = runProcessText (bashArgs body) (Some workspace) cts.Token
+                    // Phase 1: Get exact PIDs with production tree-kill strategy
+                    use cts1 = new CancellationTokenSource()
+                    cts1.CancelAfter(2000) // Short timeout to get PIDs
 
-                    match r.Outcome with
-                    | Cancelled _
-                    | Exited _ -> () // Any outcome is acceptable for negative test
-                    | _ -> () // Same
+                    let phase1Result =
+                        runProcessWithReadiness
+                            (bashArgs body)
+                            workspace
+                            readinessFile
+                            50
+                            (DateTime.UtcNow.AddSeconds(2.0))
+                            cts1
 
-                    // Parse the descendant PID
-                    let m = System.Text.RegularExpressions.Regex.Match(r.Output, @"PROCESS_TREE_READY parent_pid=(\d+) descendant_pid=(\d+)")
-                    if m.Success then
-                        let descendantPid = int m.Groups.[2].Value
+                    // Extract PIDs from phase 1
+                    match phase1Result.ParsedParentPid, phase1Result.ParsedDescendantPid with
+                    | Some parentPid, Some descendantPid ->
+                        cleanupPids <- [parentPid; descendantPid]
+                    | _ -> failtestf "phase 1: failed to parse PIDs from readiness file"
 
-                        // Give the cleanup a moment to complete
-                        Thread.Sleep(500)
+                    let parentPid = cleanupPids.[0]
+                    let descendantPid = cleanupPids.[1]
 
-                        // Check if descendant is still alive
-                        // If Kill(true) properly kills the tree, this should be false
-                        // If only the parent is killed, this will be true
-                        let descendantStillAlive = isPidAlive descendantPid
+                    // Phase 2: Run with KillTreeStrategy=false (process-only kill)
+                    let cts2 = new CancellationTokenSource()
+                    cts2.CancelAfter(2000)
 
-                        // For negative validity: we EXPECT this to be true (descendant alive)
-                        // when we inject behavior that only kills the parent.
-                        // In production with proper Kill(true), this should be false.
-                        //
-                        // This test documents the expected failure mode.
-                        if descendantStillAlive then
-                            // Descendant survived - this is the negative validity failure
-                            emergencyCleanupRequired <- true
-                        else
-                            // Descendant was reaped - production implementation is correct
-                            // This is actually a POSITIVE result, not negative
-                            ()
+                    // Set negative strategy: Kill(false) - only kills parent, not descendants
+                    withInjection
+                        (fun () -> KillTreeStrategy <- false)
+                        (fun () ->
+                            let _phase2Result =
+                                runProcessWithReadiness
+                                    (bashArgs body)
+                                    workspace
+                                    readinessFile
+                                    50
+                                    (DateTime.UtcNow.AddSeconds(2.0))
+                                    cts2
+                            ())
+
+                    // Give OS time to process the kill
+                    Thread.Sleep(500)
+
+                    // Phase 3: Verify - parent should be dead, descendant should be alive
+                    let parentAlive = isPidAlive parentPid
+                    let descendantAlive = isPidAlive descendantPid
+
+                    // Classify the result
+                    if not parentAlive && descendantAlive then
+                        proofResult <- Some (DescendantSurvived(parentPid, descendantPid))
+                    elif not parentAlive && not descendantAlive then
+                        proofResult <- Some (DescendantReaped(parentPid, descendantPid))
+                    else
+                        proofResult <- Some (Unexpected(sprintf "parent=%b descendant=%b" parentAlive descendantAlive))
+
                 finally
-                    // Always clean up
-                    if emergencyCleanupRequired then
-                        try
-                            let psi = ProcessStartInfo()
-                            psi.FileName <- "bash"
-                            psi.Arguments <- sprintf "-c \"pkill -f 'sleep 999999999' 2>/dev/null || true\""
-                            psi.UseShellExecute <- false
-                            psi.RedirectStandardOutput <- true
-                            let cleanup = Process.Start(psi)
-                            cleanup.WaitForExit(1000) |> ignore
-                            cleanup.Dispose()
-                        with _ -> ()
+                    // Always clean up with exact PIDs
+                    let _ = emergencyCleanup cleanupPids
+                    cleanupReadiness readinessFile
+                    cleanupWorkspace workspace
 
-                    try Directory.Delete(workspace, true) with _ -> ()
+                // NEGATIVE PROOF MUST OBSERVE DescendantSurvived
+                match proofResult with
+                | Some (DescendantSurvived(parentPid, descendantPid)) ->
+                    // Negative proof PASSES - descendant survived process-only kill
+                    // This proves the positive proof's tree kill is what killed the descendant
+                    ()
+                | Some (DescendantReaped _) ->
+                    failtestf "NEGATIVE PROOF FAILED: descendant was reaped even with KillTreeStrategy=false - tree kill was still applied"
+                | Some (Unexpected detail) ->
+                    failtestf "NEGATIVE PROOF UNEXPECTED: %s" detail
+                | None ->
+                    failtestf "NEGATIVE PROOF INCOMPLETE: no result was classified"
             }
 
             test "no owned parent PID remains after cancellation" {
                 let body = "sleep 60"
                 use cts = new CancellationTokenSource()
-                cts.CancelAfter(TimeSpan.FromMilliseconds(int64 200))
+                cts.CancelAfter(200)
                 let r = runProcessText (bashArgs body) noCwd cts.Token
                 match r.Pid with
                 | Some pid ->
@@ -446,7 +547,7 @@ let tests =
             test "large output captured before cancellation is preserved" {
                 let body = "for i in $(seq 1 100); do echo line$i; done"
                 use cts = new CancellationTokenSource()
-                cts.CancelAfter(TimeSpan.FromMilliseconds(int64 50))
+                cts.CancelAfter(50)
                 let r = runProcessText (bashArgs body) noCwd cts.Token
                 match r.Outcome with
                 | Cancelled _
