@@ -33,10 +33,10 @@
     <Compile Include="SourcePolicy\Baseline.fs" />
     <Compile Include="SourcePolicy\Verification.fs" />
     <Compile Include="SourcePolicy\JsonReport.fs" />
-    <Compile Include="SourcePolicy\HumanReport.fs" />
-    <Compile Include="SourcePolicy\ContainerPolicy.fs" />
     <Compile Include="SourcePolicy\GateSummary.fs" />
     <Compile Include="SourcePolicy\GateSummaryVerify.fs" />
+    <Compile Include="SourcePolicy\ContainerPolicy.fs" />
+    <Compile Include="SourcePolicy\HumanReport.fs" />
     <Compile Include="SourcePolicy\Cli.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

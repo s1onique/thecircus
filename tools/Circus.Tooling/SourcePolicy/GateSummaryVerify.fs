@@ -15,10 +15,13 @@ module Circus.Tooling.SourcePolicy.GateSummaryVerify
 ///
 ///   0 - structurally valid AND every required check passes
 ///   1 - structurally valid AND at least one required check failed
-///   2 - malformed JSON, missing required field, or schema mismatch
+///   2 - malformed JSON, missing required field, schema mismatch,
+///       missing or unreadable ``tested_tree_oid``, or git failure
 
 open System
+open System.Diagnostics
 open System.IO
+open System.Text
 open System.Text.Json
 open System.Text.RegularExpressions
 
@@ -33,6 +36,7 @@ let private requiredTopLevelFields =
         "checks_total"
         "checks_passed"
         "checks_failed"
+        "violations_total"
         "checks_skipped"
         "checks_unavailable"
         "checks"
@@ -61,12 +65,22 @@ type VerifyResult = {
     ChecksTotal: int
     ChecksPassed: int
     ChecksFailed: int
+    ViolationsTotal: int
     ChecksSkipped: int
     ChecksUnavailable: int
     Checks: CheckStatus list
     TestedTreeOid: string
     FailureReasons: string list
 }
+
+/// Result of a tree-binding check: either the artefact OID matches
+/// the committed tree, or the binding cannot be verified (git
+/// failure / missing repo).  We must not silently pass when the
+/// binding cannot be verified.
+type TreeBinding =
+    | BindingMatch
+    | BindingMismatch of expected: string * actual: string
+    | BindingUnverifiable of reason: string
 
 let private parseJson (raw: string) : JsonDocument option =
     let mutable opts = JsonDocumentOptions()
@@ -174,7 +188,7 @@ let validate (path: string) : Result<VerifyResult, string> =
                 failures.Add("root must be a JSON object")
             else
                 // Reject the PascalCase twin names outright.
-                for forbidden in [ "SchemaVersion"; "OverallStatus"; "ChecksTotal"; "ChecksPassed"; "ChecksFailed"; "ChecksSkipped"; "ChecksUnavailable"; "TestedTreeOid"; "GeneratedAt"; "Checks" ] do
+                for forbidden in [ "SchemaVersion"; "OverallStatus"; "ChecksTotal"; "ChecksPassed"; "ChecksFailed"; "ChecksSkipped"; "ChecksUnavailable"; "TestedTreeOid"; "GeneratedAt"; "Checks"; "ViolationsTotal" ] do
                     if hasProperty root forbidden then
                         failures.Add(sprintf "root must not carry PascalCase field: %s (use snake_case)" forbidden)
 
@@ -187,6 +201,7 @@ let validate (path: string) : Result<VerifyResult, string> =
             let total = readInt root "checks_total" failures
             let passed = readInt root "checks_passed" failures
             let failed = readInt root "checks_failed" failures
+            let violations = readInt root "violations_total" failures
             let skipped = readInt root "checks_skipped" failures
             let unavail = readInt root "checks_unavailable" failures
             let oid = readString root "tested_tree_oid" failures
@@ -220,7 +235,9 @@ let validate (path: string) : Result<VerifyResult, string> =
                          | Error e -> failures.Add(sprintf "checks[i]: %s" e)
              | _ -> ())
 
-            // Count consistency
+            // Count consistency.  ``checks_failed`` counts failed
+            // *checks*, not violations.  We additionally require
+            // that ``violations_total`` is non-negative.
             (match total, passed, failed, skipped, unavail with
              | Some total, Some p, Some f, Some s, Some u
                  when (p + f + s + u) <> total ->
@@ -241,6 +258,11 @@ let validate (path: string) : Result<VerifyResult, string> =
                  failures.Add "overall_status=pass contradicts unavailable > 0"
              | _ -> ())
 
+            (match violations with
+             | Some v when v < 0 ->
+                 failures.Add(sprintf "violations_total must be >= 0, got %d" v)
+             | _ -> ())
+
             let r = {
                 Path = path
                 SchemaVersion = (match schemaV with Some v -> v | _ -> -1)
@@ -248,6 +270,7 @@ let validate (path: string) : Result<VerifyResult, string> =
                 ChecksTotal = (match total with Some v -> v | _ -> -1)
                 ChecksPassed = (match passed with Some v -> v | _ -> -1)
                 ChecksFailed = (match failed with Some v -> v | _ -> -1)
+                ViolationsTotal = (match violations with Some v -> v | _ -> 0)
                 ChecksSkipped = (match skipped with Some v -> v | _ -> -1)
                 ChecksUnavailable = (match unavail with Some v -> v | _ -> -1)
                 Checks = parsedChecks |> Seq.toList
@@ -260,12 +283,42 @@ let validate (path: string) : Result<VerifyResult, string> =
             else
                 Ok r
 
-/// Run ``git rev-parse HEAD^{tree}`` in the given repository root and
-/// return the trimmed OID.  ``None`` is returned when the command
-/// fails or git is missing.
-let readExpectedTreeOid (repoRoot: string) : string option =
+/// Run a process to completion, draining stdout and stderr
+/// concurrently using event-driven stream reads so the OS pipe
+/// buffer is consumed as the child writes.  This avoids the
+/// dead-lock documented on ``Process.StandardOutput`` by
+/// Microsoft.
+let private runProcess (psi: ProcessStartInfo) : int * string * string =
+    let stdout = StringBuilder()
+    let stderr = StringBuilder()
+    let mutable exitCode = -1
     try
-        let psi = System.Diagnostics.ProcessStartInfo()
+        let proc = Process.Start(psi)
+        proc.OutputDataReceived.Add(fun e ->
+            if not (isNull e) && not (isNull e.Data) then
+                stdout.AppendLine(e.Data) |> ignore)
+        proc.ErrorDataReceived.Add(fun e ->
+            if not (isNull e) && not (isNull e.Data) then
+                stderr.AppendLine(e.Data) |> ignore)
+        proc.BeginOutputReadLine()
+        proc.BeginErrorReadLine()
+        proc.WaitForExit()
+        exitCode <- proc.ExitCode
+        proc.Dispose()
+    with ex ->
+        stderr.AppendLine(sprintf "%s: %s" (ex.GetType().FullName) ex.Message) |> ignore
+        exitCode <- -1
+    exitCode, stdout.ToString(), stderr.ToString()
+
+/// Run ``git rev-parse HEAD^{tree}`` and return the trimmed OID when
+/// the command succeeds; otherwise return ``None``.  Used by the
+/// CLI dispatcher to feed the verifier an expected binding.  The
+/// CLI-level exit code is decided by ``runVerify``; here we only
+/// report success/failure of the git invocation.
+let internal tryReadExpectedTreeOid (repoRoot: string) : string option =
+    if not (Directory.Exists repoRoot) then None
+    else
+        let psi = ProcessStartInfo()
         psi.FileName <- "git"
         psi.Arguments <- "rev-parse HEAD^{tree}"
         psi.RedirectStandardOutput <- true
@@ -273,30 +326,33 @@ let readExpectedTreeOid (repoRoot: string) : string option =
         psi.UseShellExecute <- false
         psi.CreateNoWindow <- true
         psi.WorkingDirectory <- repoRoot
-        let mutable proc : System.Diagnostics.Process = Unchecked.defaultof<System.Diagnostics.Process>
-        proc <- System.Diagnostics.Process.Start psi
-        proc.WaitForExit()
-        let result = if proc.ExitCode = 0 then Some((proc.StandardOutput.ReadToEnd()).Trim()) else None
-        proc.Dispose()
-        result
-    with _ -> None
+        try
+            let exitCode, stdout, _ = runProcess psi
+            if exitCode = 0 then Some (stdout.Trim())
+            else None
+        with _ -> None
 
 /// Compare the ``tested_tree_oid`` field against the actual
 /// ``HEAD^{tree}`` of the repository.  Used to prove the artefact
-/// was regenerated against the committed tree.
-let validateTreeBinding (result: VerifyResult) (repoRoot: string) : Result<unit, string> =
-    match readExpectedTreeOid repoRoot with
-    | None -> Error "git rev-parse HEAD^{tree} failed"
+/// was regenerated against the committed tree.  Missing tree
+/// authority returns ``BindingUnverifiable`` (exit 2), not silent
+/// pass.
+let validateTreeBindingAgainst (result: VerifyResult) (repoRoot: string) : TreeBinding =
+    match tryReadExpectedTreeOid repoRoot with
+    | None ->
+        BindingUnverifiable "git rev-parse HEAD^{tree} failed (git missing or repo not initialised)"
     | Some expected ->
         if expected <> result.TestedTreeOid then
-            Error(sprintf "tested_tree_oid %s does not match HEAD^{tree} %s" result.TestedTreeOid expected)
+            BindingMismatch (expected, result.TestedTreeOid)
         else
-            Ok ()
+            BindingMatch
 
 /// Exit code for the verifier based on the structural verdict.
 /// 0 - structurally valid AND all required checks pass
 /// 1 - structurally valid AND at least one required check failed
-/// 2 - malformed / contract-incompatible summary
+/// 2 - malformed / contract-incompatible summary OR the
+///     ``tested_tree_oid`` binding cannot be verified (operational
+///     failure)
 let runVerify (path: string) (expectedOid: string option) : int =
     match validate path with
     | Error reasons ->

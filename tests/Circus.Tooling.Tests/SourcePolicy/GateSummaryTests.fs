@@ -20,6 +20,7 @@ let private sampleDoc () : GateSummaryDoc =
         ChecksTotal = 3
         ChecksPassed = 3
         ChecksFailed = 0
+        ViolationsTotal = 0
         ChecksSkipped = 0
         ChecksUnavailable = 0
         Checks =

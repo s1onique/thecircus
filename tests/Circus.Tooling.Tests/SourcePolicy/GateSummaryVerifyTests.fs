@@ -23,6 +23,7 @@ let private passingDoc () : string =
   "checks_total": 3,
   "checks_passed": 3,
   "checks_failed": 0,
+  "violations_total": 0,
   "checks_skipped": 0,
   "checks_unavailable": 0,
   "checks": [

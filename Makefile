@@ -149,7 +149,7 @@ test-ingestion: test-application test-postgres test-api
 
 .PHONY: verify-container-policy
 verify-container-policy: build-source-policy
-	$(DOTNET) tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll container-policy verify
+	$(CIRCUS_TOOLING) container-policy verify
 
 .PHONY: container-build-backend
 container-build-backend:
@@ -214,7 +214,14 @@ clean:
 # Source policy (ML-only F#/Elm enforcement) — ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01
 # =============================================================================
 
-CIRCUS_TOOLING := tools/Circus.Tooling/bin/Release/net10.0/circus-tooling
+# RID-neutral framework-dependent invocation.  The canonical artefact is
+# ``circus-tooling.dll``; running it through ``dotnet`` keeps the path
+# portable across host operating systems and avoids depending on the
+# RID-specific native apphost (``circus-tooling`` on Linux,
+# ``circus-tooling.exe`` on Windows, etc.).  See
+# ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-CORRECTION03.
+CIRCUS_TOOLING_DLL := tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll
+CIRCUS_TOOLING     := $(DOTNET) $(CIRCUS_TOOLING_DLL)
 
 .PHONY: build-source-policy
 build-source-policy:
@@ -230,7 +237,7 @@ source-policy-json: build-source-policy
 
 .PHONY: test-source-policy
 test-source-policy: build-source-policy
-	$(DOTNET) run 	  --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj 	  -c Release -- --summary
+	$(DOTNET) run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release --no-restore -- --summary
 
 # =============================================================================
 # Native gate
@@ -286,7 +293,8 @@ dev-container-smoke:
 # circus-tooling gate run runner executes every canonical local check
 # exactly once, regenerates the gate-summary artefact, and validates
 # the resulting JSON against the Leamas v1 wire contract.  See
-# ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-CORRECTION02.
+# ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-CORRECTION02 and
+# ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-CORRECTION03.
 .PHONY: dev-gate-linux
 dev-gate-linux: build-source-policy
-	$(DOTNET) tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll gate run
+	$(CIRCUS_TOOLING) gate run

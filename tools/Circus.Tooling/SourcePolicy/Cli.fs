@@ -86,30 +86,54 @@ let runGateSummaryRegenerate (repoRoot: string) : int =
 
 let runGateSummaryVerify (repoRoot: string) : int =
     let path = Path.Combine(repoRoot, ".factory", "gate-summary.json")
-    let expected = GateSummaryVerify.readExpectedTreeOid repoRoot
+    let expected = GateSummaryVerify.tryReadExpectedTreeOid repoRoot
     GateSummaryVerify.runVerify path expected
 
 /// ``gate run`` is the single canonical entry point that invokes every
 /// canonical local check exactly once, regenerates the gate-summary
-/// artefact, validates it, and returns non-zero when any required
-/// check fails.  It replaces the duplicate shell-test invocations and
-/// the no-op ``echo`` placeholders that previously lived in the
-/// ``dev-gate-linux`` Makefile target.
+/// artefact, **always** validates the artefact structurally and
+/// against the committed tree, and combines the three independent
+/// verdicts:
+///
+///   - the regeneration operational result (could the producer run?);
+///   - the structural validation result (does the artefact satisfy
+///     the Leamas v1 wire contract?);
+///   - the per-check verdict (did every canonical check pass?).
+///
+/// The runner always runs validation, even when the regeneration
+/// step observed failed checks; the canonical contract requires the
+/// artefact to be valid before its content is consumed.
 let runGate (repoRoot: string) : int =
     let path = Path.Combine(repoRoot, ".factory", "gate-summary.json")
+
     // Step 1: regenerate the artefact.  The runner inside
     // ``regenerate`` invokes each canonical check exactly once.
+    // A failed check returns exit 1; an operational error returns
+    // exit 2.  We capture the code but **always** proceed to
+    // validation: a successfully-written failed artefact must still
+    // satisfy the wire contract before the gate reports PASS.
     let regenCode = GateSummary.runRegenerate repoRoot
-    if regenCode <> 0 then
-        stderr.WriteLine "gate run: FAIL (regenerate)"
-        regenCode
-    else
-        // Step 2: validate the artefact structurally and against
-        // HEAD^{tree}.
-        let verifyCode = runGateSummaryVerify repoRoot
-        if verifyCode <> 0 then
-            stderr.WriteLine "gate run: FAIL (verify)"
-            verifyCode
+
+    // Step 2: validate the artefact structurally and against
+    // HEAD^{tree}.  ``runVerify`` returns 0 (all pass), 1 (valid
+    // with failed checks), or 2 (malformed / binding unverifiable).
+    let verifyCode = runGateSummaryVerify repoRoot
+
+    // Step 3: combine the verdicts.  The most severe code wins,
+    // matching the conventional Unix severity ordering
+    // (operational=2 > structural/checks=1 > pass=0).
+    let combined =
+        if regenCode = ExitCode.operationalError || verifyCode = ExitCode.operationalError then
+            ExitCode.operationalError
+        else if regenCode = ExitCode.policyFailure || verifyCode = ExitCode.policyFailure then
+            ExitCode.policyFailure
         else
-            stdout.WriteLine "gate run: PASS"
             ExitCode.pass
+
+    if combined = ExitCode.pass then
+        stdout.WriteLine "gate run: PASS"
+    else if combined = ExitCode.policyFailure then
+        stderr.WriteLine(sprintf "gate run: FAIL (regen=%d verify=%d, see gate-summary.json)" regenCode verifyCode)
+    else
+        stderr.WriteLine(sprintf "gate run: FAIL (operational; regen=%d verify=%d)" regenCode verifyCode)
+    combined

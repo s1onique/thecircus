@@ -5,8 +5,9 @@
 # bypassed: replacing `actions/checkout@<full-SHA>` with
 # `actions/checkout@v6` left `stripped` empty and silently skipped the
 # entry.  This test mutates the workflow files in a sandbox copy and
-# asserts the policy fails with a non-zero exit code, proving the
-# parser now rejects the un-pinned value.
+# asserts the F# container-policy verifier (the F# port of the deleted
+# Python script) rejects the un-pinned value with a non-zero exit code,
+# proving the parser now rejects the un-pinned value.
 #
 # The test runs entirely in a temp directory so it never mutates the
 # working tree.
@@ -16,14 +17,32 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-POLICY="$ROOT/scripts/verify_container_policy.py"
+
+# Locate the dotnet host.  The shell PATH may not include it (the
+# canonical linux dev-host bootstrap adds it via /etc/profile.d, which
+# is not sourced by ``bash tests/...`` invocations under ``make`` or
+# the circus-tooling gate runner).  Fall back to the well-known
+# circus-dev location before giving up.
+if ! command -v dotnet >/dev/null 2>&1; then
+    if [[ -x "$HOME/.dotnet/dotnet" ]]; then
+        export PATH="$HOME/.dotnet:$PATH"
+    elif [[ -x /usr/share/dotnet/dotnet ]]; then
+        export PATH="/usr/share/dotnet:$PATH"
+    fi
+fi
+
+# The canonical F# tooling DLL.  The RID-neutral framework-dependent
+# artefact is the single source of truth; we invoke it through dotnet.
+TOOLING_DLL="$ROOT/tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll"
+
+if [[ ! -f "$TOOLING_DLL" ]]; then
+    echo "FAIL: tooling DLL not found at $TOOLING_DLL" >&2
+    exit 1
+fi
+
 TOP_WORKFLOW="$ROOT/.github/workflows/harbor.yml"
 REUSABLE_WORKFLOW="$ROOT/.github/workflows/harbor-build-image.yml"
 
-if [[ ! -f "$POLICY" ]]; then
-    echo "FAIL: policy script not found at $POLICY" >&2
-    exit 1
-fi
 if [[ ! -f "$TOP_WORKFLOW" ]]; then
     echo "FAIL: top-level workflow not found at $TOP_WORKFLOW" >&2
     exit 1
@@ -36,12 +55,8 @@ fi
 SANDBOX="$(mktemp -d -t circus-pin-mutation-XXXXXX)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
-# Mirror the repository layout the policy reads from.  Only the files
-# the policy inspects need to be copied; everything else stays under
-# the original $ROOT because the policy never reads from $SANDBOX
-# unless we set ROOT explicitly.  We instead exercise the policy by
-# running it from the sandbox with PYTHONPATH overrides that swap the
-# ROOT variable.
+# Mirror the repository layout the verifier reads from.  Only the files
+# the verifier inspects need to be copied.
 mkdir -p "$SANDBOX/.github/workflows" "$SANDBOX/scripts/ci" \
          "$SANDBOX/.github/scripts" "$SANDBOX/docker/frontend" \
          "$SANDBOX/docs" "$SANDBOX/scripts" "$SANDBOX/web" \
@@ -49,7 +64,7 @@ mkdir -p "$SANDBOX/.github/workflows" "$SANDBOX/scripts/ci" \
          "$SANDBOX/src/Circus.Application" "$SANDBOX/src/Circus.Contracts" \
          "$SANDBOX/src/Circus.Domain" "$SANDBOX/src/Circus.Persistence.Postgres" \
          "$SANDBOX/tests/ci" "$SANDBOX/.factory"
-cp "$POLICY"               "$SANDBOX/scripts/verify_container_policy.py"
+
 cp "$ROOT/Dockerfile.backend"     "$SANDBOX/Dockerfile.backend"
 cp "$ROOT/Dockerfile.frontend"    "$SANDBOX/Dockerfile.frontend"
 cp "$ROOT/.dockerignore"          "$SANDBOX/.dockerignore"
@@ -70,55 +85,46 @@ cp "$ROOT/Circus.sln" "$SANDBOX/Circus.sln" 2>/dev/null || true
 cp "$TOP_WORKFLOW" "$SANDBOX/.github/workflows/harbor.yml"
 cp "$REUSABLE_WORKFLOW" "$SANDBOX/.github/workflows/harbor-build-image.yml"
 
-# Initialise the sandbox as a git repository so the policy's
-# `git ls-files --cached --others --exclude-standard` call works.
-# The configuration uses a dummy identity because the script only
-# inspects the file listing.
+# Initialise the sandbox as a git repository so CP-29's
+# `git ls-files -z` call works.
 git -C "$SANDBOX" -c init.defaultBranch=main -c user.email=ci@local \
     -c user.name=ci init --quiet
 git -C "$SANDBOX" add -A
 git -C "$SANDBOX" -c user.email=ci@local -c user.name=ci \
     commit --quiet -m "sandbox" >/dev/null 2>&1 || true
 
-
-# The .factory/gate-summary.json file is now *detached* evidence
-# (untracked, see .gitignore).  The action-pin mutation test no longer
-# needs to copy the artefact into the sandbox or re-stamp its
-# tested_tree_oid: the policy script does not read the artefact, and
-# the regenerate script records HEAD^{tree} against the committed
-# sandbox tree at generation time.
-
-if [[ -f "$ROOT/.factory/regenerate_gate_summary.py" ]]; then
-    cp "$ROOT/.factory/regenerate_gate_summary.py" \
-        "$SANDBOX/.factory/regenerate_gate_summary.py"
-fi
-
-# Step 1: pristine tree must pass.
-python3 "$SANDBOX/scripts/verify_container_policy.py" >/dev/null
-echo "OK: pristine policy check passes"
-
-# Step 2: mutate the action pin in BOTH workflow files and assert failure.
-# The workflow files were copied during the initial mirror step; the
-# `cp` here ensures the mutation starts from a clean state regardless
-# of any prior in-place edits.
-cp "$TOP_WORKFLOW" "$SANDBOX/.github/workflows/harbor.yml"
-cp "$REUSABLE_WORKFLOW" "$SANDBOX/.github/workflows/harbor-build-image.yml"
-
-mutated=0
-for workflow in "$SANDBOX/.github/workflows/harbor.yml" "$SANDBOX/.github/workflows/harbor-build-image.yml"; do
-    # Rewrite every `actions/checkout@<full-SHA>` (optionally followed
-    # by a `# v6.x` comment) to the un-pinned `actions/checkout@v6`.
-    if sed -i.bak -E \
-        's|actions/checkout@[0-9a-f]{40}([[:space:]]*#[^[:space:]].*)?|actions/checkout@v6|g' \
-        "$workflow"; then
-        mutated=1
-    fi
-    rm -f "$workflow.bak"
+# Mirror the executable bit on every shell script the verifier checks.
+for script in scripts/ci/build_image.sh scripts/ci/publish_image.sh \
+              scripts/ci/verify_build_image.sh scripts/ci/wire_buildx_builder.sh \
+              tests/ci/test_build_publish_shell.sh tests/ci/test_action_pin_mutation.sh \
+              tests/ci/test_gate_summary_acceptance.sh; do
+    chmod +x "$SANDBOX/$script" 2>/dev/null || true
 done
-if [[ "$mutated" -ne 1 ]]; then
-    echo "FAIL: sed did not mutate any workflow file" >&2
+
+# Step 1: pristine tree must pass.  The verifier exits 0 when every
+# check passes.
+set +e
+pristine_out="$(cd "$SANDBOX" && dotnet "$TOOLING_DLL" container-policy verify 2>&1)"
+pristine_rc=$?
+set -e
+if [[ "$pristine_rc" -ne 0 ]]; then
+    echo "FAIL: pristine policy check failed (rc=$pristine_rc)" >&2
+    echo "--- pristine out ---" >&2
+    echo "$pristine_out" >&2
     exit 1
 fi
+echo "OK: pristine policy check passes"
+
+# Step 2: mutate the action pin in BOTH workflow files and assert
+# failure.  The mutation rewrites every
+# `actions/checkout@<full-SHA>` (optionally followed by a
+# `# v6.x` comment) to the un-pinned `actions/checkout@v6`.
+for workflow in "$SANDBOX/.github/workflows/harbor.yml" "$SANDBOX/.github/workflows/harbor-build-image.yml"; do
+    sed -i.bak -E \
+        's|actions/checkout@[0-9a-f]{40}([[:space:]]*#[^[:space:]].*)?|actions/checkout@v6|g' \
+        "$workflow"
+    rm -f "$workflow.bak"
+done
 
 # Sanity check: every checkout reference in the mutated tree must now
 # be `@v6`.
@@ -128,7 +134,6 @@ if ! grep -E 'actions/checkout@v6' "$SANDBOX/.github/workflows/harbor.yml" "$SAN
 fi
 if grep -E 'actions/checkout@[0-9a-f]{40}' "$SANDBOX/.github/workflows/harbor.yml" "$SANDBOX/.github/workflows/harbor-build-image.yml" >/dev/null; then
     echo "FAIL: a SHA-pinned actions/checkout survived the mutation" >&2
-    grep -E 'actions/checkout@[0-9a-f]{40}' "$SANDBOX/.github/workflows/harbor.yml" "$SANDBOX/.github/workflows/harbor-build-image.yml" >&2 || true
     exit 1
 fi
 
@@ -136,7 +141,7 @@ fi
 # message.  Run with `set +e` so we can capture both the output and
 # the exit code without aborting the test on the expected failure.
 set +e
-mutated_out="$(python3 "$SANDBOX/scripts/verify_container_policy.py" 2>&1)"
+mutated_out="$(cd "$SANDBOX" && dotnet "$TOOLING_DLL" container-policy verify 2>&1)"
 mutated_rc=$?
 set -e
 if [[ "$mutated_rc" -eq 0 ]]; then
@@ -145,7 +150,7 @@ if [[ "$mutated_rc" -eq 0 ]]; then
     echo "$mutated_out" >&2
     exit 1
 fi
-if ! grep -Eq 'pin|full SHA|unapproved external action' <<<"$mutated_out"; then
+if ! grep -Eq 'pin|full SHA|unapproved external action|action_pin|action_allowlist|action_sha_pin' <<<"$mutated_out"; then
     echo "FAIL: policy failure message does not mention a pin problem" >&2
     echo "--- mutated out ---" >&2
     echo "$mutated_out" >&2
@@ -155,7 +160,16 @@ fi
 echo "OK: mutated @v6 policy check failed as expected (rc=$mutated_rc)"
 
 # Step 4: the original repository tree must still pass (defence in depth).
-python3 "$POLICY" >/dev/null
+set +e
+original_out="$(cd "$ROOT" && dotnet "$TOOLING_DLL" container-policy verify 2>&1)"
+original_rc=$?
+set -e
+if [[ "$original_rc" -ne 0 ]]; then
+    echo "FAIL: original policy check failed (rc=$original_rc)" >&2
+    echo "--- original out ---" >&2
+    echo "$original_out" >&2
+    exit 1
+fi
 echo "OK: original policy check still passes after the sandbox mutation"
 
 echo "action-pin mutation test passed"

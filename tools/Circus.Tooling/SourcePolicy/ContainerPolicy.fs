@@ -14,6 +14,8 @@ open System
 open System.IO
 open System.Text.RegularExpressions
 
+open Circus.Tooling.SourcePolicy.GateSummary
+
 exception CheckFailed of string
 
 type Violation = {
@@ -27,7 +29,9 @@ type ContainerPolicyReport = {
     ChecksTotal: int
     ChecksPassed: int
     ChecksFailed: int
+    ViolationsTotal: int
     Violations: Violation list
+    OperationalFailures: string list
 }
 
 let private fail (msg: string) : 'a = raise (CheckFailed msg)
@@ -79,25 +83,23 @@ let private requireExecutable (root: string) (relative: string) (id: string) : V
         [ { Check = id; Id = id; Path = relative; Detail = sprintf "required shell script is not executable: %s" relative } ]
     else []
 
-let private gitTrackedFiles (root: string) : string list =
-    try
-        let psi = System.Diagnostics.ProcessStartInfo()
-        psi.FileName <- "git"
-        psi.Arguments <- "ls-files --cached --others --exclude-standard"
-        psi.RedirectStandardOutput <- true
-        psi.RedirectStandardError <- true
-        psi.UseShellExecute <- false
-        psi.CreateNoWindow <- true
-        psi.WorkingDirectory <- root
-        use proc = System.Diagnostics.Process.Start psi
-        proc.WaitForExit()
-        if proc.ExitCode <> 0 then []
-        else
-            (proc.StandardOutput.ReadToEnd()).Split('\n')
-            |> Array.map (fun s -> s.Trim())
-            |> Array.filter (fun s -> s <> "")
-            |> Array.toList
-    with _ -> []
+/// Outcome of enumerating the tracked file inventory.  ``Ok`` carries
+/// the relative paths; ``Error`` carries the git exit code (which
+/// the policy runner must treat as an operational failure, not a
+/// policy pass — see CP-29).
+type TrackedInventory =
+    | TrackedFiles of string list
+    | TrackedInventoryFailed of exitCode: int
+
+/// Tracked-file inventory used by container-policy (CP-29).  The
+/// underlying helper in ``GateSummary.fs`` is the single source of
+/// truth: it uses NUL-delimited ``git ls-files -z`` so file paths
+/// with newlines are handled correctly, and it surfaces Git
+/// failures as ``Error`` rather than an empty list.
+let gitTrackedFiles (root: string) : TrackedInventory =
+    match gitTrackedFilesResult root with
+    | Ok files -> TrackedFiles files
+    | Error code -> TrackedInventoryFailed code
 
 /// CP-01: required files must exist
 let private checkRequiredFiles (root: string) : Violation list =
@@ -512,7 +514,7 @@ let private checkElmInstaller (root: string) : Violation list =
                             Id = "CP-21_elm_marker"
                             Path = "Dockerfile.frontend"
                             Detail = sprintf "frontend Dockerfile is missing the required Elm installer marker: %s" marker } :: violations
-    if not (Regex("0\.19\.2|Elm\\\\s0\.19\.2").IsMatch frontend) then
+    if not (Regex("0\.19\.2|Elm\\s0\.19\.2").IsMatch frontend) then
         violations <- { Check = "CP-21_elm_version"
                         Id = "CP-21_elm_version"
                         Path = "Dockerfile.frontend"
@@ -688,17 +690,27 @@ let private checkActionPins (root: string) : Violation list =
                         Detail = "reusable workflows must depend on actions/checkout (no third-party checkouts detected)" } :: violations
     List.rev violations
 
-/// CP-29: tracked secret-like file rejection
+/// CP-29: tracked secret-like file rejection.  When Git fails we
+/// must surface the failure as an operational error (exit 2 in the
+/// gate runner).  Returning an empty list would silently pass the
+/// policy even though we cannot prove the secret scan is
+/// complete.
 let private checkTrackedSecrets (root: string) : Violation list =
-    let tracked = gitTrackedFiles root
-    let secretPattern = Regex("(^|/)\\.env(\\.|$)|.*\\.(pem|key|p12|pfx|dockerconfigjson)$", RegexOptions.IgnoreCase)
-    let leaked = tracked |> List.filter (fun p -> secretPattern.IsMatch p)
-    if List.isEmpty leaked then []
-    else
+    match gitTrackedFiles root with
+    | TrackedInventoryFailed code ->
         [ { Check = "CP-29_tracked_secrets"
             Id = "CP-29_tracked_secrets"
-            Path = "<tracked files>"
-            Detail = sprintf "secret-like files are tracked in the build context: %A" leaked } ]
+            Path = "<git inventory>"
+            Detail = sprintf "git ls-files failed (exit=%d); cannot prove the secret scan is complete" code } ]
+    | TrackedFiles tracked ->
+        let secretPattern = Regex("(^|/)\\.env(\\.|$)|.*\\.(pem|key|p12|pfx|dockerconfigjson)$", RegexOptions.IgnoreCase)
+        let leaked = tracked |> List.filter (fun p -> secretPattern.IsMatch p)
+        if List.isEmpty leaked then []
+        else
+            [ { Check = "CP-29_tracked_secrets"
+                Id = "CP-29_tracked_secrets"
+                Path = "<tracked files>"
+                Detail = sprintf "secret-like files are tracked in the build context: %A" leaked } ]
 
 /// CP-30: final-stage runtime-material exclusions
 let private checkFinalStageExclusions (root: string) : Violation list =
@@ -809,27 +821,50 @@ let runCheckById (id: string) (root: string) : Violation list =
     | Some (_, fn) -> fn root
     | None -> [ { Check = id; Id = id; Path = "<unknown>"; Detail = sprintf "unknown check id: %s" id } ]
 
+/// Run every check and produce a unified report.  ``ChecksFailed``
+/// counts the number of *checks* that produced at least one
+/// violation, distinct from ``ViolationsTotal`` which is the raw
+/// count of violations.
 let verify (root: string) : ContainerPolicyReport =
     let mutable passed = 0
-    let mutable failed : Violation list = []
-    for (_, fn) in checks do
+    let mutable failedChecks = 0
+    let mutable allViolations : Violation list = []
+    let mutable operational : string list = []
+    for (id, fn) in checks do
         let v = fn root
-        if List.isEmpty v then passed <- passed + 1
-        else failed <- List.rev v @ failed
+        if List.isEmpty v then
+            passed <- passed + 1
+        else
+            failedChecks <- failedChecks + 1
+            // Treat CP-29 Git inventory failure as an operational
+            // error that the runner must surface as exit 2.
+            if id = "CP-29_tracked_secrets" &&
+               List.exists (fun x -> x.Detail.Contains "git ls-files failed") v then
+                operational <- "CP-29 git inventory failed (cannot prove the secret scan is complete)" :: operational
+            allViolations <- List.rev v @ allViolations
     { ChecksTotal = List.length checks
       ChecksPassed = passed
-      ChecksFailed = List.length failed
-      Violations = failed }
+      ChecksFailed = failedChecks
+      ViolationsTotal = List.length allViolations
+      Violations = allViolations
+      OperationalFailures = operational }
 
 let runVerify (root: string) : int =
     try
         let report = verify root
-        // Deterministic single-line success output required by ACT §6.
-        if List.isEmpty report.Violations then
+        // Operational failures (e.g. git inventory failure) are
+        // exit 2: they cannot be proved safe by the policy itself.
+        if not (List.isEmpty report.OperationalFailures) then
+            stderr.WriteLine(sprintf "container-policy verify: FAIL (operational: %d)" (List.length report.OperationalFailures))
+            for op in report.OperationalFailures do
+                stderr.WriteLine(sprintf "  - %s" op)
+            2
+        elif List.isEmpty report.Violations then
             stdout.WriteLine(sprintf "container-policy verify: PASS (checks=%d)" report.ChecksTotal)
             0
         else
-            stderr.WriteLine(sprintf "container-policy verify: FAIL (checks=%d, failed=%d)" report.ChecksTotal report.ChecksFailed)
+            stderr.WriteLine(sprintf "container-policy verify: FAIL (checks=%d, failed=%d, violations=%d)"
+                report.ChecksTotal report.ChecksFailed report.ViolationsTotal)
             for v in report.Violations do
                 stderr.WriteLine(sprintf "  - [%s] %s: %s" v.Id v.Path v.Detail)
             1
