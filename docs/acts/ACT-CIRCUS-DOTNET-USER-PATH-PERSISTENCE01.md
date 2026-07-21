@@ -21,13 +21,9 @@ this_act:
   id: ACT-CIRCUS-DOTNET-USER-PATH-PERSISTENCE01
   status: PARTIAL
   relationship: adjacent environment prerequisite
-  blocks:
-    - dotnet build
-    - dotnet test
-    - dotnet tool restore
-    - Fantomas verification
-    - make no-force-push
-    - make test-no-force-push
+  environment_ready: true
+  remaining_acceptance:
+    - fresh VSCodium terminal proof
 ```
 
 This ACT does not replace, absorb, or rename CORRECTION02. It repairs the user execution environment and then hands control back to CORRECTION02.

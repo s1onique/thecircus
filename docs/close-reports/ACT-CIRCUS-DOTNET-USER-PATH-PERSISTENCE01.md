@@ -353,10 +353,12 @@ To rollback this ACT:
 
 ## Next Steps
 
-1. **Verify VSCodium fresh terminal** (user action required - full editor restart)
-2. **Commit environment ACT files** to repository
-3. **Update close report** with commit/tree OIDs
-4. **Return control** to ACT-CIRCUS-NO-FORCE-PUSH-DOCTRINE-GATE01-CORRECTION02 at P0-1 compile verification
+```yaml
+next_steps:
+  - verify fresh VSCodium terminal after full editor restart
+  - append the VSCodium result in a documentation-only forward commit
+  - resume ACT-CIRCUS-NO-FORCE-PUSH-DOCTRINE-GATE01-CORRECTION02 immediately
+```
 
 ---
 
