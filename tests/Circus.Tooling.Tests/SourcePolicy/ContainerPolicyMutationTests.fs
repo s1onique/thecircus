@@ -350,7 +350,7 @@ permissions:
         }
 
     let private findOnlyResult results =
-        results |> Map.find (MutationCaseId.fromString canonicalCaseId)
+        results |> Map.tryFind (MutationCaseId.fromString canonicalCaseId)
 
     let private writeUnit (root: string) (path: string) (content: string)
         : Result<unit, string> =
@@ -371,7 +371,7 @@ permissions:
                     writeAndHash root ".github/workflows/harbor.yml"
                         "name: harbor\non:\n  push:\n    branches:\n      - main\n"
                     |> Result.map (fun _ -> ())
-                let case = trivialCase "CP-04_workflow_triggers" trivialMutator badBaseline
+                let case = trivialCase trivialMutator badBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
@@ -483,7 +483,7 @@ permissions:
                 // that error rather than swallow it.
                 let badBaseline _ : Result<unit, string> =
                     Error (sprintf "baseline refused: %s" "deliberate")
-                let case = trivialCase "CP-04_bad_baseline" trivialMutator badBaseline
+                let case = trivialCase trivialMutator badBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
@@ -552,7 +552,7 @@ permissions:
                         BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "fabricated-before" ]
                         AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "fabricated-after" ]
                     }
-                let case = trivialCase "CP-04_fabricated" fabricatedMutator trivialBaseline
+                let case = trivialCase fabricatedMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
