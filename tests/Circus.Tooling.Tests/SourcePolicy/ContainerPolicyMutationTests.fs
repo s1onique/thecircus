@@ -151,20 +151,6 @@ let sequencedMutationTests =
 module RegistryValidationProofs =
     open Circus.Tooling.Tests.SourcePolicy.ContainerPolicyMutationRegistry
 
-    let private makeSyntheticCase (id: string) =
-        {
-            Id = MutationCaseId.fromString id
-            Description = "synthetic"
-            ExpectedCheckId = "CP-01_required_files"
-            PrepareBaseline = fun _ -> Ok ()
-            ApplyMutation = fun _ -> Ok {
-                ChangedPaths = [ "x" ]
-                BeforeHashes = Map.ofList [ "x", "a" ]
-                AfterHashes = Map.ofList [ "x", "b" ]
-            }
-            AllowedAdditionalCheckIds = Set.empty
-        }
-
     [<Tests>]
     let tests =
         testList "Container policy mutation registry validation" [
@@ -191,20 +177,52 @@ module RegistryValidationProofs =
             }
 
             test "executor-level duplicate registry fails before any case body runs" {
-                let dupCase = makeSyntheticCase "CP-01_required_files"
-                let cases = dupCase :: mutationCases
-                let mutable ran = false
+                let duplicateId = "CP-01_required_files"
+                let duplicateCase =
+                    {
+                        Id = MutationCaseId.fromString duplicateId
+                        Description = "duplicate-registry proof"
+                        ExpectedCheckId = duplicateId
+                        PrepareBaseline =
+                            fun _ ->
+                                failwith "duplicate registry must not execute"
+                        ApplyMutation =
+                            fun _ ->
+                                failwith "duplicate registry must not execute"
+                        AllowedAdditionalCheckIds = Set.empty
+                    }
+                let cases = [ duplicateCase; duplicateCase ]
+
+                Expect.equal
+                    (validateMutationRegistry cases)
+                    (DuplicateCaseIds [ duplicateId ])
+                    "duplicate IDs must be rejected before execution"
+
+                let mutable seamTouched = false
                 let trapSeam =
-                    { defaultWorkspaceSeam with
-                        CreateTempDir = fun () -> ran <- true; Ok (System.IO.Path.GetTempPath()) }
+                    { CreateTempDir =
+                        fun () ->
+                            seamTouched <- true
+                            failwith "duplicate registry must not execute"
+                      RunCheck =
+                        fun _ _ ->
+                            seamTouched <- true
+                            failwith "duplicate registry must not execute"
+                      DeleteRecursive =
+                        fun _ ->
+                            seamTouched <- true
+                            failwith "duplicate registry must not execute" }
                 match executeMutationRegistryWithSeam cases trapSeam with
-                | Ok _ -> failtestf "duplicate registry must not return Ok"
-                | Error (InvalidRegistry (DuplicateCaseIds dups)) ->
-                    Expect.isNonEmpty dups "duplicate ids must be reported"
-                    Expect.isFalse ran
-                        "no case body may run when registry is invalid"
-                | Error (InvalidRegistry other) ->
-                    failtestf "expected DuplicateCaseIds, got %A" other
+                | Result.Error (InvalidRegistry (DuplicateCaseIds [ actual ]))
+                    when actual = duplicateId ->
+                    ()
+                | actual ->
+                    failtestf
+                        "expected DuplicateCaseIds [%s], got %A"
+                        duplicateId
+                        actual
+                Expect.isFalse seamTouched
+                    "duplicate registry must short-circuit execution"
             }
 
             test "empty mutation case ID is unrepresentable" {
@@ -252,8 +270,14 @@ module RegistryValidationProofs =
                       AllowedAdditionalCheckIds = Set.empty }
                 let cases = [ unknownCase ]
                 match validateMutationRegistry cases with
-                | UnknownExpectedCheckIds [ unknownId ] -> ()
-                | actual -> failtestf "expected UnknownExpectedCheckIds, got %A" actual
+                | UnknownExpectedCheckIds [ actual ]
+                    when actual = unknownId ->
+                    ()
+                | actual ->
+                    failtestf
+                        "expected UnknownExpectedCheckIds [%s], got %A"
+                        unknownId
+                        actual
                 let mutable seamTouched = false
                 let trapSeam =
                     { defaultWorkspaceSeam with
@@ -267,8 +291,16 @@ module RegistryValidationProofs =
                             seamTouched <- true
                             Result.Error "executor must not start" }
                 match executeMutationRegistryWithSeam cases trapSeam with
-                | Result.Error (InvalidRegistry (UnknownExpectedCheckIds [ unknownId ])) -> ()
-                | actual -> failtestf "expected exact unknown identity failure, got %A" actual
+                | Result.Error (
+                    InvalidRegistry (
+                        UnknownExpectedCheckIds [ actual ]
+                    )
+                  ) when actual = unknownId ->
+                    ()
+                | actual ->
+                    failtestf
+                        "expected exact unknown identity failure, got %A"
+                        actual
                 Expect.isFalse seamTouched
                     "invalid registry must short-circuit execution"
             }
@@ -433,20 +465,24 @@ permissions:
                 // workspace, so it returns
                 // MutationApplicationFailed regardless of the
                 // observed diff.
-                let escapingMutator _ : Result<MutationReceipt, string> =
-                    Ok {
-                        ChangedPaths = [ "../outside.txt" ]
-                        BeforeHashes = Map.ofList [ "../outside.txt", "fabricated-before" ]
-                        AfterHashes = Map.ofList [ "../outside.txt", "fabricated-after" ]
-                    }
+                let escapingMutator (root: string) : Result<MutationReceipt, string> =
+                    writeUnit root ".github/workflows/harbor.yml" "touched"
+                    |> Result.map (fun () ->
+                        {
+                            ChangedPaths = [ "../outside.txt" ]
+                            BeforeHashes = Map.ofList [ "../outside.txt", "fabricated-before" ]
+                            AfterHashes = Map.ofList [ "../outside.txt", "fabricated-after" ]
+                        })
                 let case = trivialCase escapingMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
                     match findOnlyResult results with
-                    | Some (Result.Error (MutationApplicationFailed msg)) ->
-                        Expect.stringContains msg "escape"
-                            "MutationApplicationFailed must mention escape"
+                    | Some (Result.Error (MutationApplicationFailed message)) ->
+                        Expect.stringContains
+                            message
+                            "../outside.txt"
+                            "diagnostic must retain the rejected path"
                     | Some (Result.Error other) ->
                         failtestf "expected MutationApplicationFailed, got %A" other
                     | _ -> failtestf "escape path must return Error MutationApplicationFailed"
@@ -700,9 +736,16 @@ permissions:
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
                     match findOnlyResult results with
-                    | Some (Result.Error (UnexpectedViolation v)) ->
-                        Expect.equal v.Id "CP-99_unrelated"
-                            "the unallowed additional violation must be preserved"
+                    | Some (Result.Error (UnexpectedViolation violation)) ->
+                        Expect.equal
+                            violation.Check
+                            "CP-99_unrelated"
+                            "unexpected check identity"
+
+                        Expect.equal
+                            violation.Id
+                            "CP-99_unrelated"
+                            "unexpected violation identity"
                     | Some (Result.Error other) ->
                         failtestf "expected UnexpectedViolation, got %A" other
                     | _ -> failtestf "expected plus unrelated must return UnexpectedViolation"
