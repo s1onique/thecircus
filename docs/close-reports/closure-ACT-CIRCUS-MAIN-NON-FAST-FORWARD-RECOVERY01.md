@@ -47,7 +47,7 @@ format_check_result                    : PASS (exit 0, no files need formatting)
 implementation_commit                  : d87d790972d017f78209d29a357c455400d33e91
 implementation_tree                   : c80cd9298f2c2b1f63de1a8879b9eb89ffaedf11
 
-closure_commit                         : (recorded after this commit)
+closure_commit                         : 9bded1671eb9c5aa8e0e55061c4d066ef61cb6e7
 
 final_tested_commit                   : d87d790972d017f78209d29a357c455400d33e91
 final_tested_tree                     : c80cd9298f2c2b1f63de1a8879b9eb89ffaedf11
@@ -61,13 +61,13 @@ canonical_make_gate_exit_code          : 3 (test-postgres; pre-existing infrastr
 
 remote_commit_before_push             : 8dfe88906b07b913d7c53669048ba14a1b71cb60
 push_command                          : git push origin main
-push_result                           : (recorded post-push)
-remote_commit_after_push              : (recorded post-push)
-remote_tree_after_push                : (recorded post-push)
+push_result                           : SUCCESS (8dfe889..9bded16, ordinary fast-forward)
+remote_commit_after_push              : 9bded1671eb9c5aa8e0e55061c4d066ef61cb6e7
+remote_tree_after_push               : 041e5a91de2fbccb64a66631f68decb720cad777
 
 force_update_used                     : false
-final_worktree_status                 : (verified post-push)
-final_branch_status                   : (verified post-push)
+final_worktree_status                 : clean (git status --porcelain=v1: empty)
+final_branch_status                   : synchronized with origin/main (ahead=0, behind=0)
 ```
 
 ## Phase A — Clean Recovery Boundary (from parent ACT)
