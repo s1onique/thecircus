@@ -329,6 +329,12 @@ let private guardedEndPattern =
 /// present exactly once, in order, and the slice is non-empty.
 /// Returns ``Error`` with a structured diagnostic on every other
 /// condition.  The guard never silently passes.
+///
+/// Marker ordering is decided by the relative index of the FIRST
+/// begin marker line and the FIRST end marker line.  When the end
+/// marker precedes the begin marker in the source, ``EndBeforeBegin``
+/// is returned.  When both markers are present, duplicates are
+/// detected first; only a unique pair proceeds to ordering.
 let extractGuardedRegion (source: string) : Result<string, GuardRegionFailure> =
     let begins = guardedBeginPattern.Matches(source)
     let ends   = guardedEndPattern.Matches(source)
@@ -339,17 +345,18 @@ let extractGuardedRegion (source: string) : Result<string, GuardRegionFailure> =
     else
         let beginMatch = begins.[0]
         let endMatch   = ends.[0]
-        // Region spans from end-of-begin-line to start-of-end-line.
-        let beginLineEnd = beginMatch.Index + beginMatch.Length
-        let endLineStart = endMatch.Index
-        if endLineStart < beginLineEnd then
+        if endMatch.Index < beginMatch.Index then
             Error EndBeforeBegin
         else
+            // Region spans from end-of-begin-line to start-of-end-line.
+            let beginLineEnd = beginMatch.Index + beginMatch.Length
+            let endLineStart = endMatch.Index
             let region = source.Substring(beginLineEnd, endLineStart - beginLineEnd)
             if String.IsNullOrWhiteSpace(region) then
                 Error EmptyGuardedRegion
             else
                 Ok region
+
 
 let private guardedBeginMarker = "// BASH-AVAILABILITY-GUARD-BEGIN"
 let private guardedEndMarker   = "// BASH-AVAILABILITY-GUARD-END"
@@ -762,18 +769,21 @@ let bashAvailabilityTests =
             | other -> failtestf "Expected Error DuplicateEndMarker, got %A" other
         }
 
-        test "regression guard: extractGuardedRegion diagnostic coverage includes EndBeforeBegin" {
-            // EndBeforeBegin is reachable only via reflection or by
-            // hand-constructing a region where the end marker appears
-            // before the begin marker.  The diagnostic exists for
-            // future-proofing the guard against additional extraction
-            // strategies; verify the DU case is defined and that the
-            // discriminator string round-trips.
-            let sample = EndBeforeBegin
-            let s = sprintf "%A" sample
-            Expect.stringContains s "EndBeforeBegin"
-                "EndBeforeBegin diagnostic is reachable in the type"
+        test "regression guard: extractGuardedRegion rejects reversed marker order (end before begin)" {
+            // Genuine reversed-marker fixture: the END line appears
+            // BEFORE the BEGIN line in the source.  This is the
+            // canonical case that produces ``Error EndBeforeBegin``.
+            let source =
+                "let prelude = 0\n"
+                + "// BASH-AVAILABILITY-GUARD-END\n"
+                + "let middle = 1\n"
+                + "// BASH-AVAILABILITY-GUARD-BEGIN\n"
+                + "let postlude = 2\n"
+            match extractGuardedRegion source with
+            | Error EndBeforeBegin -> ()
+            | other -> failtestf "Expected Error EndBeforeBegin, got %A" other
         }
+
 
 
         test "regression guard: extractGuardedRegion rejects an empty guarded region" {

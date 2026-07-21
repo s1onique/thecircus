@@ -2,18 +2,19 @@ module Circus.Tooling.SourcePolicy.GateSummary
 
 /// F# implementation of the gate-summary regenerator.
 ///
+/// Document construction is separated from artifact writing so
+/// tests can exercise the producer with an injected
+/// ``ExternalCheckRunner`` and write only to a unique temporary
+/// path.  The production ``regenerate`` command composes them
+/// against the real checkout.
+///
 /// The container-publication-policy check is sourced from
 /// ``ContainerPolicy.verify`` invoked **in-process**.  No subprocess
 /// is launched for the container-policy check; status, exit code,
 /// violation count, and operational-failure state all come from
-/// one structured invocation.
-///
-/// The other canonical checks (executable-shell-tests,
-/// action-pin-mutation-test) are executed via the process runner.
-///
-/// All checks participate in a single verdict pass: the count
-/// ``violations_total`` is grounded in the structured
-/// ``ContainerPolicyReport`` produced by the in-process check.
+/// one structured invocation.  The other canonical checks are
+/// delegated to an injected runner so tests can prove the exact
+/// command contract without spawning real subprocesses.
 
 open System
 open System.Diagnostics
@@ -70,6 +71,24 @@ type GateSummaryDoc = {
     TestedTreeOid: string
 }
 
+/// Externally-supplied identity used to bind the produced
+/// document to a specific implementation.  ``regenerate`` reads
+/// this from the repository; tests inject deterministic values.
+type TestedIdentity = {
+    CommitOid: string
+    TreeOid: string
+}
+
+/// Contract for an external check runner.  Production injects the
+/// ``ProcessRunner``-backed implementation; tests inject a
+/// deterministic or failing implementation that records every
+/// invocation.
+type ExternalCheckRunner =
+    string         // check name
+        -> string list // argv
+        -> string     // working directory
+        -> CheckStatus
+
 let internal ValidOverallStatuses = set [ "pass"; "fail"; "unavailable" ]
 let internal ValidCheckStatuses   = set [ "pass"; "fail"; "skip"; "unavailable" ]
 
@@ -100,15 +119,14 @@ let private runGit (args: string list) (workingDir: string) : Result<string, int
     | BodyFailure _ -> Result.Error -1
     | Cancelled _ -> Result.Error -1
 
-let private testedCommitOid (workingDir: string) : string =
+let private testedIdentityFromGit (workingDir: string) : TestedIdentity =
     match runGit [ "rev-parse"; "HEAD" ] workingDir with
-    | Result.Ok v -> v
-    | Result.Error _ -> ""
-
-let private testedTreeOid (workingDir: string) : string =
-    match runGit [ "rev-parse"; "HEAD^{tree}" ] workingDir with
-    | Result.Ok v -> v
-    | Result.Error _ -> ""
+    | Result.Ok v -> { CommitOid = v; TreeOid = "" }
+    | Result.Error _ -> { CommitOid = ""; TreeOid = "" }
+    |> fun partial ->
+        match runGit [ "rev-parse"; "HEAD^{tree}" ] workingDir with
+        | Result.Ok t -> { partial with TreeOid = t }
+        | Result.Error _ -> partial
 
 /// Build the container-publication-policy ``CheckStatus`` from a
 /// pre-produced ``ContainerPolicyReport``.  The caller is
@@ -133,83 +151,40 @@ let private containerPolicyCheck (report: ContainerPolicy.ContainerPolicyReport)
         Command = "<in-process ContainerPolicy.verify>"
     }
 
-/// Run one of the external canonical checks (executable-shell-tests,
-/// action-pin-mutation-test).  These checks intentionally launch a
-/// subprocess because their semantics depend on shell behaviour.
-let private runExternalCheck (name: string) (cmd: string list) (workingDir: string) : CheckStatus =
-    if List.isEmpty cmd then
-        { Name = name; Status = "unavailable"; ExitCode = -1; Command = "" }
-    else
-        try
-            let result = runProcessText cmd (Some workingDir) CancellationToken.None
-            let status, exitCode = statusForOutcome result.Outcome
-            { Name = name
-              Status = status
-              ExitCode = exitCode
-              Command = String.concat " " cmd }
-        with _ ->
-            { Name = name; Status = "unavailable"; ExitCode = -1; Command = String.concat " " cmd }
-
-let private externalChecks (root: string) : CheckStatus list =
+/// Canonical list of external checks.  Each entry records the
+/// exact check name and argv that MUST be passed to the injected
+/// runner.  The source-policy-tests entry is the canonical
+/// invocation of ``make test-source-policy``; the wiring test
+/// proves this exact command is issued.
+let CanonicalChecks : (string * string list) list =
     [
-        runExternalCheck "executable-shell-tests"
-            [ "bash"; "tests/ci/test_build_publish_shell.sh" ] root
-        runExternalCheck "action-pin-mutation-test"
-            [ "bash"; "tests/ci/test_action_pin_mutation.sh" ] root
-        // Canonical source-policy test invocation.  The gate summary
-        // records ``source-policy-tests`` as ``pass`` only when
-        // ``make test-source-policy`` exits 0.  The Makefile target
-        // builds the tooling and the tooling tests, then runs the
-        // full Expecto suite through ``Circus.Tooling.Tests``.  This
-        // is the same command wired into ``dev-gate-linux`` so the
-        // artefact is fail-closed at every consumer.
-        //
-        // To break the otherwise-circular dependency between
-        // ``make test-source-policy`` and the gate producer (which
-        // would otherwise re-invoke make via ``gate run``), the
-        // caller can set ``CIRCUS_GATE_SKIP_SOURCE_POLICY=1`` so the
-        // check is recorded as ``unavailable`` without launching the
-        // make invocation.  The wiring test in ``GateSummaryWiringTests``
-        // uses this escape hatch so the producer can be exercised
-        // without recursing into another ``make test-source-policy``.
-        let sourcePolicySkip =
-            System.Environment.GetEnvironmentVariable("CIRCUS_GATE_SKIP_SOURCE_POLICY")
-        let sourcePolicyCheck =
-            if sourcePolicySkip = "1" then
-                { Name = "source-policy-tests"
-                  Status = "unavailable"
-                  ExitCode = -1
-                  Command = "make test-source-policy (skipped via CIRCUS_GATE_SKIP_SOURCE_POLICY)" }
-            else
-                runExternalCheck "source-policy-tests"
-                    [ "make"; "test-source-policy" ] root
-        sourcePolicyCheck
+        "executable-shell-tests",   [ "bash"; "tests/ci/test_build_publish_shell.sh" ]
+        "action-pin-mutation-test", [ "bash"; "tests/ci/test_action_pin_mutation.sh" ]
+        "source-policy-tests",      [ "make"; "test-source-policy" ]
     ]
 
 
+let private externalChecks (root: string) (runCheck: ExternalCheckRunner) : CheckStatus list =
+    CanonicalChecks
+    |> List.map (fun (name, argv) -> runCheck name argv root)
 
-let private nowIso () : string =
-    DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
-
-let serialize (doc: GateSummaryDoc) : string =
-    let opts = JsonSerializerOptions()
-    opts.WriteIndented <- true
-    opts.DefaultIgnoreCondition <- JsonIgnoreCondition.Never
-    JsonSerializer.Serialize(doc, opts)
-
-let regenerate (root: string) : GateSummaryDoc =
-    // SINGLE in-process container-policy invocation drives both the
-    // check status and the violation count.  No subprocess is launched
-    // for the policy check; status and counts come from the same
-    // structured report.
+/// Build the canonical gate document.  Pure: no filesystem side
+/// effects, no subprocess launch other than those triggered by the
+/// injected runner.  Tests call this with a deterministic runner
+/// to assert the exact command contract.
+let buildDocument
+    (root: string)
+    (identity: TestedIdentity)
+    (runCheck: ExternalCheckRunner)
+    : GateSummaryDoc =
     let report = ContainerPolicy.verify root
     let cpCheck = containerPolicyCheck report
-    let extChecks = externalChecks root
+    let extChecks = externalChecks root runCheck
     let checks = cpCheck :: extChecks
 
-    let passed      = checks |> List.filter (fun c -> c.Status = "pass") |> List.length
-    let skipped     = checks |> List.filter (fun c -> c.Status = "skip") |> List.length
-    let unavailable = checks |> List.filter (fun c -> c.Status = "unavailable") |> List.length
+    let passed       = checks |> List.filter (fun c -> c.Status = "pass") |> List.length
+    let skipped      = checks |> List.filter (fun c -> c.Status = "skip") |> List.length
+    let unavailable  = checks |> List.filter (fun c -> c.Status = "unavailable") |> List.length
     let failedChecks = checks |> List.filter (fun c -> c.Status = "fail") |> List.length
 
     let overall =
@@ -220,9 +195,9 @@ let regenerate (root: string) : GateSummaryDoc =
     let violationsTotal = report.ViolationsTotal
     let violationsOperational = List.length report.OperationalFailures
 
-    let doc = {
+    {
         SchemaVersion = 1
-        GeneratedAt = nowIso ()
+        GeneratedAt = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
         Tool = "circus-regenerate-gate-summary"
         OverallStatus = overall
         ChecksTotal = List.length checks
@@ -233,15 +208,76 @@ let regenerate (root: string) : GateSummaryDoc =
         ChecksSkipped = skipped
         ChecksUnavailable = unavailable
         Checks = checks
-        TestedCommitOid = testedCommitOid root
-        TestedTreeOid = testedTreeOid root
+        TestedCommitOid = identity.CommitOid
+        TestedTreeOid = identity.TreeOid
     }
 
+/// Strict diagnostic returned by ``writeDocument`` when the
+/// artefact cannot be written.
+type GateWriteFailure =
+    | DirectoryCreationFailed of message: string
+    | FileWriteFailed of message: string
+
+/// Serialize and write a gate document to ``outputPath``.  The
+/// directory is created if absent.  Returns ``Ok`` on success and
+/// ``Error`` on failure so callers (including tests) can compose
+/// without ``try``/``raise``.
+let writeDocument
+    (outputPath: string)
+    (doc: GateSummaryDoc)
+    : Result<unit, GateWriteFailure> =
+    try
+        let dir = Path.GetDirectoryName outputPath
+        if not (String.IsNullOrEmpty dir) && not (Directory.Exists dir) then
+            try Directory.CreateDirectory dir |> ignore
+            with ex ->
+                Error (DirectoryCreationFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
+                |> ignore
+        let serialized =
+            let opts = JsonSerializerOptions()
+            opts.WriteIndented <- true
+            opts.DefaultIgnoreCondition <- JsonIgnoreCondition.Never
+            JsonSerializer.Serialize(doc, opts)
+        File.WriteAllText(outputPath, serialized + "\n")
+        Ok ()
+    with ex ->
+        Error (FileWriteFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
+
+/// Serialize a gate document to a string.  Pure.
+let serialize (doc: GateSummaryDoc) : string =
+    let opts = JsonSerializerOptions()
+    opts.WriteIndented <- true
+    opts.DefaultIgnoreCondition <- JsonIgnoreCondition.Never
+    JsonSerializer.Serialize(doc, opts)
+
+/// Production runner that launches a real subprocess via the
+/// shared ``ProcessRunner``.  Used by ``regenerate`` and by the
+/// canonical gate.  Status is derived from the process outcome.
+let productionRunner : ExternalCheckRunner =
+    fun (name: string) (argv: string list) (workingDir: string) ->
+        try
+            let result = runProcessText argv (Some workingDir) CancellationToken.None
+            let status, exitCode = statusForOutcome result.Outcome
+            { Name = name
+              Status = status
+              ExitCode = exitCode
+              Command = String.concat " " argv }
+        with _ ->
+            { Name = name; Status = "unavailable"; ExitCode = -1; Command = String.concat " " argv }
+
+/// Production entry point.  Reads the implementation identity from
+/// git, composes the canonical artefact against the production
+/// runner, and writes ``.factory/gate-summary.json``.
+let regenerate (root: string) : GateSummaryDoc =
+    let identity = testedIdentityFromGit root
+    let doc = buildDocument root identity productionRunner
     let target = Path.Combine(root, ".factory", "gate-summary.json")
-    let dir = Path.GetDirectoryName target
-    if not (Directory.Exists dir) then Directory.CreateDirectory dir |> ignore
-    let serialized = serialize doc
-    File.WriteAllText(target, serialized + "\n")
+    match writeDocument target doc with
+    | Ok () -> ()
+    | Error (DirectoryCreationFailed m) ->
+        stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (mkdir %s)" m)
+    | Error (FileWriteFailed m) ->
+        stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (write %s)" m)
     doc
 
 let internal resolveToolingDll (root: string) : string =
