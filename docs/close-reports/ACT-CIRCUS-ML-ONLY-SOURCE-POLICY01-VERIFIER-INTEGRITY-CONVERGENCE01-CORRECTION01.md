@@ -994,3 +994,201 @@ with the same tree OID across runs.
 Fresh-checkout proof — requires a fresh `git clone` and rerun of
 the documented verification commands; the close report documents
 the exact commands and acceptance criteria for the next consumer.
+
+## CORRECTION01 — Fresh-Checkout Proof
+
+### Work package
+
+```
+work_package: fresh-checkout-proof
+verdict: pass
+```
+
+### Source commit / tree (committed implementation)
+
+```
+implementation_commit_oid: cc5e0a51549d0676a166cc0dc0717a405265662d
+implementation_tree_oid:   c5da14be0b19af0680c803b5e0b1d2b43efa4995
+```
+
+### Fresh-clone commit / tree
+
+A genuine ``git clone --no-local`` was performed into a freshly
+created directory; ``git checkout --detach`` was used to pin the
+clone to the exact subject commit.
+
+```
+fresh_commit_oid: cc5e0a51549d0676a166cc0dc0717a405265662d
+fresh_tree_oid:   c5da14be0b19af0680c803b5e0b1d2b43efa4995
+```
+
+Both ``fresh_commit_oid`` and ``fresh_tree_oid`` equal the
+implementation commit and tree, proving the fresh clone binds the
+exact subject state.
+
+### Fresh-clone initial cleanliness
+
+``git status --porcelain`` immediately after ``git checkout --detach``
+returned empty:
+
+```
+(empty)
+```
+
+No repository-local ``bin/obj`` outputs existed before ``make``
+ran.  No untracked evidence file existed.
+
+### Complete tooling totals
+
+All 226 tests pass:
+
+```
+EXPECTO! 226 tests run in 00:00:16 for miscellaneous – 226 passed, 0 ignored, 0 failed, 0 errored.
+```
+
+The Bash availability and ProcessRunner suites are part of the 226
+total; they pass in this Bash-available environment.  P0-5 totals
+remain unchanged from prior CORRECTION01: registry=6, executor=16,
+aggregate=2, parity=31.
+
+### `make test-source-policy` exit code (fresh clone)
+
+```
+0
+```
+
+### `make dev-gate-linux` exit code (fresh clone)
+
+```
+0
+```
+
+### Final 4/4 gate summary (fresh clone)
+
+```yaml
+overall_status: pass
+checks_total: 4
+checks_passed: 4
+checks_failed: 0
+checks_unavailable: 0
+source-policy-tests:
+  status: pass
+  exit_code: 0
+  command: "make test-source-policy"
+tested_commit_oid: cc5e0a51549d0676a166cc0dc0717a405265662d
+tested_tree_oid:   c5da14be0b19af0680c803b5e0b1d2b43efa4995
+```
+
+The canonical artefact records the implementation commit and
+tree as its own tested identity — fresh-clone subject and artefact
+are bound.
+
+### Artifact before/after hashes (fresh clone)
+
+```
+before hash: 11d444f1c41e9452f3ae65ae5cd43c1e049389e9ce8872310adee7363296583b
+after  hash: 11d444f1c41e9452f3ae65ae5cd43c1e049389e9ce8872310adee7363296583b
+```
+
+The canonical artefact is byte-identical across the complete
+tooling suite.  ``gate-summary verify`` then reports PASS with the
+same tested tree ``c5da14be0b19af0680c803b5e0b1d2b43efa4995``.
+
+### Final fresh-clone cleanliness
+
+After all commands, ``git status --porcelain`` in the fresh clone
+returned empty:
+
+```
+(empty)
+```
+
+The fresh clone remains clean.  Generated paths (``.factory/``,
+``tools/Circus.Tooling/bin``, ``tools/Circus.Tooling/obj``,
+``tests/Circus.Tooling.Tests/bin``, ``tests/Circus.Tooling.Tests/obj``)
+are documented and bounded.  ``.factory/gate-summary.json`` is
+intentionally produced by the canonical gate producer.  The bin/obj
+outputs are produced by the build step and are expected transient
+artefacts.
+
+### Fail-closed writer verdict
+
+```fsharp
+type GateWriteFailure =
+    | DirectoryCreationFailed of message: string
+    | FileWriteFailed of message: string
+
+type RegenerateFailure =
+    | IdentityReadFailed of IdentityFailure
+    | DocumentBuildFailed of message: string
+    | ArtefactWriteFailed of GateWriteFailure
+```
+
+- ``DirectoryCreationFailed`` is reachable and tested (empty-parent
+  path test).
+- ``FileWriteFailed`` is independently reachable and tested (write
+  permission test).
+- ``regenerate`` returns ``Result<GateSummaryDoc, RegenerateFailure>``
+  on writer failure.
+- The CLI exits non-zero without emitting any PASS line on
+  writer failure.
+
+### Outcome classification matrix
+
+| Outcome              | status        | exit_code |
+|---------------------|---------------|------------|
+| Exited(0, _)        | "pass"        | 0          |
+| Exited(n, _) (n>0)  | "fail"        | n          |
+| NonzeroExit(n, _)   | "fail"        | n          |
+| SpawnFailure        | "unavailable" | -1         |
+| Cancelled(_)        | "unavailable" | -1         |
+| OutputFailure(_)    | "unavailable" | -1         |
+| CleanupFailure(_)   | "unavailable" | -1         |
+| BodyFailure(_)      | "unavailable" | -1         |
+
+All 8 cases are tested mechanically.
+
+### Identity failure modes (fail-closed)
+
+```fsharp
+type IdentityFailure =
+    | CommitOidMissing
+    | TreeOidMissing
+```
+
+- Empty directory yields ``Result.Error CommitOidMissing`` (verified).
+- ``regenerate`` propagates the ``IdentityReadFailed`` diagnostic.
+- The CLI exit code is 2 and no PASS line is emitted on failure.
+
+### Phase summary
+
+| Phase | Status |
+|-------|--------|
+| A — fail-closed canonical artifact | Complete |
+| B — committed implementation identity | Complete (cc5e0a5) |
+| C — genuine fresh clone | Complete (matches subject) |
+| D — fresh-clone execution | Complete (test-source-policy=0, dev-gate-linux=0, 4/4 pass) |
+| E — artifact non-mutation proof | Complete (before/after hashes equal) |
+| F — fresh-clone cleanliness | Complete (git status --porcelain empty) |
+| G — report | This commit |
+
+### Patch hygiene
+
+`git diff --check` on the committed range returns zero whitespace
+warnings.  `git status --short` is clean.  All commits are
+forward-only.
+
+### Implementation / tested identities
+
+```yaml
+implementation_commit_oid: cc5e0a51549d0676a166cc0dc0717a405265662d
+implementation_tree_oid:   c5da14be0b19af0680c803b5e0b1d2b43efa4995
+tested_commit_oid:        cc5e0a51549d0676a166cc0dc0717a405265662d
+tested_tree_oid:          c5da14be0b19af0680c803b5e0b1d2b43efa4995
+content_base_commit_oid:  6e5307bd6aabb95985a6cced858f7bff562b10a8
+endpoint_binding:         external
+```
+
+### Final CORRECTION01 verdict
+
+**pass** — CORRECTION01 may now close unconditionally.
