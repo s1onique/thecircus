@@ -331,7 +331,7 @@ let private activateRegressionGuard () =
 /// Runs a generated test in-process and returns the summary.
 /// Used for genuine execution proofs.
 let private runTestInProcess (t: Test) : string =
-    let results = Tests.runTestsWithCLIArgs [||] t
+    let results = Tests.runTestsWithCLIArgs [] [||] t
     sprintf "exitCode=%d" results
 
 [<Tests>]
