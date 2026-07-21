@@ -81,9 +81,9 @@ idempotency:
   duplicate_path_entries: false
 
 repository:
-  implementation_commit_oid: null
-  implementation_tree_oid: null
-  repository_artifacts_status: uncommitted
+  implementation_commit_oid: 1fbbbd4f1d74b56655446c2c3b1c45d02b39fa63
+  implementation_tree_oid: 8ca835304b6c08b04679e720cc20b68316e7b4d7
+  repository_artifacts_status: committed
 ```
 
 ---
