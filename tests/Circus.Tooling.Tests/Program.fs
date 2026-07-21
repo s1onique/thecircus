@@ -38,8 +38,7 @@ open Circus.Tooling.Tests.SourcePolicy.ProcessRunnerTests
 
 [<EntryPoint>]
 let main (arguments: string[]) : int =
-    let fixtureMode =
-        Environment.GetEnvironmentVariable("CIRCUS_EXPECTO_META_FIXTURE")
+    let fixtureMode = Environment.GetEnvironmentVariable("CIRCUS_EXPECTO_META_FIXTURE")
 
     match fixtureMode with
     | "available-failing-body" ->
@@ -54,12 +53,8 @@ let main (arguments: string[]) : int =
 
 
         let fixtureTest =
-            makeBashDependentTest
-                (BashAvailable "bash")
-                "deliberate failure"
-                (fun (executable: string) ->
-                    Expect.equal 1 2
-                        (sprintf "deliberate failure for fixture proof (executable=%s)" executable))
+            makeBashDependentTest (BashAvailable "bash") "deliberate failure" (fun (executable: string) ->
+                Expect.equal 1 2 (sprintf "deliberate failure for fixture proof (executable=%s)" executable))
 
         // ``runTestsWithCLIArgs`` signature:
         //   (cliArgs: seq<CLIArguments>, args: string[], tests: Test) -> int

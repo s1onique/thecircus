@@ -22,8 +22,7 @@ open Circus.Tooling.SourcePolicy.ContainerPolicy
 open Circus.Tooling.Tests.SourcePolicy.ContainerPolicyMutationRegistry
 open Circus.Tooling.Tests.SourcePolicy.ContainerPolicyMutationCases
 
-module ParityCsv =
-    Circus.Tooling.SourcePolicy.Parity
+module ParityCsv = Circus.Tooling.SourcePolicy.Parity
 
 // ---------------------------------------------------------------------------
 // Parity inventory reconciliation
@@ -33,14 +32,17 @@ module ParityCsv =
 /// working directory.
 let private findParityCsv () : string =
     let mutable d = Directory.GetCurrentDirectory()
-    let mutable found : string option = None
-    for _ in 0 .. 8 do
+    let mutable found: string option = None
+
+    for _ in 0..8 do
         let candidate = Path.Combine(d, "factory", "container-policy-parity.csv")
+
         if File.Exists candidate then
             found <- Some candidate
+
         let parent = Directory.GetParent d
-        if isNull parent then ()
-        else d <- parent.FullName
+        if isNull parent then () else d <- parent.FullName
+
     match found with
     | Some p -> p
     | None -> Path.Combine("factory", "container-policy-parity.csv")
@@ -50,14 +52,13 @@ let private findParityCsv () : string =
 /// points at the immutable mutation registry.
 let private parityInventoryIds () : string list =
     let path = findParityCsv ()
+
     match ParityCsv.parse path with
     | Result.Error e -> failwithf "parity CSV parse failed: %s" e
     | Result.Ok rows ->
         rows
         |> List.filter (fun r ->
-            r.NegativeMutationTest.Contains(
-                "registered in immutable mutation registry",
-                StringComparison.Ordinal))
+            r.NegativeMutationTest.Contains("registered in immutable mutation registry", StringComparison.Ordinal))
         |> List.map (fun r -> r.LegacyCheckId)
 
 // ---------------------------------------------------------------------------
@@ -75,74 +76,86 @@ let private renderAggregateFailure
     let missing = missingResultIds cases results
     let unexpected = unexpectedResultIds cases results
     let duplicates = duplicateRegisteredIds cases
+
     let section =
         sprintf
             "registered=%d executed=%d passed=%d failed=%d missing=%A unexpected=%A duplicates=%A"
-            registered executed passed failed
+            registered
+            executed
+            passed
+            failed
             (Set.toList missing |> List.map MutationCaseId.value)
             (Set.toList unexpected |> List.map MutationCaseId.value)
             duplicates
+
     let details = renderFailureSummary results
-    if String.IsNullOrEmpty details then section
-    else section + "\n" + details
+
+    if String.IsNullOrEmpty details then
+        section
+    else
+        section + "\n" + details
 
 [<Tests>]
 let sequencedMutationTests =
-    testSequenced <|
-        testList "Container policy negative mutations" [
-            test "all registered container-policy mutations are detected" {
-                let runResult = executeMutationRegistry mutationCases
-                match runResult with
-                | Result.Error (InvalidRegistry invalid) ->
-                    failtestf "registry validation failed: %A" invalid
-                | Ok results ->
-                    let cases = mutationCases
-                    let registered = registeredCount cases
-                    let executed = executedCount results
-                    let passed = passedCount results
-                    let failed = failedCount results
-                    let duplicates = duplicateRegisteredIds cases
-                    let missing = missingResultIds cases results
-                    let unexpected = unexpectedResultIds cases results
+    testSequenced
+    <| testList
+        "Container policy negative mutations"
+        [ test "all registered container-policy mutations are detected" {
+              let runResult = executeMutationRegistry mutationCases
 
-                    let verdict =
-                        duplicates = []
-                        && registered = executed
-                        && passed = registered
-                        && failed = 0
-                        && Set.isEmpty missing
-                        && Set.isEmpty unexpected
+              match runResult with
+              | Result.Error(InvalidRegistry invalid) -> failtestf "registry validation failed: %A" invalid
+              | Ok results ->
+                  let cases = mutationCases
+                  let registered = registeredCount cases
+                  let executed = executedCount results
+                  let passed = passedCount results
+                  let failed = failedCount results
+                  let duplicates = duplicateRegisteredIds cases
+                  let missing = missingResultIds cases results
+                  let unexpected = unexpectedResultIds cases results
 
-                    if not verdict then
-                        failtestf "%s" (renderAggregateFailure cases results)
-                    else
-                        // The expectation is purely derived: every assertion
-                        // is computed from the immutable result map.
-                        Expect.isEmpty duplicates "no duplicate registry ids"
-                        Expect.equal registered executed "registered = executed"
-                        Expect.equal passed registered "passed = registered"
-                        Expect.equal failed 0 "failed = 0"
-                        Expect.isEmpty (Set.toList missing) "no missing results"
-                        Expect.isEmpty (Set.toList unexpected) "no unexpected results"
-            }
+                  let verdict =
+                      duplicates = []
+                      && registered = executed
+                      && passed = registered
+                      && failed = 0
+                      && Set.isEmpty missing
+                      && Set.isEmpty unexpected
 
-            test "registry case IDs equal the authoritative parity negative-mutation inventory" {
-                let registryIds =
-                    mutationCases
-                    |> List.map (fun c -> MutationCaseId.value c.Id)
-                    |> Set.ofList
-                let inventoryIds =
-                    parityInventoryIds () |> Set.ofList
-                let missingFromRegistry = Set.difference inventoryIds registryIds
-                let missingFromInventory = Set.difference registryIds inventoryIds
-                Expect.isEmpty (Set.toList missingFromRegistry)
-                    (sprintf "registry is missing case ids declared by parity inventory: %A"
-                        (Set.toList missingFromRegistry))
-                Expect.isEmpty (Set.toList missingFromInventory)
-                    (sprintf "registry has case ids not declared by parity inventory: %A"
-                        (Set.toList missingFromInventory))
-            }
-        ]
+                  if not verdict then
+                      failtestf "%s" (renderAggregateFailure cases results)
+                  else
+                      // The expectation is purely derived: every assertion
+                      // is computed from the immutable result map.
+                      Expect.isEmpty duplicates "no duplicate registry ids"
+                      Expect.equal registered executed "registered = executed"
+                      Expect.equal passed registered "passed = registered"
+                      Expect.equal failed 0 "failed = 0"
+                      Expect.isEmpty (Set.toList missing) "no missing results"
+                      Expect.isEmpty (Set.toList unexpected) "no unexpected results"
+          }
+
+          test "registry case IDs equal the authoritative parity negative-mutation inventory" {
+              let registryIds =
+                  mutationCases |> List.map (fun c -> MutationCaseId.value c.Id) |> Set.ofList
+
+              let inventoryIds = parityInventoryIds () |> Set.ofList
+              let missingFromRegistry = Set.difference inventoryIds registryIds
+              let missingFromInventory = Set.difference registryIds inventoryIds
+
+              Expect.isEmpty
+                  (Set.toList missingFromRegistry)
+                  (sprintf
+                      "registry is missing case ids declared by parity inventory: %A"
+                      (Set.toList missingFromRegistry))
+
+              Expect.isEmpty
+                  (Set.toList missingFromInventory)
+                  (sprintf
+                      "registry has case ids not declared by parity inventory: %A"
+                      (Set.toList missingFromInventory))
+          } ]
 
 // ---------------------------------------------------------------------------
 // Registry validation tests (pure; no fixtures)
@@ -153,158 +166,145 @@ module RegistryValidationProofs =
 
     [<Tests>]
     let tests =
-        testList "Container policy mutation registry validation" [
-            test "registry has no duplicate case ids" {
-                match validateMutationRegistry mutationCases with
-                | RegistryOk -> ()
-                | DuplicateCaseIds dups ->
-                    failtestf "registry contains duplicate ids: %A" dups
-                | MismatchedCaseIdentities mismatches ->
-                    failtestf "registry contains mismatched identities: %A" mismatches
-                | UnknownExpectedCheckIds unknown ->
-                    failtestf "registry contains unknown expected check ids: %A" unknown
-            }
+        testList
+            "Container policy mutation registry validation"
+            [ test "registry has no duplicate case ids" {
+                  match validateMutationRegistry mutationCases with
+                  | RegistryOk -> ()
+                  | DuplicateCaseIds dups -> failtestf "registry contains duplicate ids: %A" dups
+                  | MismatchedCaseIdentities mismatches ->
+                      failtestf "registry contains mismatched identities: %A" mismatches
+                  | UnknownExpectedCheckIds unknown ->
+                      failtestf "registry contains unknown expected check ids: %A" unknown
+              }
 
-            test "every expected check id is known to the production registry" {
-                match validateMutationRegistry mutationCases with
-                | RegistryOk -> ()
-                | DuplicateCaseIds dups ->
-                    failtestf "registry contains duplicate ids: %A" dups
-                | MismatchedCaseIdentities mismatches ->
-                    failtestf "registry contains mismatched identities: %A" mismatches
-                | UnknownExpectedCheckIds unknown ->
-                    failtestf "registry contains unknown expected check ids: %A" unknown
-            }
+              test "every expected check id is known to the production registry" {
+                  match validateMutationRegistry mutationCases with
+                  | RegistryOk -> ()
+                  | DuplicateCaseIds dups -> failtestf "registry contains duplicate ids: %A" dups
+                  | MismatchedCaseIdentities mismatches ->
+                      failtestf "registry contains mismatched identities: %A" mismatches
+                  | UnknownExpectedCheckIds unknown ->
+                      failtestf "registry contains unknown expected check ids: %A" unknown
+              }
 
-            test "executor-level duplicate registry fails before any case body runs" {
-                let duplicateId = "CP-01_required_files"
-                let duplicateCase =
-                    {
-                        Id = MutationCaseId.fromString duplicateId
+              test "executor-level duplicate registry fails before any case body runs" {
+                  let duplicateId = "CP-01_required_files"
+
+                  let duplicateCase =
+                      { Id = MutationCaseId.fromString duplicateId
                         Description = "duplicate-registry proof"
                         ExpectedCheckId = duplicateId
-                        PrepareBaseline =
-                            fun _ ->
-                                failwith "duplicate registry must not execute"
+                        PrepareBaseline = fun _ -> failwith "duplicate registry must not execute"
+                        ApplyMutation = fun _ -> failwith "duplicate registry must not execute"
+                        AllowedAdditionalCheckIds = Set.empty }
+
+                  let cases = [ duplicateCase; duplicateCase ]
+
+                  Expect.equal
+                      (validateMutationRegistry cases)
+                      (DuplicateCaseIds [ duplicateId ])
+                      "duplicate IDs must be rejected before execution"
+
+                  let mutable seamTouched = false
+
+                  let trapSeam =
+                      { CreateTempDir =
+                          fun () ->
+                              seamTouched <- true
+                              failwith "duplicate registry must not execute"
+                        RunCheck =
+                          fun _ _ ->
+                              seamTouched <- true
+                              failwith "duplicate registry must not execute"
+                        DeleteRecursive =
+                          fun _ ->
+                              seamTouched <- true
+                              failwith "duplicate registry must not execute" }
+
+                  match executeMutationRegistryWithSeam cases trapSeam with
+                  | Result.Error(InvalidRegistry(DuplicateCaseIds [ actual ])) when actual = duplicateId -> ()
+                  | actual -> failtestf "expected DuplicateCaseIds [%s], got %A" duplicateId actual
+
+                  Expect.isFalse seamTouched "duplicate registry must short-circuit execution"
+              }
+
+              test "empty mutation case ID is unrepresentable" {
+                  match MutationCaseId.tryCreate "" with
+                  | Result.Error msg -> Expect.stringContains msg "non-empty" "tryCreate must reject empty case id"
+                  | Result.Ok _ -> failtestf "tryCreate must reject empty case id"
+              }
+
+              test "executor: mismatched Id and ExpectedCheckId is rejected before any case body runs" {
+                  let case =
+                      { Id = MutationCaseId.fromString "CP-01_required_files"
+                        Description = "mismatched"
+                        ExpectedCheckId = "CP-99_does_not_match"
+                        PrepareBaseline = fun _ -> Result.Ok()
                         ApplyMutation =
-                            fun _ ->
-                                failwith "duplicate registry must not execute"
-                        AllowedAdditionalCheckIds = Set.empty
-                    }
-                let cases = [ duplicateCase; duplicateCase ]
+                          fun _ ->
+                              Result.Ok
+                                  { ChangedPaths = [ "x" ]
+                                    BeforeHashes = Map.ofList [ "x", "a" ]
+                                    AfterHashes = Map.ofList [ "x", "b" ] }
+                        AllowedAdditionalCheckIds = Set.empty }
 
-                Expect.equal
-                    (validateMutationRegistry cases)
-                    (DuplicateCaseIds [ duplicateId ])
-                    "duplicate IDs must be rejected before execution"
+                  let mutable ran = false
 
-                let mutable seamTouched = false
-                let trapSeam =
-                    { CreateTempDir =
-                        fun () ->
-                            seamTouched <- true
-                            failwith "duplicate registry must not execute"
-                      RunCheck =
-                        fun _ _ ->
-                            seamTouched <- true
-                            failwith "duplicate registry must not execute"
-                      DeleteRecursive =
-                        fun _ ->
-                            seamTouched <- true
-                            failwith "duplicate registry must not execute" }
-                match executeMutationRegistryWithSeam cases trapSeam with
-                | Result.Error (InvalidRegistry (DuplicateCaseIds [ actual ]))
-                    when actual = duplicateId ->
-                    ()
-                | actual ->
-                    failtestf
-                        "expected DuplicateCaseIds [%s], got %A"
-                        duplicateId
-                        actual
-                Expect.isFalse seamTouched
-                    "duplicate registry must short-circuit execution"
-            }
+                  let trapSeam =
+                      { defaultWorkspaceSeam with
+                          CreateTempDir =
+                              fun () ->
+                                  ran <- true
+                                  Ok(System.IO.Path.GetTempPath()) }
 
-            test "empty mutation case ID is unrepresentable" {
-                match MutationCaseId.tryCreate "" with
-                | Result.Error msg ->
-                    Expect.stringContains msg "non-empty"
-                        "tryCreate must reject empty case id"
-                | Result.Ok _ ->
-                    failtestf "tryCreate must reject empty case id"
-            }
+                  match executeMutationRegistryWithSeam [ case ] trapSeam with
+                  | Result.Error(InvalidRegistry(MismatchedCaseIdentities mismatches)) ->
+                      Expect.isNonEmpty mismatches "mismatches must be reported"
+                      Expect.isFalse ran "no case body may run when registry is invalid"
+                  | other -> failtestf "expected MismatchedCaseIdentities, got %A" other
+              }
 
-            test "executor: mismatched Id and ExpectedCheckId is rejected before any case body runs" {
-                let case =
-                    { Id = MutationCaseId.fromString "CP-01_required_files"
-                      Description = "mismatched"
-                      ExpectedCheckId = "CP-99_does_not_match"
-                      PrepareBaseline = fun _ -> Result.Ok ()
-                      ApplyMutation = fun _ ->
-                          Result.Ok {
-                              ChangedPaths = [ "x" ]
-                              BeforeHashes = Map.ofList [ "x", "a" ]
-                              AfterHashes = Map.ofList [ "x", "b" ]
-                          }
-                      AllowedAdditionalCheckIds = Set.empty }
-                let mutable ran = false
-                let trapSeam =
-                    { defaultWorkspaceSeam with
-                        CreateTempDir = fun () -> ran <- true; Ok (System.IO.Path.GetTempPath()) }
-                match executeMutationRegistryWithSeam [case] trapSeam with
-                | Result.Error (InvalidRegistry (MismatchedCaseIdentities mismatches)) ->
-                    Expect.isNonEmpty mismatches "mismatches must be reported"
-                    Expect.isFalse ran
-                        "no case body may run when registry is invalid"
-                | other -> failtestf "expected MismatchedCaseIdentities, got %A" other
-            }
+              test "unknown expected check id fails registry validation before any case body runs" {
+                  let unknownId = "CP-99_unknown"
 
-            test "unknown expected check id fails registry validation before any case body runs" {
-                let unknownId = "CP-99_unknown"
-                let unknownCase =
-                    { Id = MutationCaseId.fromString unknownId
-                      Description = "unknown production check"
-                      ExpectedCheckId = unknownId
-                      PrepareBaseline = fun _ -> failwith "invalid registry must not execute"
-                      ApplyMutation = fun _ -> failwith "invalid registry must not execute"
-                      AllowedAdditionalCheckIds = Set.empty }
-                let cases = [ unknownCase ]
-                match validateMutationRegistry cases with
-                | UnknownExpectedCheckIds [ actual ]
-                    when actual = unknownId ->
-                    ()
-                | actual ->
-                    failtestf
-                        "expected UnknownExpectedCheckIds [%s], got %A"
-                        unknownId
-                        actual
-                let mutable seamTouched = false
-                let trapSeam =
-                    { defaultWorkspaceSeam with
-                        CreateTempDir = fun () ->
-                            seamTouched <- true
-                            Result.Error "executor must not start"
-                        RunCheck = fun _ _ ->
-                            seamTouched <- true
-                            Result.Error "executor must not start"
-                        DeleteRecursive = fun _ ->
-                            seamTouched <- true
-                            Result.Error "executor must not start" }
-                match executeMutationRegistryWithSeam cases trapSeam with
-                | Result.Error (
-                    InvalidRegistry (
-                        UnknownExpectedCheckIds [ actual ]
-                    )
-                  ) when actual = unknownId ->
-                    ()
-                | actual ->
-                    failtestf
-                        "expected exact unknown identity failure, got %A"
-                        actual
-                Expect.isFalse seamTouched
-                    "invalid registry must short-circuit execution"
-            }
-        ]
+                  let unknownCase =
+                      { Id = MutationCaseId.fromString unknownId
+                        Description = "unknown production check"
+                        ExpectedCheckId = unknownId
+                        PrepareBaseline = fun _ -> failwith "invalid registry must not execute"
+                        ApplyMutation = fun _ -> failwith "invalid registry must not execute"
+                        AllowedAdditionalCheckIds = Set.empty }
+
+                  let cases = [ unknownCase ]
+
+                  match validateMutationRegistry cases with
+                  | UnknownExpectedCheckIds [ actual ] when actual = unknownId -> ()
+                  | actual -> failtestf "expected UnknownExpectedCheckIds [%s], got %A" unknownId actual
+
+                  let mutable seamTouched = false
+
+                  let trapSeam =
+                      { defaultWorkspaceSeam with
+                          CreateTempDir =
+                              fun () ->
+                                  seamTouched <- true
+                                  Result.Error "executor must not start"
+                          RunCheck =
+                              fun _ _ ->
+                                  seamTouched <- true
+                                  Result.Error "executor must not start"
+                          DeleteRecursive =
+                              fun _ ->
+                                  seamTouched <- true
+                                  Result.Error "executor must not start" }
+
+                  match executeMutationRegistryWithSeam cases trapSeam with
+                  | Result.Error(InvalidRegistry(UnknownExpectedCheckIds [ actual ])) when actual = unknownId -> ()
+                  | actual -> failtestf "expected exact unknown identity failure, got %A" actual
+
+                  Expect.isFalse seamTouched "invalid registry must short-circuit execution"
+              } ]
 
 // ---------------------------------------------------------------------------
 // Mutation non-vacuity and executor-level proofs
@@ -321,24 +321,32 @@ module ExecutorProofs =
     /// ``.github/workflows/harbor.yml`` with the canonical harbour
     /// triggers and ``.dockerignore`` with the canonical exclusions.
     let private trivialBaseline (root: string) : Result<unit, string> =
-        (writeAndHash root ".github/workflows/harbor.yml" "name: harbor\non:\n  pull_request:\n  push:\n    branches:\n      - main\n  workflow_dispatch:\npermissions:\n  contents: read\n") |> Result.bind (fun (_) -> (writeAndHash root ".dockerignore" ".git\n.github\n.factory\n") |> Result.bind (fun (_) -> Ok (())))
+        (writeAndHash
+            root
+            ".github/workflows/harbor.yml"
+            "name: harbor\non:\n  pull_request:\n  push:\n    branches:\n      - main\n  workflow_dispatch:\npermissions:\n  contents: read\n")
+        |> Result.bind (fun (_) ->
+            (writeAndHash root ".dockerignore" ".git\n.github\n.factory\n")
+            |> Result.bind (fun (_) -> Ok(())))
 
     /// A trivial non-vacuous mutator: replaces a single file.
     let private trivialMutator (root: string) : Result<MutationReceipt, string> =
-        writeAndHash root ".github/workflows/harbor.yml" "name: harbor
+        writeAndHash
+            root
+            ".github/workflows/harbor.yml"
+            "name: harbor
 on:
   pull_request:
 "
         |> Result.map (fun (b, a) ->
-            {
-                ChangedPaths = [ ".github/workflows/harbor.yml" ]
-                BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", b ]
-                AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", a ]
-            })
+            { ChangedPaths = [ ".github/workflows/harbor.yml" ]
+              BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", b ]
+              AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", a ] })
 
     /// A vacuous mutator: writes the same content.
     let private vacuousMutator (root: string) : Result<MutationReceipt, string> =
-        let sameContent = "name: harbor
+        let sameContent =
+            "name: harbor
 on:
   pull_request:
   push:
@@ -348,33 +356,29 @@ on:
 permissions:
   contents: read
 "
+
         writeAndHash root ".github/workflows/harbor.yml" sameContent
         |> Result.bind (fun (b, _) ->
             writeAndHash root ".github/workflows/harbor.yml" sameContent
             |> Result.map (fun (_, a) ->
-                {
-                    ChangedPaths = [ ".github/workflows/harbor.yml" ]
-                    BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", b ]
-                    AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", a ]
-                }))
+                { ChangedPaths = [ ".github/workflows/harbor.yml" ]
+                  BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", b ]
+                  AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", a ] }))
 
     /// A mutator that escapes the workspace.
     let private escapeMutator (_: string) : Result<MutationReceipt, string> =
-        Ok {
-            ChangedPaths = [ "../outside.txt" ]
-            BeforeHashes = Map.ofList [ "../outside.txt", "b" ]
-            AfterHashes = Map.ofList [ "../outside.txt", "a" ]
-        }
+        Ok
+            { ChangedPaths = [ "../outside.txt" ]
+              BeforeHashes = Map.ofList [ "../outside.txt", "b" ]
+              AfterHashes = Map.ofList [ "../outside.txt", "a" ] }
 
     /// A mutator that returns a receipt whose key sets do not match.
     let private inconsistentMutator (root: string) : Result<MutationReceipt, string> =
         writeAndHash root ".github/workflows/harbor.yml" "x"
         |> Result.map (fun _ ->
-            {
-                ChangedPaths = [ ".github/workflows/harbor.yml"; "other" ]
-                BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "b" ]
-                AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "a" ]
-            })
+            { ChangedPaths = [ ".github/workflows/harbor.yml"; "other" ]
+              BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "b" ]
+              AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "a" ] })
 
     /// A baseline that throws an exception.
     let private throwingBaseline (_: string) : Result<unit, string> =
@@ -390,364 +394,373 @@ permissions:
         (mutator: string -> Result<MutationReceipt, string>)
         (baseline: string -> Result<unit, string>)
         : MutationCase =
-        {
-            Id = MutationCaseId.fromString canonicalCaseId
-            Description = "synthetic executor proof"
-            ExpectedCheckId = canonicalCaseId
-            PrepareBaseline = baseline
-            ApplyMutation = mutator
-            AllowedAdditionalCheckIds = Set.empty
-        }
+        { Id = MutationCaseId.fromString canonicalCaseId
+          Description = "synthetic executor proof"
+          ExpectedCheckId = canonicalCaseId
+          PrepareBaseline = baseline
+          ApplyMutation = mutator
+          AllowedAdditionalCheckIds = Set.empty }
 
     let private findOnlyResult results =
         results |> Map.tryFind (MutationCaseId.fromString canonicalCaseId)
 
-    let private writeUnit (root: string) (path: string) (content: string)
-        : Result<unit, string> =
-        writeAndHash root path content
-        |> Result.map (fun _ -> ())
+    let private writeUnit (root: string) (path: string) (content: string) : Result<unit, string> =
+        writeAndHash root path content |> Result.map (fun _ -> ())
 
     [<Tests>]
     let tests =
-        testList "Container policy mutation non-vacuity and executor proofs" [
-            test "executor-level: baseline already non-compliant returns BaselineNotCompliant" {
-                // CP-04_workflow_triggers requires pull_request,
-                // push, and workflow_dispatch.  Writing a harbor.yml
-                // without those triggers is a genuinely non-compliant
-                // baseline for that target, so the check returns
-                // BaselineNotCompliant instead of failing because
-                // its input file is missing.
-                let badBaseline (root: string) : Result<unit, string> =
-                    writeAndHash root ".github/workflows/harbor.yml"
-                        "name: harbor\non:\n  push:\n    branches:\n      - main\n"
-                    |> Result.map (fun _ -> ())
-                let case = trivialCase trivialMutator badBaseline
-                match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Ok _) -> failtestf "baseline was empty; check should fail"
-                    | Some (Result.Error (BaselineNotCompliant _)) -> ()
-                    | Some (Result.Error other) ->
-                        failtestf "expected BaselineNotCompliant, got %A" other
-                    | None -> failtestf "no result"
-            }
+        testList
+            "Container policy mutation non-vacuity and executor proofs"
+            [ test "executor-level: baseline already non-compliant returns BaselineNotCompliant" {
+                  // CP-04_workflow_triggers requires pull_request,
+                  // push, and workflow_dispatch.  Writing a harbor.yml
+                  // without those triggers is a genuinely non-compliant
+                  // baseline for that target, so the check returns
+                  // BaselineNotCompliant instead of failing because
+                  // its input file is missing.
+                  let badBaseline (root: string) : Result<unit, string> =
+                      writeAndHash
+                          root
+                          ".github/workflows/harbor.yml"
+                          "name: harbor\non:\n  push:\n    branches:\n      - main\n"
+                      |> Result.map (fun _ -> ())
 
-            test "executor-level: vacuous mutator returns MutationWasVacuous" {
-                let case = trivialCase vacuousMutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (MutationWasVacuous _)) -> ()
-                    | Some (Result.Error other) ->
-                        failtestf "expected MutationWasVacuous, got %A" other
-                    | _ -> failtestf "vacuous mutator must return Error MutationWasVacuous"
-            }
+                  let case = trivialCase trivialMutator badBaseline
 
-            test "executor-level: receipt key sets inconsistent returns MutationApplicationFailed" {
-                let case = trivialCase inconsistentMutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (MutationApplicationFailed _)) -> ()
-                    | Some (Result.Error other) ->
-                        failtestf "expected MutationApplicationFailed, got %A" other
-                    | _ -> failtestf "inconsistent receipt must return Error MutationApplicationFailed"
-            }
+                  match executeMutationRegistryWithSeam [ case ] defaultWorkspaceSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Ok _) -> failtestf "baseline was empty; check should fail"
+                      | Some(Result.Error(BaselineNotCompliant _)) -> ()
+                      | Some(Result.Error other) -> failtestf "expected BaselineNotCompliant, got %A" other
+                      | None -> failtestf "no result"
+              }
 
-            test "executor-level: mutator claiming escaping paths returns MutationApplicationFailed" {
-                // The mutator claims "../outside.txt" but does not
-                // touch the filesystem.  The executor independently
-                // derives the changed paths from the snapshots and
-                // notices that the claimed path is outside the
-                // workspace, so it returns
-                // MutationApplicationFailed regardless of the
-                // observed diff.
-                let escapingMutator (root: string) : Result<MutationReceipt, string> =
-                    writeUnit root ".github/workflows/harbor.yml" "touched"
-                    |> Result.map (fun () ->
-                        {
-                            ChangedPaths = [ "../outside.txt" ]
+              test "executor-level: vacuous mutator returns MutationWasVacuous" {
+                  let case = trivialCase vacuousMutator trivialBaseline
+
+                  match executeMutationRegistryWithSeam [ case ] defaultWorkspaceSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(MutationWasVacuous _)) -> ()
+                      | Some(Result.Error other) -> failtestf "expected MutationWasVacuous, got %A" other
+                      | _ -> failtestf "vacuous mutator must return Error MutationWasVacuous"
+              }
+
+              test "executor-level: receipt key sets inconsistent returns MutationApplicationFailed" {
+                  let case = trivialCase inconsistentMutator trivialBaseline
+
+                  match executeMutationRegistryWithSeam [ case ] defaultWorkspaceSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(MutationApplicationFailed _)) -> ()
+                      | Some(Result.Error other) -> failtestf "expected MutationApplicationFailed, got %A" other
+                      | _ -> failtestf "inconsistent receipt must return Error MutationApplicationFailed"
+              }
+
+              test "executor-level: mutator claiming escaping paths returns MutationApplicationFailed" {
+                  // The mutator claims "../outside.txt" but does not
+                  // touch the filesystem.  The executor independently
+                  // derives the changed paths from the snapshots and
+                  // notices that the claimed path is outside the
+                  // workspace, so it returns
+                  // MutationApplicationFailed regardless of the
+                  // observed diff.
+                  let escapingMutator (root: string) : Result<MutationReceipt, string> =
+                      writeUnit root ".github/workflows/harbor.yml" "touched"
+                      |> Result.map (fun () ->
+                          { ChangedPaths = [ "../outside.txt" ]
                             BeforeHashes = Map.ofList [ "../outside.txt", "fabricated-before" ]
-                            AfterHashes = Map.ofList [ "../outside.txt", "fabricated-after" ]
-                        })
-                let case = trivialCase escapingMutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (MutationApplicationFailed message)) ->
-                        Expect.stringContains
-                            message
-                            "../outside.txt"
-                            "diagnostic must retain the rejected path"
-                    | Some (Result.Error other) ->
-                        failtestf "expected MutationApplicationFailed, got %A" other
-                    | _ -> failtestf "escape path must return Error MutationApplicationFailed"
-            }
+                            AfterHashes = Map.ofList [ "../outside.txt", "fabricated-after" ] })
 
-            test "executor-level: writing to an escaped path is rejected at the write boundary" {
-                let root = Path.Combine(
-                                Path.GetTempPath(),
-                                "circus-cp-write-test-" + Guid.NewGuid().ToString("n"))
-                Directory.CreateDirectory root |> ignore
-                let r = writeAndHash root "../outside.txt" "x"
-                match r with
-                | Result.Ok _ -> failtestf "writeAndHash must reject path that escapes workspace"
-                | Result.Error msg ->
-                    Expect.stringContains msg "escapes workspace"
-                        "error must mention workspace escape"
-                try Directory.Delete(root, true) with _ -> ()
-            }
+                  let case = trivialCase escapingMutator trivialBaseline
 
-            test "executor-level: throwing baseline returns CaseExecutionFailed" {
-                let case = trivialCase trivialMutator throwingBaseline
-                match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (CaseExecutionFailed msg)) ->
-                        Expect.stringContains msg "PrepareBaseline"
-                            "throwing baseline must be tagged with the failing step"
-                    | Some (Result.Error other) ->
-                        failtestf "expected CaseExecutionFailed, got %A" other
-                    | _ -> failtestf "throwing baseline must return Error CaseExecutionFailed"
-            }
+                  match executeMutationRegistryWithSeam [ case ] defaultWorkspaceSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(MutationApplicationFailed message)) ->
+                          Expect.stringContains message "../outside.txt" "diagnostic must retain the rejected path"
+                      | Some(Result.Error other) -> failtestf "expected MutationApplicationFailed, got %A" other
+                      | _ -> failtestf "escape path must return Error MutationApplicationFailed"
+              }
 
-            test "executor-level: throwing mutator returns CaseExecutionFailed" {
-                let case = trivialCase throwingMutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (CaseExecutionFailed msg)) ->
-                        Expect.stringContains msg "ApplyMutation"
-                            "throwing mutator must be tagged with the failing step"
-                    | Some (Result.Error other) ->
-                        failtestf "expected CaseExecutionFailed, got %A" other
-                    | _ -> failtestf "throwing mutator must return Error CaseExecutionFailed"
-            }
+              test "executor-level: writing to an escaped path is rejected at the write boundary" {
+                  let root =
+                      Path.Combine(Path.GetTempPath(), "circus-cp-write-test-" + Guid.NewGuid().ToString("n"))
 
-            test "executor-level: workspace creation failure returns BaselinePreparationFailed" {
-                let trapSeam =
-                    { defaultWorkspaceSeam with
-                        CreateTempDir = fun () -> Error "cannot create workspace" }
-                let case = trivialCase trivialMutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] trapSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (BaselinePreparationFailed _)) -> ()
-                    | Some (Result.Error other) ->
-                        failtestf "expected BaselinePreparationFailed, got %A" other
-                    | _ -> failtestf "workspace creation failure must return BaselinePreparationFailed"
-            }
+                  Directory.CreateDirectory root |> ignore
+                  let r = writeAndHash root "../outside.txt" "x"
 
-            test "executor-level: a missing baseline file surfaces a BaselinePreparationFailed" {
-                // Build a baseline that calls writeAndHash against
-                // a path the executor never created: it returns
-                // Error.  The baseline function must propagate
-                // that error rather than swallow it.
-                let badBaseline _ : Result<unit, string> =
-                    Error (sprintf "baseline refused: %s" "deliberate")
-                let case = trivialCase trivialMutator badBaseline
-                match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (BaselinePreparationFailed msg)) ->
-                        Expect.stringContains msg "baseline refused"
-                            "BaselinePreparationFailed must carry the original error message"
-                    | Some (Result.Error other) ->
-                        failtestf "expected BaselinePreparationFailed, got %A" other
-                    | _ -> failtestf "failing baseline must return BaselinePreparationFailed"
-            }
+                  match r with
+                  | Result.Ok _ -> failtestf "writeAndHash must reject path that escapes workspace"
+                  | Result.Error msg ->
+                      Expect.stringContains msg "escapes workspace" "error must mention workspace escape"
 
-            test "executor-level: check function failure surfaces as CaseExecutionFailed" {
-                let trapSeam =
-                    { defaultWorkspaceSeam with
-                        RunCheck = fun _ _ -> Error "boom check" }
-                let case = trivialCase trivialMutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] trapSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (CaseExecutionFailed msg)) ->
-                        Expect.stringContains msg "boom check"
-                            "CaseExecutionFailed must surface the check error"
-                    | Some (Result.Error other) ->
-                        failtestf "expected CaseExecutionFailed, got %A" other
-                    | _ -> failtestf "check failure must return CaseExecutionFailed"
-            }
+                  try
+                      Directory.Delete(root, true)
+                  with _ ->
+                      ()
+              }
 
-            test "executor-level: cleanup failure returns CleanupFailed" {
-                let trapSeam =
-                    { defaultWorkspaceSeam with
-                        DeleteRecursive = fun _ -> Error "cannot delete" }
-                let case = trivialCase trivialMutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] trapSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (CleanupFailed msg)) ->
-                        Expect.stringContains msg "cannot delete"
-                            "CleanupFailed must surface the cleanup error"
-                    | Some (Result.Error other) ->
-                        failtestf "expected CleanupFailed, got %A" other
-                    | _ -> failtestf "cleanup failure must return CleanupFailed"
-            }
+              test "executor-level: throwing baseline returns CaseExecutionFailed" {
+                  let case = trivialCase trivialMutator throwingBaseline
 
-            test "executor-level: a non-vacuous mutator is observable from a receipt" {
-                let case = trivialCase trivialMutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Ok _) -> ()
-                    | Some (Result.Error other) ->
-                        failtestf "good case must be Ok, got %A" other
-                    | None -> failtestf "no result for good case"
-            }
+                  match executeMutationRegistryWithSeam [ case ] defaultWorkspaceSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(CaseExecutionFailed msg)) ->
+                          Expect.stringContains
+                              msg
+                              "PrepareBaseline"
+                              "throwing baseline must be tagged with the failing step"
+                      | Some(Result.Error other) -> failtestf "expected CaseExecutionFailed, got %A" other
+                      | _ -> failtestf "throwing baseline must return Error CaseExecutionFailed"
+              }
 
-            test "executor-level: fabricated receipt without filesystem mutation returns MutationWasVacuous" {
-                // The mutator returns a receipt claiming a change
-                // but the workspace is untouched, so the executor
-                // observes an empty diff and reports vacuous.
-                let fabricatedMutator _ : Result<MutationReceipt, string> =
-                    Result.Ok {
-                        ChangedPaths = [ ".github/workflows/harbor.yml" ]
-                        BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "fabricated-before" ]
-                        AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "fabricated-after" ]
-                    }
-                let case = trivialCase fabricatedMutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (MutationWasVacuous _)) -> ()
-                    | Some (Result.Error other) ->
-                        failtestf "expected MutationWasVacuous, got %A" other
-                    | _ -> failtestf "fabricated receipt must return Error MutationWasVacuous"
-            }
+              test "executor-level: throwing mutator returns CaseExecutionFailed" {
+                  let case = trivialCase throwingMutator trivialBaseline
 
-            test "executor-level: real mutation, no violation returns ExpectedViolationMissing" {
-                // The RunCheck seam returns an empty list on every
-                // invocation: baseline passes, post-mutation produces
-                // no violation.  The mutator is a no-op writer (the
-                // workspace is intentionally empty so the diff is
-                // empty; this test is about the case where the
-                // mutator touches a file but the check returns no
-                // violation).
-                let mutator (root: string) : Result<MutationReceipt, string> =
-                    writeAndHash root ".github/workflows/harbor.yml" "touched"
-                    |> Result.map (fun _ ->
-                        {
-                            ChangedPaths = [ ".github/workflows/harbor.yml" ]
+                  match executeMutationRegistryWithSeam [ case ] defaultWorkspaceSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(CaseExecutionFailed msg)) ->
+                          Expect.stringContains
+                              msg
+                              "ApplyMutation"
+                              "throwing mutator must be tagged with the failing step"
+                      | Some(Result.Error other) -> failtestf "expected CaseExecutionFailed, got %A" other
+                      | _ -> failtestf "throwing mutator must return Error CaseExecutionFailed"
+              }
+
+              test "executor-level: workspace creation failure returns BaselinePreparationFailed" {
+                  let trapSeam =
+                      { defaultWorkspaceSeam with
+                          CreateTempDir = fun () -> Error "cannot create workspace" }
+
+                  let case = trivialCase trivialMutator trivialBaseline
+
+                  match executeMutationRegistryWithSeam [ case ] trapSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(BaselinePreparationFailed _)) -> ()
+                      | Some(Result.Error other) -> failtestf "expected BaselinePreparationFailed, got %A" other
+                      | _ -> failtestf "workspace creation failure must return BaselinePreparationFailed"
+              }
+
+              test "executor-level: a missing baseline file surfaces a BaselinePreparationFailed" {
+                  // Build a baseline that calls writeAndHash against
+                  // a path the executor never created: it returns
+                  // Error.  The baseline function must propagate
+                  // that error rather than swallow it.
+                  let badBaseline _ : Result<unit, string> =
+                      Error(sprintf "baseline refused: %s" "deliberate")
+
+                  let case = trivialCase trivialMutator badBaseline
+
+                  match executeMutationRegistryWithSeam [ case ] defaultWorkspaceSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(BaselinePreparationFailed msg)) ->
+                          Expect.stringContains
+                              msg
+                              "baseline refused"
+                              "BaselinePreparationFailed must carry the original error message"
+                      | Some(Result.Error other) -> failtestf "expected BaselinePreparationFailed, got %A" other
+                      | _ -> failtestf "failing baseline must return BaselinePreparationFailed"
+              }
+
+              test "executor-level: check function failure surfaces as CaseExecutionFailed" {
+                  let trapSeam =
+                      { defaultWorkspaceSeam with
+                          RunCheck = fun _ _ -> Error "boom check" }
+
+                  let case = trivialCase trivialMutator trivialBaseline
+
+                  match executeMutationRegistryWithSeam [ case ] trapSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(CaseExecutionFailed msg)) ->
+                          Expect.stringContains msg "boom check" "CaseExecutionFailed must surface the check error"
+                      | Some(Result.Error other) -> failtestf "expected CaseExecutionFailed, got %A" other
+                      | _ -> failtestf "check failure must return CaseExecutionFailed"
+              }
+
+              test "executor-level: cleanup failure returns CleanupFailed" {
+                  let trapSeam =
+                      { defaultWorkspaceSeam with
+                          DeleteRecursive = fun _ -> Error "cannot delete" }
+
+                  let case = trivialCase trivialMutator trivialBaseline
+
+                  match executeMutationRegistryWithSeam [ case ] trapSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(CleanupFailed msg)) ->
+                          Expect.stringContains msg "cannot delete" "CleanupFailed must surface the cleanup error"
+                      | Some(Result.Error other) -> failtestf "expected CleanupFailed, got %A" other
+                      | _ -> failtestf "cleanup failure must return CleanupFailed"
+              }
+
+              test "executor-level: a non-vacuous mutator is observable from a receipt" {
+                  let case = trivialCase trivialMutator trivialBaseline
+
+                  match executeMutationRegistryWithSeam [ case ] defaultWorkspaceSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Ok _) -> ()
+                      | Some(Result.Error other) -> failtestf "good case must be Ok, got %A" other
+                      | None -> failtestf "no result for good case"
+              }
+
+              test "executor-level: fabricated receipt without filesystem mutation returns MutationWasVacuous" {
+                  // The mutator returns a receipt claiming a change
+                  // but the workspace is untouched, so the executor
+                  // observes an empty diff and reports vacuous.
+                  let fabricatedMutator _ : Result<MutationReceipt, string> =
+                      Result.Ok
+                          { ChangedPaths = [ ".github/workflows/harbor.yml" ]
+                            BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "fabricated-before" ]
+                            AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "fabricated-after" ] }
+
+                  let case = trivialCase fabricatedMutator trivialBaseline
+
+                  match executeMutationRegistryWithSeam [ case ] defaultWorkspaceSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(MutationWasVacuous _)) -> ()
+                      | Some(Result.Error other) -> failtestf "expected MutationWasVacuous, got %A" other
+                      | _ -> failtestf "fabricated receipt must return Error MutationWasVacuous"
+              }
+
+              test "executor-level: real mutation, no violation returns ExpectedViolationMissing" {
+                  // The RunCheck seam returns an empty list on every
+                  // invocation: baseline passes, post-mutation produces
+                  // no violation.  The mutator is a no-op writer (the
+                  // workspace is intentionally empty so the diff is
+                  // empty; this test is about the case where the
+                  // mutator touches a file but the check returns no
+                  // violation).
+                  let mutator (root: string) : Result<MutationReceipt, string> =
+                      writeAndHash root ".github/workflows/harbor.yml" "touched"
+                      |> Result.map (fun _ ->
+                          { ChangedPaths = [ ".github/workflows/harbor.yml" ]
                             BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "before" ]
-                            AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "after" ]
-                        })
-                let emptySeam =
-                    { defaultWorkspaceSeam with
-                        RunCheck = fun _ _ -> Result.Ok [] }
-                let case = trivialCase mutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] emptySeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (ExpectedViolationMissing _)) -> ()
-                    | Some (Result.Error other) ->
-                        failtestf "expected ExpectedViolationMissing, got %A" other
-                    | _ -> failtestf "no violation must return ExpectedViolationMissing"
-            }
+                            AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "after" ] })
 
-            test "executor-level: real mutation, unrelated-only violation returns ExpectedViolationMissing" {
-                // First RunCheck call (baseline): empty so the
-                // baseline passes.  Second RunCheck call
-                // (post-mutation): unrelated violation.  The
-                // expected id is absent, so the result is
-                // ExpectedViolationMissing.
-                let mutator (root: string) : Result<MutationReceipt, string> =
-                    writeUnit root ".github/workflows/harbor.yml" "touched"
-                    |> Result.bind (fun () ->
-                        Ok {
-                            ChangedPaths = [ ".github/workflows/harbor.yml" ]
-                            BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "before" ]
-                            AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "after" ]
-                        })
-                let mutable runCheckCalls = 0
-                let unrelatedOnlySeam =
-                    { defaultWorkspaceSeam with
-                        RunCheck =
-                            fun _ _ ->
-                                runCheckCalls <- runCheckCalls + 1
-                                if runCheckCalls = 1 then
-                                    Result.Ok []
-                                else
-                                    Result.Ok [ {
-                                        Check = "CP-99_unrelated"
-                                        Id = "CP-99_unrelated"
-                                        Path = "<unrelated>"
-                                        Detail = "unrelated violation"
-                                    } ] }
-                let case = trivialCase mutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] unrelatedOnlySeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (ExpectedViolationMissing _)) -> ()
-                    | Some (Result.Error other) ->
-                        failtestf "expected ExpectedViolationMissing, got %A" other
-                    | _ -> failtestf "unrelated-only must return ExpectedViolationMissing"
-            }
+                  let emptySeam =
+                      { defaultWorkspaceSeam with
+                          RunCheck = fun _ _ -> Result.Ok [] }
 
-            test "executor-level: expected plus unrelated violation returns UnexpectedViolation" {
-                // First RunCheck call (baseline): empty.
-                // Second RunCheck call (post-mutation): both the
-                // expected violation and an unallowed additional
-                // violation.  The expected one passes; the unrelated
-                // one is rejected as UnexpectedViolation.
-                let mutator (root: string) : Result<MutationReceipt, string> =
-                    writeUnit root ".github/workflows/harbor.yml" "touched"
-                    |> Result.bind (fun () ->
-                        Ok {
-                            ChangedPaths = [ ".github/workflows/harbor.yml" ]
-                            BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "before" ]
-                            AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "after" ]
-                        })
-                let mutable runCheckCalls = 0
-                let expectedPlusUnrelatedSeam =
-                    { defaultWorkspaceSeam with
-                        RunCheck =
-                            fun actualId _ ->
-                                runCheckCalls <- runCheckCalls + 1
-                                if runCheckCalls = 1 then
-                                    Result.Ok []
-                                else
-                                    Result.Ok [
-                                        { Check = actualId; Id = actualId
-                                          Path = "<expected>"; Detail = "expected violation" }
-                                        { Check = "CP-99_unrelated"; Id = "CP-99_unrelated"
-                                          Path = "<unrelated>"; Detail = "unallowed additional violation" }
-                                    ] }
-                let case = trivialCase mutator trivialBaseline
-                match executeMutationRegistryWithSeam [case] expectedPlusUnrelatedSeam with
-                | Result.Error _ -> failtestf "registry must validate"
-                | Result.Ok results ->
-                    match findOnlyResult results with
-                    | Some (Result.Error (UnexpectedViolation violation)) ->
-                        Expect.equal
-                            violation.Check
-                            "CP-99_unrelated"
-                            "unexpected check identity"
+                  let case = trivialCase mutator trivialBaseline
 
-                        Expect.equal
-                            violation.Id
-                            "CP-99_unrelated"
-                            "unexpected violation identity"
-                    | Some (Result.Error other) ->
-                        failtestf "expected UnexpectedViolation, got %A" other
-                    | _ -> failtestf "expected plus unrelated must return UnexpectedViolation"
-            }
-        ]
+                  match executeMutationRegistryWithSeam [ case ] emptySeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(ExpectedViolationMissing _)) -> ()
+                      | Some(Result.Error other) -> failtestf "expected ExpectedViolationMissing, got %A" other
+                      | _ -> failtestf "no violation must return ExpectedViolationMissing"
+              }
+
+              test "executor-level: real mutation, unrelated-only violation returns ExpectedViolationMissing" {
+                  // First RunCheck call (baseline): empty so the
+                  // baseline passes.  Second RunCheck call
+                  // (post-mutation): unrelated violation.  The
+                  // expected id is absent, so the result is
+                  // ExpectedViolationMissing.
+                  let mutator (root: string) : Result<MutationReceipt, string> =
+                      writeUnit root ".github/workflows/harbor.yml" "touched"
+                      |> Result.bind (fun () ->
+                          Ok
+                              { ChangedPaths = [ ".github/workflows/harbor.yml" ]
+                                BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "before" ]
+                                AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "after" ] })
+
+                  let mutable runCheckCalls = 0
+
+                  let unrelatedOnlySeam =
+                      { defaultWorkspaceSeam with
+                          RunCheck =
+                              fun _ _ ->
+                                  runCheckCalls <- runCheckCalls + 1
+
+                                  if runCheckCalls = 1 then
+                                      Result.Ok []
+                                  else
+                                      Result.Ok
+                                          [ { Check = "CP-99_unrelated"
+                                              Id = "CP-99_unrelated"
+                                              Path = "<unrelated>"
+                                              Detail = "unrelated violation" } ] }
+
+                  let case = trivialCase mutator trivialBaseline
+
+                  match executeMutationRegistryWithSeam [ case ] unrelatedOnlySeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(ExpectedViolationMissing _)) -> ()
+                      | Some(Result.Error other) -> failtestf "expected ExpectedViolationMissing, got %A" other
+                      | _ -> failtestf "unrelated-only must return ExpectedViolationMissing"
+              }
+
+              test "executor-level: expected plus unrelated violation returns UnexpectedViolation" {
+                  // First RunCheck call (baseline): empty.
+                  // Second RunCheck call (post-mutation): both the
+                  // expected violation and an unallowed additional
+                  // violation.  The expected one passes; the unrelated
+                  // one is rejected as UnexpectedViolation.
+                  let mutator (root: string) : Result<MutationReceipt, string> =
+                      writeUnit root ".github/workflows/harbor.yml" "touched"
+                      |> Result.bind (fun () ->
+                          Ok
+                              { ChangedPaths = [ ".github/workflows/harbor.yml" ]
+                                BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "before" ]
+                                AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "after" ] })
+
+                  let mutable runCheckCalls = 0
+
+                  let expectedPlusUnrelatedSeam =
+                      { defaultWorkspaceSeam with
+                          RunCheck =
+                              fun actualId _ ->
+                                  runCheckCalls <- runCheckCalls + 1
+
+                                  if runCheckCalls = 1 then
+                                      Result.Ok []
+                                  else
+                                      Result.Ok
+                                          [ { Check = actualId
+                                              Id = actualId
+                                              Path = "<expected>"
+                                              Detail = "expected violation" }
+                                            { Check = "CP-99_unrelated"
+                                              Id = "CP-99_unrelated"
+                                              Path = "<unrelated>"
+                                              Detail = "unallowed additional violation" } ] }
+
+                  let case = trivialCase mutator trivialBaseline
+
+                  match executeMutationRegistryWithSeam [ case ] expectedPlusUnrelatedSeam with
+                  | Result.Error _ -> failtestf "registry must validate"
+                  | Result.Ok results ->
+                      match findOnlyResult results with
+                      | Some(Result.Error(UnexpectedViolation violation)) ->
+                          Expect.equal violation.Check "CP-99_unrelated" "unexpected check identity"
+
+                          Expect.equal violation.Id "CP-99_unrelated" "unexpected violation identity"
+                      | Some(Result.Error other) -> failtestf "expected UnexpectedViolation, got %A" other
+                      | _ -> failtestf "expected plus unrelated must return UnexpectedViolation"
+              } ]
