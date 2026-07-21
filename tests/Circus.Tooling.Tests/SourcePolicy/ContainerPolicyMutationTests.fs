@@ -532,4 +532,88 @@ permissions:
                         failtestf "good case must be Ok, got %A" other
                     | None -> failtestf "no result for good case"
             }
+
+            test "executor-level: fabricated receipt without filesystem mutation returns MutationWasVacuous" {
+                // The mutator returns a receipt claiming a change
+                // but the workspace is untouched, so the executor
+                // observes an empty diff and reports vacuous.
+                let fabricatedMutator _ : Result<MutationReceipt, string> =
+                    Result.Ok {
+                        ChangedPaths = [ ".github/workflows/harbor.yml" ]
+                        BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "fabricated-before" ]
+                        AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "fabricated-after" ]
+                    }
+                let case = trivialCase "CP-04_fabricated" fabricatedMutator trivialBaseline
+                match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
+                | Result.Error _ -> failtestf "registry must validate"
+                | Result.Ok results ->
+                    match Map.tryFind (MutationCaseId.fromString "CP-04_fabricated") results with
+                    | Some (Result.Error (MutationWasVacuous _)) -> ()
+                    | Some (Result.Error other) ->
+                        failtestf "expected MutationWasVacuous, got %A" other
+                    | _ -> failtestf "fabricated receipt must return Error MutationWasVacuous"
+            }
+
+            test "executor-level: real mutation, no violation returns ExpectedViolationMissing" {
+                // The RunCheck seam returns an empty list on every
+                // invocation: baseline passes, post-mutation produces
+                // no violation.  The mutator is a no-op writer (the
+                // workspace is intentionally empty so the diff is
+                // empty; this test is about the case where the
+                // mutator touches a file but the check returns no
+                // violation).
+                let mutator (root: string) : Result<MutationReceipt, string> =
+                    writeAndHash root ".github/workflows/harbor.yml" "touched"
+                    |> Result.map (fun _ ->
+                        {
+                            ChangedPaths = [ ".github/workflows/harbor.yml" ]
+                            BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "before" ]
+                            AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "after" ]
+                        })
+                let emptySeam =
+                    { defaultWorkspaceSeam with
+                        RunCheck = fun _ _ -> Result.Ok [] }
+                let case = trivialCase "CP-04_noviolation" mutator trivialBaseline
+                match executeMutationRegistryWithSeam [case] emptySeam with
+                | Result.Error _ -> failtestf "registry must validate"
+                | Result.Ok results ->
+                    match Map.tryFind (MutationCaseId.fromString "CP-04_noviolation") results with
+                    | Some (Result.Error (ExpectedViolationMissing _)) -> ()
+                    | Some (Result.Error other) ->
+                        failtestf "expected ExpectedViolationMissing, got %A" other
+                    | _ -> failtestf "no violation must return ExpectedViolationMissing"
+            }
+
+            test "executor-level: real mutation, unrelated-only violation returns ExpectedViolationMissing" {
+                // Baseline empty; post-mutation returns an
+                // unrelated violation.  The expected check id is
+                // absent, so the result is ExpectedViolationMissing,
+                // not UnexpectedViolation.
+                let mutator (root: string) : Result<MutationReceipt, string> =
+                    writeAndHash root ".github/workflows/harbor.yml" "touched"
+                    |> Result.map (fun _ ->
+                        {
+                            ChangedPaths = [ ".github/workflows/harbor.yml" ]
+                            BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "before" ]
+                            AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "after" ]
+                        })
+                let unrelatedOnlySeam =
+                    { defaultWorkspaceSeam with
+                        RunCheck = fun _ _ ->
+                            Result.Ok [ {
+                                Check = "CP-99_unrelated"
+                                Id = "CP-99_unrelated"
+                                Path = "<unrelated>"
+                                Detail = "unrelated violation"
+                            } ] }
+                let case = trivialCase "CP-04_unrelated_only" mutator trivialBaseline
+                match executeMutationRegistryWithSeam [case] unrelatedOnlySeam with
+                | Result.Error _ -> failtestf "registry must validate"
+                | Result.Ok results ->
+                    match Map.tryFind (MutationCaseId.fromString "CP-04_unrelated_only") results with
+                    | Some (Result.Error (ExpectedViolationMissing _)) -> ()
+                    | Some (Result.Error other) ->
+                        failtestf "expected ExpectedViolationMissing, got %A" other
+                    | _ -> failtestf "unrelated-only must return ExpectedViolationMissing"
+            }
         ]
