@@ -211,8 +211,8 @@ let private extractFunctionName (implLoc: string) : string option =
     if m.Success then Some m.Groups.[1].Value else None
 
 /// P1-1: Authoritative metadata map from ContainerPolicy.CheckMetadata.
-/// Key: exact concrete check ID, Value: CheckMetadata record.
-let private metadataByExactId : Map<string, CheckMetadata> =
+/// Key: exact concrete check ID, Value: CheckMetadataEntry record.
+let private metadataByExactId : Map<string, CheckMetadataEntry> =
     CheckMetadata
     |> List.map (fun m -> m.Id, m)
     |> Map.ofList

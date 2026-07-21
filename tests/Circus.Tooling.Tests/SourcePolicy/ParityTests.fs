@@ -38,7 +38,7 @@ let private findCsv () : string =
 
 /// P1-1: Implementation location derived from CheckMetadata.
 let private implLocFor (exactId: string) : string =
-    match List.tryFind (fun (m: CheckMetadata) -> m.Id = exactId) CheckMetadata with
+    match List.tryFind (fun (m: CheckMetadataEntry) -> m.Id = exactId) CheckMetadata with
     | Some m -> sprintf "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (%s)" m.ImplementationFunction
     | None -> "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"
 
@@ -343,12 +343,12 @@ let tests =
         // P1-1: Test that function metadata equals nameof for representative checks
         test "P1-1: CheckMetadata.ImplementationFunction matches nameof for CP-01" {
             // Verify the nameof binding is correct
-            let cp01 = List.find (fun (m: CheckMetadata) -> m.Id = "CP-01_required_files") CheckMetadata
+            let cp01 = List.find (fun (m: CheckMetadataEntry) -> m.Id = "CP-01_required_files") CheckMetadata
             Expect.equal cp01.ImplementationFunction "checkRequiredFiles" "CP-01 function name must be checkRequiredFiles"
         }
 
         test "P1-1: CheckMetadata.ImplementationFunction matches nameof for CP-10" {
-            let cp10 = List.find (fun (m: CheckMetadata) -> m.Id = "CP-10_trusted_runner") CheckMetadata
+            let cp10 = List.find (fun (m: CheckMetadataEntry) -> m.Id = "CP-10_trusted_runner") CheckMetadata
             Expect.equal cp10.ImplementationFunction "checkTrustedRunner" "CP-10 function name must be checkTrustedRunner"
         }
 
@@ -375,7 +375,7 @@ let tests =
         // P1-1: Test valid metadata creates one exact map entry per definition
         test "P1-1: CheckMetadata produces one exact map entry per CheckDefinition" {
             // Map construction should not collapse any entries
-            let metadataIds = List.map (fun (m: CheckMetadata) -> m.Id) CheckMetadata
+            let metadataIds = List.map (fun (m: CheckMetadataEntry) -> m.Id) CheckMetadata
             let uniqueIds = List.distinct metadataIds
             Expect.equal (List.length metadataIds) (List.length uniqueIds) "all metadata IDs are unique"
             Expect.equal (List.length metadataIds) (List.length CheckMetadata) "metadata count matches CheckMetadata count"

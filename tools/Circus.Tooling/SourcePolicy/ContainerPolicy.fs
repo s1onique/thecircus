@@ -790,13 +790,13 @@ let private checks : CheckDefinition list = [
 let CheckIds : string list = checks |> List.map (fun c -> c.Id)
 
 /// P1-1: Single authoritative source for identity and function mapping.
-type CheckMetadata = {
+type CheckMetadataEntry = {
     Id: string
     ImplementationFunction: string
 }
 
 /// P1-1: Authoritative production metadata derived from CheckDefinition.
-let CheckMetadata : CheckMetadata list =
+let CheckMetadata : CheckMetadataEntry list =
     checks
     |> List.map (fun c -> { Id = c.Id; ImplementationFunction = c.ImplementationFunction })
 
