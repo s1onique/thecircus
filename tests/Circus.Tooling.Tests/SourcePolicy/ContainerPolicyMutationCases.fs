@@ -53,12 +53,7 @@ let private compliantHarbor =
     "      - run: echo spbnix-k8s-docker\n"
 
 /// Compliant reusable workflow (CORRECTION01 P0-5, repaired
-/// baselines).  The Harbor repository contract
-/// ``harbor-pve1.spbnix.local/circus/${{ inputs.image_name }}``, the
-/// canonical cache template, the GITHUB_OUTPUT step references, the
-/// ``linux/amd64`` platform marker, the SPBNIX_CA_CERT_PEM secret,
-/// and the trusted publication guard are all present so every
-/// CP-XX baseline proof that consults this file passes.
+/// baselines).
 let private compliantReusable =
     "name: build-image\n" +
     "on:\n  workflow_call:\n    inputs:\n" +
@@ -164,59 +159,54 @@ let private compliantAcceptanceTest =
     "#!/usr/bin/env bash\nset -euo pipefail\necho 'leamas factory digest'\necho 'overall_status=pass'\necho 'checks_passed'\necho 'checks_unavailable'\necho pass\necho fail\necho skip\necho unavailable\n"
 
 // ---------------------------------------------------------------------------
-// Baseline materialisers
+// Baseline materialisers — every Result is composed via result-computation
+// expression so a single failure becomes the case's BaselinePreparationFailed
+// without being silently swallowed.
 // ---------------------------------------------------------------------------
 
 let private baselineWorkflowOnly (root: string) : Result<unit, string> =
-    try
-        writeAndHash root ".github/workflows/harbor.yml" compliantHarbor |> ignore
-        writeAndHash root ".dockerignore" compliantDockerignore |> ignore
-        Ok ()
-    with ex ->
-        Error (sprintf "baselineWorkflowOnly: %s" ex.Message)
+    (writeAndHash root ".github/workflows/harbor.yml" compliantHarbor) |> Result.bind (fun (_) -> (writeAndHash root ".dockerignore" compliantDockerignore) |> Result.bind (fun (_) -> Ok (())))
 
 let private baselineBothWorkflows (root: string) : Result<unit, string> =
-    try
-        writeAndHash root ".github/workflows/harbor.yml" compliantHarbor |> ignore
-        writeAndHash root ".github/workflows/harbor-build-image.yml" compliantReusable |> ignore
-        writeAndHash root ".dockerignore" compliantDockerignore |> ignore
-        Ok ()
-    with ex ->
-        Error (sprintf "baselineBothWorkflows: %s" ex.Message)
+    (writeAndHash root ".github/workflows/harbor.yml" compliantHarbor) |> Result.bind (fun (_) -> (writeAndHash root ".github/workflows/harbor-build-image.yml" compliantReusable) |> Result.bind (fun (_) -> (writeAndHash root ".dockerignore" compliantDockerignore) |> Result.bind (fun (_) -> Ok (()))))
+
+let private baselineWithCa (root: string) : Result<unit, string> =
+    (baselineBothWorkflows root) |> Result.bind (fun (_) -> (writeAndHash root ".github/scripts/install-spbnix-harbor-ca.sh" compliantCaScript) |> Result.bind (fun (_) -> (makeExecutable root ".github/scripts/install-spbnix-harbor-ca.sh") |> Result.bind (fun (_) -> Ok (()))))
+
+let private baselineWithPassword (root: string) : Result<unit, string> =
+    (baselineBothWorkflows root) |> Result.bind (fun (_) -> (writeAndHash root ".github/workflows/harbor-build-image.yml" compliantReusableWithPassword) |> Result.bind (fun (_) -> Ok (())))
+
+let private baselineWithMetadata (root: string) : Result<unit, string> =
+    (baselineBothWorkflows root) |> Result.bind (fun (_) -> (writeAndHash root ".github/scripts/harbor-metadata.sh" compliantMetadata) |> Result.bind (fun (_) -> (makeExecutable root ".github/scripts/harbor-metadata.sh") |> Result.bind (fun (_) -> Ok (()))))
+
+let private baselineWithFrontend (root: string) : Result<unit, string> =
+    (baselineBothWorkflows root) |> Result.bind (fun (_) -> (writeAndHash root "Dockerfile.frontend" compliantFrontend) |> Result.bind (fun (_) -> Ok (())))
+
+let private baselineWithSmoke (root: string) : Result<unit, string> =
+    (baselineBothWorkflows root) |> Result.bind (fun (_) -> (writeAndHash root "scripts/container-smoke.sh" compliantSmoke) |> Result.bind (fun (_) -> (makeExecutable root "scripts/container-smoke.sh") |> Result.bind (fun (_) -> Ok (()))))
+
+let private baselineWithVerify (root: string) : Result<unit, string> =
+    (baselineBothWorkflows root) |> Result.bind (fun (_) -> (writeAndHash root "scripts/ci/verify_build_image.sh" compliantVerify) |> Result.bind (fun (_) -> (makeExecutable root "scripts/ci/verify_build_image.sh") |> Result.bind (fun (_) -> (writeAndHash root "scripts/verify-published-image.sh" compliantVerifyPublished) |> Result.bind (fun (_) -> (makeExecutable root "scripts/verify-published-image.sh") |> Result.bind (fun (_) -> Ok (()))))))
 
 let private baselineFullScriptSurface (root: string) : Result<unit, string> =
-    try
-        baselineBothWorkflows root |> ignore
-        writeAndHash root "scripts/ci/build_image.sh" compliantBuildScript |> ignore
-        makeExecutable root "scripts/ci/build_image.sh"
-        writeAndHash root "scripts/ci/publish_image.sh" compliantPublishScript |> ignore
-        makeExecutable root "scripts/ci/publish_image.sh"
-        writeAndHash root "scripts/ci/verify_build_image.sh" compliantVerify |> ignore
-        makeExecutable root "scripts/ci/verify_build_image.sh"
-        writeAndHash root "scripts/ci/wire_buildx_builder.sh" compliantWireScript |> ignore
-        makeExecutable root "scripts/ci/wire_buildx_builder.sh"
-        Ok ()
-    with ex ->
-        Error (sprintf "baselineFullScriptSurface: %s" ex.Message)
+    (baselineBothWorkflows root) |> Result.bind (fun (_) -> (writeAndHash root "scripts/ci/build_image.sh" compliantBuildScript) |> Result.bind (fun (_) -> (makeExecutable root "scripts/ci/build_image.sh") |> Result.bind (fun (_) -> (writeAndHash root "scripts/ci/publish_image.sh" compliantPublishScript) |> Result.bind (fun (_) -> (makeExecutable root "scripts/ci/publish_image.sh") |> Result.bind (fun (_) -> (writeAndHash root "scripts/ci/verify_build_image.sh" compliantVerify) |> Result.bind (fun (_) -> (makeExecutable root "scripts/ci/verify_build_image.sh") |> Result.bind (fun (_) -> (writeAndHash root "scripts/ci/wire_buildx_builder.sh" compliantWireScript) |> Result.bind (fun (_) -> (makeExecutable root "scripts/ci/wire_buildx_builder.sh") |> Result.bind (fun (_) -> Ok (()))))))))))
+
+let private baselineFullSurfaceAndAcceptance (root: string) : Result<unit, string> =
+    (baselineFullScriptSurface root) |> Result.bind (fun (_) -> (writeAndHash root "tests/ci/test_build_publish_shell.sh" compliantShellTest) |> Result.bind (fun (_) -> (makeExecutable root "tests/ci/test_build_publish_shell.sh") |> Result.bind (fun (_) -> (writeAndHash root "tests/ci/test_gate_summary_acceptance.sh" compliantAcceptanceTest) |> Result.bind (fun (_) -> (makeExecutable root "tests/ci/test_gate_summary_acceptance.sh") |> Result.bind (fun (_) -> Ok (()))))))
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Mutator helpers — every mutator returns a non-vacuous receipt
 // ---------------------------------------------------------------------------
 
-let private replaceFile (root: string) (rel: string) (newContent: string) : Result<MutationReceipt, string> =
-    match writeAndHash root rel newContent with
-    | Error e -> Error e
-    | Ok (b, a) ->
-        Ok {
+let private replaceFile (root: string) (rel: string) (newContent: string)
+    : Result<MutationReceipt, string> =
+    writeAndHash root rel newContent
+    |> Result.map (fun (b, a) ->
+        {
             ChangedPaths = [ rel ]
             BeforeHashes = Map.ofList [ rel, b ]
             AfterHashes = Map.ofList [ rel, a ]
-        }
-
-let private replaceFiles (root: string) (items: (string * string) list) : Result<MutationReceipt, string> =
-    items
-    |> List.map (fun (rel, content) -> rel, writeAndHash root rel content)
-    |> buildReceipt
+        })
 
 // ---------------------------------------------------------------------------
 // 22-case registry
@@ -316,13 +306,7 @@ let mutationCases : MutationCase list = [
       Description = "password-stdin not used"
       ExpectedCheckId = "CP-12_password_stdin"
       AllowedAdditionalCheckIds = Set.empty
-      PrepareBaseline = fun root ->
-        try
-            baselineBothWorkflows root |> ignore
-            writeAndHash root ".github/workflows/harbor-build-image.yml" compliantReusableWithPassword |> ignore
-            Ok ()
-        with ex ->
-            Error ex.Message
+      PrepareBaseline = baselineWithPassword
       ApplyMutation = fun root ->
         replaceFile root ".github/workflows/harbor-build-image.yml"
           (compliantReusableWithPassword.Replace("--password-stdin", "--password \"${HARBOR_PASSWORD}\"")) }
@@ -331,14 +315,7 @@ let mutationCases : MutationCase list = [
       Description = "CA secret missing"
       ExpectedCheckId = "CP-14_ca_secret"
       AllowedAdditionalCheckIds = set [ "CP-14_buildkit_config"; "CP-14_buildkit_registry" ]
-      PrepareBaseline = fun root ->
-        try
-            baselineBothWorkflows root |> ignore
-            writeAndHash root ".github/scripts/install-spbnix-harbor-ca.sh" compliantCaScript |> ignore
-            makeExecutable root ".github/scripts/install-spbnix-harbor-ca.sh"
-            Ok ()
-        with ex ->
-            Error ex.Message
+      PrepareBaseline = baselineWithCa
       ApplyMutation = fun root ->
         replaceFile root ".github/scripts/install-spbnix-harbor-ca.sh" "echo no-ca\n" }
 
@@ -381,14 +358,7 @@ let mutationCases : MutationCase list = [
       Description = "metadata script lacks SHA / release tags"
       ExpectedCheckId = "CP-18_immutable_tag"
       AllowedAdditionalCheckIds = set [ "CP-18_release_tag"; "CP-18_trusted_guard" ]
-      PrepareBaseline = fun root ->
-        try
-            baselineBothWorkflows root |> ignore
-            writeAndHash root ".github/scripts/harbor-metadata.sh" compliantMetadata |> ignore
-            makeExecutable root ".github/scripts/harbor-metadata.sh"
-            Ok ()
-        with ex ->
-            Error ex.Message
+      PrepareBaseline = baselineWithMetadata
       ApplyMutation = fun root ->
         replaceFile root ".github/scripts/harbor-metadata.sh" "echo v0.1.0\n" }
 
@@ -396,14 +366,7 @@ let mutationCases : MutationCase list = [
       Description = "latest emitted twice"
       ExpectedCheckId = "CP-19_latest_main_only"
       AllowedAdditionalCheckIds = set [ "CP-19_latest_present"; "CP-19_latest_unique" ]
-      PrepareBaseline = fun root ->
-        try
-            baselineBothWorkflows root |> ignore
-            writeAndHash root ".github/scripts/harbor-metadata.sh" compliantMetadata |> ignore
-            makeExecutable root ".github/scripts/harbor-metadata.sh"
-            Ok ()
-        with ex ->
-            Error ex.Message
+      PrepareBaseline = baselineWithMetadata
       ApplyMutation = fun root ->
         replaceFile root ".github/scripts/harbor-metadata.sh"
           "echo local-AAA\necho v0\necho 0\necho 0.0\necho 0\nif [ \"$GITHUB_REF\" = \"refs/heads/main\" ]; then echo latest; fi\nif [ \"$GITHUB_REF\" = \"refs/heads/main\" ]; then echo latest; fi\n" }
@@ -412,13 +375,7 @@ let mutationCases : MutationCase list = [
       Description = "frontend Dockerfile missing CA mount markers"
       ExpectedCheckId = "CP-20_secret_marker"
       AllowedAdditionalCheckIds = set [ "CP-20_update_ca"; "CP-20_legacy_path" ]
-      PrepareBaseline = fun root ->
-        try
-            baselineBothWorkflows root |> ignore
-            writeAndHash root "Dockerfile.frontend" compliantFrontend |> ignore
-            Ok ()
-        with ex ->
-            Error ex.Message
+      PrepareBaseline = baselineWithFrontend
       ApplyMutation = fun root ->
         replaceFile root "Dockerfile.frontend"
           ("FROM node:20\nUSER 1000:1000\nRUN npm ci --ignore-scripts\n" +
@@ -428,13 +385,7 @@ let mutationCases : MutationCase list = [
       Description = "frontend Dockerfile missing Elm install markers"
       ExpectedCheckId = "CP-21_elm_marker"
       AllowedAdditionalCheckIds = set [ "CP-21_elm_version" ]
-      PrepareBaseline = fun root ->
-        try
-            baselineBothWorkflows root |> ignore
-            writeAndHash root "Dockerfile.frontend" compliantFrontend |> ignore
-            Ok ()
-        with ex ->
-            Error ex.Message
+      PrepareBaseline = baselineWithFrontend
       ApplyMutation = fun root ->
         replaceFile root "Dockerfile.frontend"
           ("FROM node:20 AS build\nWORKDIR /app\n" +
@@ -453,14 +404,7 @@ let mutationCases : MutationCase list = [
       Description = "smoke script missing endpoint contracts"
       ExpectedCheckId = "CP-24_backend_smoke"
       AllowedAdditionalCheckIds = set [ "CP-24_frontend_smoke" ]
-      PrepareBaseline = fun root ->
-        try
-            baselineBothWorkflows root |> ignore
-            writeAndHash root "scripts/container-smoke.sh" compliantSmoke |> ignore
-            makeExecutable root "scripts/container-smoke.sh"
-            Ok ()
-        with ex ->
-            Error ex.Message
+      PrepareBaseline = baselineWithSmoke
       ApplyMutation = fun root ->
         replaceFile root "scripts/container-smoke.sh" "echo no-smoke\n" }
 
@@ -468,16 +412,7 @@ let mutationCases : MutationCase list = [
       Description = "verify script lacks digest pull/inspect"
       ExpectedCheckId = "CP-25_digest_pull"
       AllowedAdditionalCheckIds = set [ "CP-25_digest_inspect"; "CP-25_amd64_verify" ]
-      PrepareBaseline = fun root ->
-        try
-            baselineBothWorkflows root |> ignore
-            writeAndHash root "scripts/ci/verify_build_image.sh" compliantVerify |> ignore
-            makeExecutable root "scripts/ci/verify_build_image.sh"
-            writeAndHash root "scripts/verify-published-image.sh" compliantVerifyPublished |> ignore
-            makeExecutable root "scripts/verify-published-image.sh"
-            Ok ()
-        with ex ->
-            Error ex.Message
+      PrepareBaseline = baselineWithVerify
       ApplyMutation = fun root ->
         replaceFile root "scripts/ci/verify_build_image.sh" "docker pull IMAGE\n" }
 
@@ -502,13 +437,7 @@ let mutationCases : MutationCase list = [
       Description = "frontend final stage mentions node_modules"
       ExpectedCheckId = "CP-30_final_stage_material"
       AllowedAdditionalCheckIds = Set.empty
-      PrepareBaseline = fun root ->
-        try
-            baselineBothWorkflows root |> ignore
-            writeAndHash root "Dockerfile.frontend" compliantFrontend |> ignore
-            Ok ()
-        with ex ->
-            Error ex.Message
+      PrepareBaseline = baselineWithFrontend
       ApplyMutation = fun root ->
         replaceFile root "Dockerfile.frontend"
           ("FROM node:20 AS build\nWORKDIR /app\nCOPY . .\nRUN npm ci\n" +
@@ -524,16 +453,7 @@ let mutationCases : MutationCase list = [
           "CP-31_publish_branch_coverage"
           "CP-31_wire_coverage"
           "CP-31_github_output_assertion" ]
-      PrepareBaseline = fun root ->
-        try
-            baselineFullScriptSurface root |> ignore
-            writeAndHash root "tests/ci/test_build_publish_shell.sh" compliantShellTest |> ignore
-            makeExecutable root "tests/ci/test_build_publish_shell.sh"
-            writeAndHash root "tests/ci/test_gate_summary_acceptance.sh" compliantAcceptanceTest |> ignore
-            makeExecutable root "tests/ci/test_gate_summary_acceptance.sh"
-            Ok ()
-        with ex ->
-            Error ex.Message
+      PrepareBaseline = baselineFullSurfaceAndAcceptance
       ApplyMutation = fun root ->
         replaceFile root "tests/ci/test_gate_summary_acceptance.sh" "echo incomplete\n" }
 ]

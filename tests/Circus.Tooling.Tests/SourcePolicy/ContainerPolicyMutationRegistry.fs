@@ -3,19 +3,19 @@ module Circus.Tooling.Tests.SourcePolicy.ContainerPolicyMutationRegistry
 /// Authoritative immutable mutation registry for the container-policy
 /// negative mutation suite.
 ///
-/// P0-5 (CORRECTION01): one registry, one execution, one immutable result
-/// map.  No global mutable pass counter, no global mutable case set, no
-/// global mutable result dictionary.  Every count and verdict is
-/// derived from the result map at the assertion site.
+/// P0-5 (CORRECTION01): one registry, one validation gate, one
+/// execution pass, one immutable result map.  No global mutable
+/// pass counter.  No global mutable case set.  No global mutable
+/// result dictionary.  Every count and verdict is derived from the
+/// result map at the assertion site.
 ///
-/// The registry exposes the minimum needed to prepare, mutate, execute,
-/// and classify a case; the case identifier is a private comparable
-/// domain type so it cannot be replaced by a display name, list index,
-/// or truncated rule prefix at the assertion site.
+/// The registry exposes the minimum needed to prepare, mutate,
+/// execute, and classify a case; the case identifier is a private
+/// comparable domain type so it cannot be replaced by a display
+/// name, list index, or truncated rule prefix at the assertion site.
 
 open System
 open System.IO
-open System.Security.Cryptography
 
 open Circus.Tooling.SourcePolicy.ContainerPolicy
 
@@ -34,10 +34,6 @@ type MutationCaseId =
 module MutationCaseId =
     let value (MutationCaseId v) = v
 
-    /// Internal factory used exclusively by the registry module when
-    /// binding an authoritative case definition.  Construction
-    /// outside the module is impossible because the union case is
-    /// ``private``.
     let fromString (s: string) : MutationCaseId =
         if String.IsNullOrEmpty s then
             invalidArg "s" "mutation case id must be non-empty"
@@ -47,25 +43,77 @@ module MutationCaseId =
         String.CompareOrdinal(value a, value b)
 
 // ---------------------------------------------------------------------------
+// Workspace seam (test-only injection point)
+// ---------------------------------------------------------------------------
+
+/// Workspace seam: every per-case execution flows through this pair
+/// of functions.  Production code uses the defaults (real
+/// filesystem IO).  Tests inject deterministic variants to prove
+/// failure paths without relying on filesystem timing.
+type WorkspaceSeam = {
+    CreateTempDir: unit -> Result<string, string>
+    DeleteRecursive: string -> Result<unit, string>
+    RunCheck: string -> string -> Result<Violation list, string>
+}
+
+let defaultWorkspaceSeam : WorkspaceSeam = {
+    CreateTempDir = fun () ->
+        let path =
+            Path.Combine(
+                Path.GetTempPath(),
+                "circus-cp-mut-" + Guid.NewGuid().ToString("n"))
+        try
+            Directory.CreateDirectory path |> ignore
+            Ok path
+        with ex ->
+            Error (sprintf "could not create workspace: %s" ex.Message)
+    DeleteRecursive = fun (root: string) ->
+        try
+            if Directory.Exists root then
+                Directory.Delete(root, true)
+            Ok ()
+        with ex ->
+            Error (sprintf "cleanup failed for %s: %s" root ex.Message)
+    RunCheck = fun (id: string) (root: string) ->
+        try
+            Ok (runCheckById id root)
+        with
+        | CheckFailed msg ->
+            Error (sprintf "check %s raised CheckFailed: %s" id msg)
+        | ex ->
+            Error (sprintf "check %s raised %s: %s" id (ex.GetType().Name) ex.Message)
+}
+
+// ---------------------------------------------------------------------------
 // Mutation receipt
 // ---------------------------------------------------------------------------
 
 /// Concrete receipt proving a mutation actually changed something.
 /// The mutator must return at least one entry per file that it
 /// intends to change; the receipt is rejected if all before/after
-/// hashes are identical or if the changed path set is empty.
+/// hashes are identical, if any changed path escapes the workspace,
+/// or if the receipt key sets are inconsistent.
 type MutationReceipt = {
     ChangedPaths: string list
     BeforeHashes: Map<string, string>
     AfterHashes: Map<string, string>
 } with
-    member r.IsNonVacuous =
-        not (List.isEmpty r.ChangedPaths)
-        && (r.ChangedPaths
-            |> List.exists (fun p ->
-                match Map.tryFind p r.BeforeHashes, Map.tryFind p r.AfterHashes with
-                | Some b, Some a -> b <> a
-                | _ -> false))
+    member r.KeysMatch () : bool =
+        let changed = r.ChangedPaths |> Set.ofList
+        let before = r.BeforeHashes |> Map.toList |> List.map fst |> Set.ofList
+        let after = r.AfterHashes |> Map.toList |> List.map fst |> Set.ofList
+        changed = before && changed = after
+
+    member r.HasObservableChange () : bool =
+        r.ChangedPaths
+        |> List.exists (fun p ->
+            match Map.tryFind p r.BeforeHashes, Map.tryFind p r.AfterHashes with
+            | Some b, Some a -> b <> a
+            | _ -> false)
+
+    /// Backward-compatible alias used by helpers and existing tests.
+    member r.IsNonVacuous with get () = r.HasObservableChange ()
+
 
 // ---------------------------------------------------------------------------
 // Result model
@@ -103,7 +151,7 @@ type MutationCase = {
 }
 
 // ---------------------------------------------------------------------------
-// Registry validation
+// Registry validation (executed before any case body)
 // ---------------------------------------------------------------------------
 
 type RegistryValidation =
@@ -112,10 +160,21 @@ type RegistryValidation =
     | EmptyCaseIds of string list
     | UnknownExpectedCheckIds of string list
 
+type RegistryExecutionFailure =
+    | InvalidRegistry of RegistryValidation
+
+type MutationResults =
+    Map<MutationCaseId, Result<MutationSuccess, MutationFailure>>
+
+type RegistryOutcome =
+    Result<MutationResults, RegistryExecutionFailure>
+
+
+
 let private allProductionCheckIds : Set<string> =
     set CheckIds
 
-let validateRegistry (cases: MutationCase list) : RegistryValidation =
+let validateMutationRegistry (cases: MutationCase list) : RegistryValidation =
     let emptyIds =
         cases
         |> List.filter (fun c -> String.IsNullOrEmpty (MutationCaseId.value c.Id))
@@ -143,36 +202,33 @@ let validateRegistry (cases: MutationCase list) : RegistryValidation =
                 RegistryOk
 
 // ---------------------------------------------------------------------------
-// Hashing helpers (pure, isolated to mutation workspace)
+// Workspace containment
 // ---------------------------------------------------------------------------
 
-let sha256OfFile (path: string) : string =
-    use fs = File.OpenRead(path)
-    use sha = SHA256.Create()
-    let bytes = sha.ComputeHash(fs)
-    BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant()
-
-/// Write ``content`` to ``root/rel`` and produce a (before, after)
-/// hash pair for the receipt.  When the file is absent before the
-/// call, the ``before`` slot is the empty string and the receipt is
-/// still non-vacuous (creation counts as a change).  When the file
-/// already exists, both slots are real SHA-256 hashes.
-let writeAndHash (root: string) (rel: string) (newContent: string)
-    : Result<string * string, string> =
+/// Resolves ``root/relative`` to an absolute path and rejects any
+/// path that escapes the workspace via absolute, parent-relative,
+/// or rooted-component smuggling.
+let resolveContainedPath (root: string) (relativePath: string)
+    : Result<string, string> =
     try
-        let full =
-            Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar))
-        let dir = Path.GetDirectoryName full
-        if not (Directory.Exists dir) then
-            Directory.CreateDirectory dir |> ignore
-        let beforeHash =
-            if File.Exists full then sha256OfFile full
-            else ""
-        File.WriteAllText(full, newContent)
-        let a = sha256OfFile full
-        Ok (beforeHash, a)
+        let rootFull = Path.GetFullPath root
+        let candidate =
+            if Path.IsPathRooted relativePath then
+                Path.GetFullPath relativePath
+            else
+                Path.GetFullPath(Path.Combine(rootFull, relativePath))
+        let rel = Path.GetRelativePath(rootFull, candidate)
+        let escapes =
+            String.IsNullOrEmpty rel
+            || rel = ".."
+            || rel.StartsWith(".." + string Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || Path.IsPathRooted rel
+        if escapes then
+            Error (sprintf "path escapes workspace: %s" relativePath)
+        else
+            Ok candidate
     with ex ->
-        Error (sprintf "writeAndHash failed for %s: %s" rel ex.Message)
+        Error (sprintf "resolveContainedPath failed for %s: %s" relativePath ex.Message)
 
 /// Build a ``MutationReceipt`` from one or more ``writeAndHash``
 /// results.  The mutator composes these helpers to construct a
@@ -202,14 +258,55 @@ let buildReceipt
         }
 
 /// Make a script executable in the workspace.
-let makeExecutable (root: string) (rel: string) : unit =
-    let full =
-        Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar))
+let makeExecutable (root: string) (rel: string) : Result<unit, string> =
     try
+        let full =
+            Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar))
         let info = new FileInfo(full)
-        info.UnixFileMode <- UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute
-        info.UnixFileMode <- info.UnixFileMode ||| UnixFileMode.GroupExecute ||| UnixFileMode.OtherExecute
-    with _ -> ()
+        info.UnixFileMode <-
+            UnixFileMode.UserRead
+            ||| UnixFileMode.UserWrite
+            ||| UnixFileMode.UserExecute
+        info.UnixFileMode <-
+            info.UnixFileMode
+            ||| UnixFileMode.GroupExecute
+            ||| UnixFileMode.OtherExecute
+        Ok ()
+    with ex ->
+        Error (sprintf "makeExecutable failed for %s: %s" rel ex.Message)
+
+// ---------------------------------------------------------------------------
+// Per-case executor
+// ---------------------------------------------------------------------------
+
+let private sha256OfFile (path: string) : string =
+    use fs = File.OpenRead(path)
+    use sha = System.Security.Cryptography.SHA256.Create()
+    let bytes = sha.ComputeHash(fs)
+    BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant()
+
+/// Write ``content`` to ``root/rel`` and return a (before, after)
+/// hash pair.  When the file is absent before the call, the before
+/// slot is the empty string and the receipt is still non-vacuous
+/// (creation counts as a change).  ``rel`` is rejected if it would
+/// escape the workspace.
+let writeAndHash (root: string) (rel: string) (newContent: string)
+    : Result<string * string, string> =
+    match resolveContainedPath root rel with
+    | Error e -> Error e
+    | Ok full ->
+        try
+            let dir = Path.GetDirectoryName full
+            if not (Directory.Exists dir) then
+                Directory.CreateDirectory dir |> ignore
+            let beforeHash =
+                if File.Exists full then sha256OfFile full
+                else ""
+            File.WriteAllText(full, newContent)
+            let a = sha256OfFile full
+            Ok (beforeHash, a)
+        with ex ->
+            Error (sprintf "writeAndHash failed for %s: %s" rel ex.Message)
 
 let private collectWorkspaceFiles (root: string) : string list =
     let rec walk (dir: string) : string list =
@@ -224,21 +321,6 @@ let private collectWorkspaceFiles (root: string) : string list =
         acc
     walk root
 
-// ---------------------------------------------------------------------------
-// Per-case executor
-// ---------------------------------------------------------------------------
-
-let private safeDelete (root: string) : Result<unit, string> =
-    try
-        if Directory.Exists root then
-            Directory.Delete(root, true)
-        Ok ()
-    with ex ->
-        Error (sprintf "cleanup failed for %s: %s" root ex.Message)
-
-/// Combine a primary failure with a cleanup failure.  We preserve
-/// the primary failure identity and append the cleanup diagnostic so
-/// the original error is not overwritten.
 let private combineFailures
     (primary: MutationFailure)
     (cleanupMsg: string)
@@ -256,112 +338,148 @@ let private combineFailures
         | CleanupFailed m -> m
     CaseExecutionFailed (sprintf "%s; cleanup also failed: %s" primaryMsg cleanupMsg)
 
-let private runWithCleanup
-    (root: string)
-    (body: unit -> Result<'a, MutationFailure>)
-    : Result<'a, MutationFailure> =
-    match body () with
-    | Ok _ as ok ->
-        match safeDelete root with
-        | Ok () -> ok
-        | Error e -> Error (CleanupFailed e)
-    | Error primary as err ->
-        match safeDelete root with
-        | Ok () -> err
-        | Error e -> Error (combineFailures primary e)
-
 let private executeCase
     (c: MutationCase)
+    (seam: WorkspaceSeam)
     : Result<MutationSuccess, MutationFailure> =
-    let root =
-        Path.Combine(
-            Path.GetTempPath(),
-            "circus-cp-mut-" + Guid.NewGuid().ToString("n"))
-    let workspaceOk =
-        try
-            Directory.CreateDirectory root |> ignore
-            Ok ()
-        with ex ->
-            Error (BaselinePreparationFailed (sprintf "could not create workspace: %s" ex.Message))
-    match workspaceOk with
+    match seam.CreateTempDir () with
     | Error e ->
-        // No workspace exists; nothing to clean up.
-        Error e
-    | Ok () ->
-        runWithCleanup root (fun () ->
+        Error (BaselinePreparationFailed e)
+    | Ok root ->
+        let runOnce () : Result<MutationSuccess, MutationFailure> =
             // Phase A: materialise the baseline.
-            match c.PrepareBaseline root with
-            | Error e ->
-                Error (BaselinePreparationFailed e)
+            let baselineStep () : Result<unit, MutationFailure> =
+                try
+                    match c.PrepareBaseline root with
+                    | Ok () -> Ok ()
+                    | Error msg -> Error (BaselinePreparationFailed msg)
+                with ex ->
+                    Error (CaseExecutionFailed
+                        (sprintf "PrepareBaseline for %s threw %s: %s"
+                            (MutationCaseId.value c.Id) (ex.GetType().Name) ex.Message))
+            match baselineStep () with
+            | Error e -> Error e
             | Ok () ->
-                // Phase B: baseline proof.  We must catch the
-                // ``CheckFailed`` exception that the production
-                // ``readText`` raises when a required file is
-                // missing; the absence of a required file is
-                // itself a baseline-preparation failure, not a
-                // detected violation.
-                let safeCheck (id: string) : Result<Violation list, MutationFailure> =
-                    try
-                        Ok (runCheckById id root)
-                    with
-                    | CheckFailed msg ->
-                        Error (CaseExecutionFailed (sprintf "check %s raised CheckFailed: %s" id msg))
-                    | ex ->
-                        Error (CaseExecutionFailed (sprintf "check %s raised %s: %s" id (ex.GetType().Name) ex.Message))
-                match safeCheck c.ExpectedCheckId with
-                | Error e -> Error e
+                // Phase B: baseline proof.
+                match seam.RunCheck c.ExpectedCheckId root with
+                | Error e -> Error (CaseExecutionFailed e)
                 | Ok baselineViolations ->
                     if not (List.isEmpty baselineViolations) then
                         Error (BaselineNotCompliant baselineViolations)
                     else
-                        match c.ApplyMutation root with
-                        | Error e ->
-                            Error (MutationApplicationFailed e)
+                        // Phase C: mutate.
+                        let mutationStep () : Result<MutationReceipt, MutationFailure> =
+                            try
+                                match c.ApplyMutation root with
+                                | Ok r -> Ok r
+                                | Error msg -> Error (MutationApplicationFailed msg)
+                            with ex ->
+                                Error (CaseExecutionFailed
+                                    (sprintf "ApplyMutation for %s threw %s: %s"
+                                        (MutationCaseId.value c.Id) (ex.GetType().Name) ex.Message))
+                        match mutationStep () with
+                        | Error e -> Error e
                         | Ok receipt ->
-                            if not receipt.IsNonVacuous then
-                                Error (MutationWasVacuous (sprintf "mutator for %s produced no observable change" (MutationCaseId.value c.Id)))
+                            // Validate the receipt structurally.
+                            if not (receipt.KeysMatch ()) then
+                                Error (MutationApplicationFailed
+                                    (sprintf "receipt key sets are inconsistent: changed=%d before=%d after=%d"
+                                        (List.length receipt.ChangedPaths)
+                                        (Map.count receipt.BeforeHashes)
+                                        (Map.count receipt.AfterHashes)))
                             else
-                                // Phase D: detection proof.
-                                match safeCheck c.ExpectedCheckId with
-                                | Error e -> Error e
-                                | Ok mutatedViolations ->
-                                    let targetIds = set [ c.ExpectedCheckId ]
-                                    let allowedIds = targetIds + c.AllowedAdditionalCheckIds
-                                    let observedIds =
-                                        mutatedViolations
-                                        |> List.map (fun v -> v.Id)
-                                        |> List.distinct
-                                        |> Set.ofList
-                                    if not (Set.contains c.ExpectedCheckId observedIds) then
-                                        Error (ExpectedViolationMissing (c.ExpectedCheckId, mutatedViolations))
-                                    else
-                                        let unexpected =
+                                // Verify every changed path is contained in the workspace.
+                                let allContained =
+                                    receipt.ChangedPaths
+                                    |> List.forall (fun p ->
+                                        match resolveContainedPath root p with
+                                        | Ok _ -> true
+                                        | Error _ -> false)
+                                if not allContained then
+                                    Error (MutationApplicationFailed
+                                        "receipt contains a path that escapes the workspace")
+                                else if List.isEmpty receipt.ChangedPaths then
+                                    Error (MutationWasVacuous
+                                        (sprintf "mutator for %s changed no paths"
+                                            (MutationCaseId.value c.Id)))
+                                else if not (receipt.HasObservableChange ()) then
+                                    Error (MutationWasVacuous
+                                        (sprintf "mutator for %s produced no observable change"
+                                            (MutationCaseId.value c.Id)))
+                                else
+                                    // Phase D: detection proof.
+                                    match seam.RunCheck c.ExpectedCheckId root with
+                                    | Error e -> Error (CaseExecutionFailed e)
+                                    | Ok mutatedViolations ->
+                                        let targetIds = set [ c.ExpectedCheckId ]
+                                        let allowedIds = targetIds + c.AllowedAdditionalCheckIds
+                                        let observedIds =
                                             mutatedViolations
-                                            |> List.filter (fun v -> not (Set.contains v.Id allowedIds))
-                                        match unexpected with
-                                        | first :: _ -> Error (UnexpectedViolation first)
-                                        | [] ->
-                                            Ok {
-                                                CaseId = c.Id
-                                                ExpectedCheckId = c.ExpectedCheckId
-                                                BaselineViolations = []
-                                                MutatedViolations = mutatedViolations
-                                                Receipt = receipt
-                                            })
+                                            |> List.map (fun v -> v.Id)
+                                            |> List.distinct
+                                            |> Set.ofList
+                                        if not (Set.contains c.ExpectedCheckId observedIds) then
+                                            Error (ExpectedViolationMissing (c.ExpectedCheckId, mutatedViolations))
+                                        else
+                                            let unexpected =
+                                                mutatedViolations
+                                                |> List.filter (fun v -> not (Set.contains v.Id allowedIds))
+                                            match unexpected with
+                                            | first :: _ -> Error (UnexpectedViolation first)
+                                            | [] ->
+                                                Ok {
+                                                    CaseId = c.Id
+                                                    ExpectedCheckId = c.ExpectedCheckId
+                                                    BaselineViolations = []
+                                                    MutatedViolations = mutatedViolations
+                                                    Receipt = receipt
+                                                }
+        match runOnce () with
+        | Ok _ as ok ->
+            match seam.DeleteRecursive root with
+            | Ok () -> ok
+            | Error e -> Error (CleanupFailed e)
+        | Error primary as err ->
+            match seam.DeleteRecursive root with
+            | Ok () -> err
+            | Error e -> Error (combineFailures primary e)
 
 // ---------------------------------------------------------------------------
 // Registry execution
 // ---------------------------------------------------------------------------
 
-/// Execute every registered case once.  Returns an immutable
-/// ``Map<MutationCaseId, Result<...>>`` keyed by exact case id.  No
-/// global mutable state, no shared counters, no shared sets.
+/// Execute every registered case once.  Returns the immutable
+/// ``Map<MutationCaseId, Result<MutationSuccess, MutationFailure>>``
+/// on success, or ``Error (InvalidRegistry ...)`` if the registry
+/// itself is invalid.  When the registry is invalid no case body
+/// runs and no result map is constructed.
 let executeMutationRegistry
     (cases: MutationCase list)
-    : Map<MutationCaseId, Result<MutationSuccess, MutationFailure>> =
-    cases
-    |> List.map (fun c -> c.Id, executeCase c)
-    |> Map.ofList
+    : RegistryOutcome =
+    match validateMutationRegistry cases with
+    | RegistryOk ->
+        cases
+        |> List.map (fun c -> c.Id, executeCase c defaultWorkspaceSeam)
+        |> Map.ofList
+        |> Ok
+    | invalid ->
+        Error (InvalidRegistry invalid)
+
+/// Variant of ``executeMutationRegistry`` that accepts an explicit
+/// workspace seam.  Tests use this to prove failure paths
+/// deterministically.
+let executeMutationRegistryWithSeam
+    (cases: MutationCase list)
+    (seam: WorkspaceSeam)
+    : RegistryOutcome =
+    match validateMutationRegistry cases with
+    | RegistryOk ->
+        cases
+        |> List.map (fun c -> c.Id, executeCase c seam)
+        |> Map.ofList
+        |> Ok
+    | invalid ->
+        Error (InvalidRegistry invalid)
 
 // ---------------------------------------------------------------------------
 // Pure derived views (no shared state, computed from inputs only)
