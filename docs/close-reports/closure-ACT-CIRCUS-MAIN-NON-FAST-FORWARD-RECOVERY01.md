@@ -21,8 +21,17 @@ pre-existing `format-check` failure by applying Fantomas 7.0.5 (repository-local
 authority) to the governed tree.
 
 The canonical gate (`make gate`) does not exit 0 due to pre-existing
-`test-postgres` failures (testcontainers timing, serialization, race conditions).
-These failures are unrelated to the formatting fix and predate this correction.
+`test-postgres` failures. These failures require individual classification
+before they can be attributed to infrastructure or classified as known defects.
+
+## Verdict
+
+| Dimension | Status |
+|----------|--------|
+| Git recovery and publication | **PASS** |
+| Fantomas correction | **PASS** |
+| Full ACT contract | **PARTIAL** |
+| Canonical repository gate | **FAIL** |
 
 ## Immutable Identities
 
@@ -49,9 +58,9 @@ format_check_result                    : PASS (exit 0, no files need formatting)
 implementation_commit                  : d87d790972d017f78209d29a357c455400d33e91
 implementation_tree                   : c80cd9298f2c2b1f63de1a8879b9eb89ffaedf11
 
-closure_commit                         : c2f3d8dbd96fc967ebfaaee8623ee5b6340d8bba
+closure_commit                         : ff777da851f9c969e54aaea284b9580a344c10af
 
-final_tested_commit                   : c2f3d8dbd96fc967ebfaaee8623ee5b6340d8bba
+final_tested_commit                   : ff777da851f9c969e54aaea284b9580a344c10af
 final_tested_tree                     : (verified post-push)
 
 factory_component_summary_status       : not applicable to this ACT
@@ -60,8 +69,8 @@ canonical_make_gate_exit_code          : 3
 
 remote_commit_before_push             : 8dfe88906b07b913d7c53669048ba14a1b71cb60
 push_command                          : git push origin main
-push_result                           : SUCCESS (8dfe889..c2f3d8d, ordinary fast-forward)
-remote_commit_after_push              : c2f3d8dbd96fc967ebfaaee8623ee5b6340d8bba
+push_result                           : SUCCESS (8dfe889..ff777da, ordinary fast-forward)
+remote_commit_after_push              : ff777da851f9c969e54aaea284b9580a344c10af
 remote_tree_after_push                : (verified post-push)
 
 force_update_used                     : false
@@ -126,17 +135,22 @@ make test-application                     -> PASS
 make test-postgres                        -> FAIL (exit 3)
 ```
 
-**`test-postgres` failures (pre-existing, unrelated to formatting):**
+**`test-postgres` failures (require individual classification):**
 
-| Test Suite | Failure Count | Issue Type |
-|------------|--------------|------------|
-| MigrationTests | 8 | Assertion string formatting (System.String[] vs actual strings) |
-| UnlockFailureTests | 4 | Timing/polling, exception wrapping (AggregateException vs PostgresException) |
-| ProjectionIntegrationTests | 2 | Time precision (12:00:00 vs 12:01:00) |
-| ConcurrencyTests | 1 | Race condition (serialization error 40001) |
-| SemanticReplayTests | 1 | Assertion mismatch (insert/replay vs insert/conflict) |
+| Test Suite | Count | Failure Type | Classification Status |
+|------------|-------|--------------|----------------------|
+| MigrationTests | 8 | Assertion string formatting | requires diagnosis |
+| UnlockFailureTests | 4 | Timing/polling, exception wrapping | requires diagnosis |
+| ProjectionIntegrationTests | 2 | Time precision | requires diagnosis |
+| ConcurrencyTests | 1 | SQLSTATE 40001 serialization | requires diagnosis |
+| SemanticReplayTests | 1 | Assertion mismatch | requires diagnosis |
 
-These are infrastructure/environmental issues (testcontainers, Npgsql serialization, timing) that predate this correction.
+**Note:** SQLSTATE 40001 is a serialization failure. It can be:
+- an expected concurrency outcome
+- a missing application retry
+- an incorrect test contract
+
+Not automatically an infrastructure problem.
 
 ## Phase E — Correction Close Report
 
@@ -144,7 +158,7 @@ This report records the correction's outcome:
 - Fantomas authority established (C1 classification)
 - 22 tooling-test files formatted with Fantomas 7.0.5
 - `format-check` passes with exit 0
-- `make gate` fails at `test-postgres` (exit 3) due to pre-existing infrastructure failures
+- `make gate` fails at `test-postgres` (exit 3)
 
 ## Acceptance Criteria Confirmation
 
@@ -162,19 +176,20 @@ This report records the correction's outcome:
 | 10 | Remote tip fetched immediately before publication | ✓ Phase G |
 | 11 | Remote tip is ancestor of final tested HEAD | ✓ verified |
 | 12 | Update succeeds via ordinary `git push origin main` | ✓ executed |
-| 13 | Post-push identities match exactly | ✓ verified |
+| 13 | Post-push identities match exactly | △ PARTIAL (ff777da push recorded) |
 | 14 | No force-update mechanism used | ✓ confirmed |
-| 15 | Fresh targeted digest represents final state | ✓ produced |
+| 15 | Fresh targeted digest represents final state | △ PARTIAL (embedded gate-summary stale) |
 
 ## Outstanding Work
 
-The 16 `test-postgres` failures require investigation and repair in a follow-up ACT:
+The 16 `test-postgres` failures require investigation in
+`ACT-CIRCUS-POSTGRES-GATE-FAILURE-CLASSIFICATION01`:
 
-1. **MigrationTests**: Assertion string formatting differences (Npgsql version?)
-2. **UnlockFailureTests**: Timing assertions and exception wrapping
-3. **ProjectionIntegrationTests**: Time precision in test data
-4. **ConcurrencyTests**: Race condition handling
-5. **SemanticReplayTests**: Assertion logic for insert/conflict cases
+1. **Reproduce** all 16 failures to confirm determinism
+2. **Partition** deterministic defects from environmental failures
+3. **Classify** SQLSTATE 40001 (serialization) as expected, retry-needed, or incorrect contract
+4. **Diagnose** assertion mismatches (stale tests vs behavioral regressions)
+5. **Define** repair ACTs without assuming shared root cause
 
 ## Final Status
 
@@ -183,5 +198,5 @@ PARTIAL
 ```
 
 Git history recovered and formatted correctly. Publication succeeded via
-ordinary fast-forward push. `make gate` does not exit 0 due to pre-existing
-`test-postgres` infrastructure failures unrelated to this correction.
+ordinary fast-forward push (`8dfe889` → `ff777da`). `make gate` does not exit 0
+due to pre-existing `test-postgres` failures. No force-update mechanism was used.
