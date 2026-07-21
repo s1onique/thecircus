@@ -242,17 +242,35 @@ module RegistryValidationProofs =
             }
 
             test "unknown expected check id fails registry validation before any case body runs" {
-                let cases = [ makeSyntheticCase "CP-99_unknown" ]
-                let mutable ran = false
+                let unknownId = "CP-99_unknown"
+                let unknownCase =
+                    { Id = MutationCaseId.fromString unknownId
+                      Description = "unknown production check"
+                      ExpectedCheckId = unknownId
+                      PrepareBaseline = fun _ -> failwith "invalid registry must not execute"
+                      ApplyMutation = fun _ -> failwith "invalid registry must not execute"
+                      AllowedAdditionalCheckIds = Set.empty }
+                let cases = [ unknownCase ]
+                match validateMutationRegistry cases with
+                | UnknownExpectedCheckIds [ unknownId ] -> ()
+                | actual -> failtestf "expected UnknownExpectedCheckIds, got %A" actual
+                let mutable seamTouched = false
                 let trapSeam =
                     { defaultWorkspaceSeam with
-                        CreateTempDir = fun () -> ran <- true; Ok (System.IO.Path.GetTempPath()) }
+                        CreateTempDir = fun () ->
+                            seamTouched <- true
+                            Result.Error "executor must not start"
+                        RunCheck = fun _ _ ->
+                            seamTouched <- true
+                            Result.Error "executor must not start"
+                        DeleteRecursive = fun _ ->
+                            seamTouched <- true
+                            Result.Error "executor must not start" }
                 match executeMutationRegistryWithSeam cases trapSeam with
-                | Error (InvalidRegistry (UnknownExpectedCheckIds unknown)) ->
-                    Expect.isNonEmpty unknown "unknown ids must be reported"
-                    Expect.isFalse ran
-                        "no case body may run when registry is invalid"
-                | other -> failtestf "expected UnknownExpectedCheckIds, got %A" other
+                | Result.Error (InvalidRegistry (UnknownExpectedCheckIds [ unknownId ])) -> ()
+                | actual -> failtestf "expected exact unknown identity failure, got %A" actual
+                Expect.isFalse seamTouched
+                    "invalid registry must short-circuit execution"
             }
         ]
 
@@ -407,13 +425,28 @@ permissions:
                     | _ -> failtestf "inconsistent receipt must return Error MutationApplicationFailed"
             }
 
-            test "executor-level: receipt path escaping workspace returns MutationApplicationFailed" {
-                let case = trivialCase escapeMutator trivialBaseline
+            test "executor-level: mutator claiming escaping paths returns MutationApplicationFailed" {
+                // The mutator claims "../outside.txt" but does not
+                // touch the filesystem.  The executor independently
+                // derives the changed paths from the snapshots and
+                // notices that the claimed path is outside the
+                // workspace, so it returns
+                // MutationApplicationFailed regardless of the
+                // observed diff.
+                let escapingMutator _ : Result<MutationReceipt, string> =
+                    Ok {
+                        ChangedPaths = [ "../outside.txt" ]
+                        BeforeHashes = Map.ofList [ "../outside.txt", "fabricated-before" ]
+                        AfterHashes = Map.ofList [ "../outside.txt", "fabricated-after" ]
+                    }
+                let case = trivialCase escapingMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
                     match findOnlyResult results with
-                    | Some (Result.Error (MutationApplicationFailed _)) -> ()
+                    | Some (Result.Error (MutationApplicationFailed msg)) ->
+                        Expect.stringContains msg "escape"
+                            "MutationApplicationFailed must mention escape"
                     | Some (Result.Error other) ->
                         failtestf "expected MutationApplicationFailed, got %A" other
                     | _ -> failtestf "escape path must return Error MutationApplicationFailed"
@@ -594,27 +627,34 @@ permissions:
             }
 
             test "executor-level: real mutation, unrelated-only violation returns ExpectedViolationMissing" {
-                // Baseline empty; post-mutation returns an
-                // unrelated violation.  The expected check id is
-                // absent, so the result is ExpectedViolationMissing,
-                // not UnexpectedViolation.
+                // First RunCheck call (baseline): empty so the
+                // baseline passes.  Second RunCheck call
+                // (post-mutation): unrelated violation.  The
+                // expected id is absent, so the result is
+                // ExpectedViolationMissing.
                 let mutator (root: string) : Result<MutationReceipt, string> =
-                    writeAndHash root ".github/workflows/harbor.yml" "touched"
-                    |> Result.map (fun _ ->
-                        {
+                    writeUnit root ".github/workflows/harbor.yml" "touched"
+                    |> Result.bind (fun () ->
+                        Ok {
                             ChangedPaths = [ ".github/workflows/harbor.yml" ]
                             BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "before" ]
                             AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "after" ]
                         })
+                let mutable runCheckCalls = 0
                 let unrelatedOnlySeam =
                     { defaultWorkspaceSeam with
-                        RunCheck = fun _ _ ->
-                            Result.Ok [ {
-                                Check = "CP-99_unrelated"
-                                Id = "CP-99_unrelated"
-                                Path = "<unrelated>"
-                                Detail = "unrelated violation"
-                            } ] }
+                        RunCheck =
+                            fun _ _ ->
+                                runCheckCalls <- runCheckCalls + 1
+                                if runCheckCalls = 1 then
+                                    Result.Ok []
+                                else
+                                    Result.Ok [ {
+                                        Check = "CP-99_unrelated"
+                                        Id = "CP-99_unrelated"
+                                        Path = "<unrelated>"
+                                        Detail = "unrelated violation"
+                                    } ] }
                 let case = trivialCase mutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] unrelatedOnlySeam with
                 | Result.Error _ -> failtestf "registry must validate"
@@ -624,5 +664,47 @@ permissions:
                     | Some (Result.Error other) ->
                         failtestf "expected ExpectedViolationMissing, got %A" other
                     | _ -> failtestf "unrelated-only must return ExpectedViolationMissing"
+            }
+
+            test "executor-level: expected plus unrelated violation returns UnexpectedViolation" {
+                // First RunCheck call (baseline): empty.
+                // Second RunCheck call (post-mutation): both the
+                // expected violation and an unallowed additional
+                // violation.  The expected one passes; the unrelated
+                // one is rejected as UnexpectedViolation.
+                let mutator (root: string) : Result<MutationReceipt, string> =
+                    writeUnit root ".github/workflows/harbor.yml" "touched"
+                    |> Result.bind (fun () ->
+                        Ok {
+                            ChangedPaths = [ ".github/workflows/harbor.yml" ]
+                            BeforeHashes = Map.ofList [ ".github/workflows/harbor.yml", "before" ]
+                            AfterHashes = Map.ofList [ ".github/workflows/harbor.yml", "after" ]
+                        })
+                let mutable runCheckCalls = 0
+                let expectedPlusUnrelatedSeam =
+                    { defaultWorkspaceSeam with
+                        RunCheck =
+                            fun actualId _ ->
+                                runCheckCalls <- runCheckCalls + 1
+                                if runCheckCalls = 1 then
+                                    Result.Ok []
+                                else
+                                    Result.Ok [
+                                        { Check = actualId; Id = actualId
+                                          Path = "<expected>"; Detail = "expected violation" }
+                                        { Check = "CP-99_unrelated"; Id = "CP-99_unrelated"
+                                          Path = "<unrelated>"; Detail = "unallowed additional violation" }
+                                    ] }
+                let case = trivialCase mutator trivialBaseline
+                match executeMutationRegistryWithSeam [case] expectedPlusUnrelatedSeam with
+                | Result.Error _ -> failtestf "registry must validate"
+                | Result.Ok results ->
+                    match findOnlyResult results with
+                    | Some (Result.Error (UnexpectedViolation v)) ->
+                        Expect.equal v.Id "CP-99_unrelated"
+                            "the unallowed additional violation must be preserved"
+                    | Some (Result.Error other) ->
+                        failtestf "expected UnexpectedViolation, got %A" other
+                    | _ -> failtestf "expected plus unrelated must return UnexpectedViolation"
             }
         ]
