@@ -334,19 +334,28 @@ permissions:
     let private throwingMutator (_: string) : Result<MutationReceipt, string> =
         raise (System.InvalidOperationException "boom mutator")
 
+    let private canonicalCaseId = "CP-04_workflow_triggers"
+
     let private trivialCase
-        (id: string)
         (mutator: string -> Result<MutationReceipt, string>)
         (baseline: string -> Result<unit, string>)
         : MutationCase =
         {
-            Id = MutationCaseId.fromString id
-            Description = id
-            ExpectedCheckId = "CP-04_workflow_triggers"
+            Id = MutationCaseId.fromString canonicalCaseId
+            Description = "synthetic executor proof"
+            ExpectedCheckId = canonicalCaseId
             PrepareBaseline = baseline
             ApplyMutation = mutator
             AllowedAdditionalCheckIds = Set.empty
         }
+
+    let private findOnlyResult results =
+        results |> Map.find (MutationCaseId.fromString canonicalCaseId)
+
+    let private writeUnit (root: string) (path: string) (content: string)
+        : Result<unit, string> =
+        writeAndHash root path content
+        |> Result.map (fun _ -> ())
 
     [<Tests>]
     let tests =
@@ -366,7 +375,7 @@ permissions:
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_baseline_already_bad") results with
+                    match findOnlyResult results with
                     | Some (Result.Ok _) -> failtestf "baseline was empty; check should fail"
                     | Some (Result.Error (BaselineNotCompliant _)) -> ()
                     | Some (Result.Error other) ->
@@ -375,11 +384,11 @@ permissions:
             }
 
             test "executor-level: vacuous mutator returns MutationWasVacuous" {
-                let case = trivialCase "CP-04_vacuous" vacuousMutator trivialBaseline
+                let case = trivialCase vacuousMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_vacuous") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (MutationWasVacuous _)) -> ()
                     | Some (Result.Error other) ->
                         failtestf "expected MutationWasVacuous, got %A" other
@@ -387,11 +396,11 @@ permissions:
             }
 
             test "executor-level: receipt key sets inconsistent returns MutationApplicationFailed" {
-                let case = trivialCase "CP-04_inconsistent" inconsistentMutator trivialBaseline
+                let case = trivialCase inconsistentMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_inconsistent") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (MutationApplicationFailed _)) -> ()
                     | Some (Result.Error other) ->
                         failtestf "expected MutationApplicationFailed, got %A" other
@@ -399,11 +408,11 @@ permissions:
             }
 
             test "executor-level: receipt path escaping workspace returns MutationApplicationFailed" {
-                let case = trivialCase "CP-04_escape" escapeMutator trivialBaseline
+                let case = trivialCase escapeMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_escape") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (MutationApplicationFailed _)) -> ()
                     | Some (Result.Error other) ->
                         failtestf "expected MutationApplicationFailed, got %A" other
@@ -425,11 +434,11 @@ permissions:
             }
 
             test "executor-level: throwing baseline returns CaseExecutionFailed" {
-                let case = trivialCase "CP-04_throwing_baseline" trivialMutator throwingBaseline
+                let case = trivialCase trivialMutator throwingBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_throwing_baseline") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (CaseExecutionFailed msg)) ->
                         Expect.stringContains msg "PrepareBaseline"
                             "throwing baseline must be tagged with the failing step"
@@ -439,11 +448,11 @@ permissions:
             }
 
             test "executor-level: throwing mutator returns CaseExecutionFailed" {
-                let case = trivialCase "CP-04_throwing_mutator" throwingMutator trivialBaseline
+                let case = trivialCase throwingMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_throwing_mutator") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (CaseExecutionFailed msg)) ->
                         Expect.stringContains msg "ApplyMutation"
                             "throwing mutator must be tagged with the failing step"
@@ -456,11 +465,11 @@ permissions:
                 let trapSeam =
                     { defaultWorkspaceSeam with
                         CreateTempDir = fun () -> Error "cannot create workspace" }
-                let case = trivialCase "CP-04_noworkspace" trivialMutator trivialBaseline
+                let case = trivialCase trivialMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] trapSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_noworkspace") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (BaselinePreparationFailed _)) -> ()
                     | Some (Result.Error other) ->
                         failtestf "expected BaselinePreparationFailed, got %A" other
@@ -478,7 +487,7 @@ permissions:
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_bad_baseline") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (BaselinePreparationFailed msg)) ->
                         Expect.stringContains msg "baseline refused"
                             "BaselinePreparationFailed must carry the original error message"
@@ -491,11 +500,11 @@ permissions:
                 let trapSeam =
                     { defaultWorkspaceSeam with
                         RunCheck = fun _ _ -> Error "boom check" }
-                let case = trivialCase "CP-04_check_boom" trivialMutator trivialBaseline
+                let case = trivialCase trivialMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] trapSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_check_boom") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (CaseExecutionFailed msg)) ->
                         Expect.stringContains msg "boom check"
                             "CaseExecutionFailed must surface the check error"
@@ -508,11 +517,11 @@ permissions:
                 let trapSeam =
                     { defaultWorkspaceSeam with
                         DeleteRecursive = fun _ -> Error "cannot delete" }
-                let case = trivialCase "CP-04_cleanup_boom" trivialMutator trivialBaseline
+                let case = trivialCase trivialMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] trapSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_cleanup_boom") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (CleanupFailed msg)) ->
                         Expect.stringContains msg "cannot delete"
                             "CleanupFailed must surface the cleanup error"
@@ -522,11 +531,11 @@ permissions:
             }
 
             test "executor-level: a non-vacuous mutator is observable from a receipt" {
-                let case = trivialCase "CP-04_good" trivialMutator trivialBaseline
+                let case = trivialCase trivialMutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_good") results with
+                    match findOnlyResult results with
                     | Some (Result.Ok _) -> ()
                     | Some (Result.Error other) ->
                         failtestf "good case must be Ok, got %A" other
@@ -547,7 +556,7 @@ permissions:
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_fabricated") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (MutationWasVacuous _)) -> ()
                     | Some (Result.Error other) ->
                         failtestf "expected MutationWasVacuous, got %A" other
@@ -573,11 +582,11 @@ permissions:
                 let emptySeam =
                     { defaultWorkspaceSeam with
                         RunCheck = fun _ _ -> Result.Ok [] }
-                let case = trivialCase "CP-04_noviolation" mutator trivialBaseline
+                let case = trivialCase mutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] emptySeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_noviolation") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (ExpectedViolationMissing _)) -> ()
                     | Some (Result.Error other) ->
                         failtestf "expected ExpectedViolationMissing, got %A" other
@@ -606,11 +615,11 @@ permissions:
                                 Path = "<unrelated>"
                                 Detail = "unrelated violation"
                             } ] }
-                let case = trivialCase "CP-04_unrelated_only" mutator trivialBaseline
+                let case = trivialCase mutator trivialBaseline
                 match executeMutationRegistryWithSeam [case] unrelatedOnlySeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
-                    match Map.tryFind (MutationCaseId.fromString "CP-04_unrelated_only") results with
+                    match findOnlyResult results with
                     | Some (Result.Error (ExpectedViolationMissing _)) -> ()
                     | Some (Result.Error other) ->
                         failtestf "expected ExpectedViolationMissing, got %A" other
