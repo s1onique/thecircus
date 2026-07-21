@@ -2,7 +2,7 @@ module Circus.Tooling.SourcePolicy.Parity
 
 /// Strict parser and validator for ``factory/container-policy-parity.csv``.
 /// CORRECTION01 P1-1: Eliminates prefix aliasing in rule identity comparison.
-/// Uses ContainerPolicy.CheckMetadata as the single authoritative source.
+/// Uses ContainerPolicy.CheckMetadataEntries as the single authoritative source.
 
 open System
 open System.IO
@@ -210,22 +210,22 @@ let private extractFunctionName (implLoc: string) : string option =
     let m = Regex(@"\(([^)]+)\)").Match(implLoc)
     if m.Success then Some m.Groups.[1].Value else None
 
-/// P1-1: Authoritative metadata map from ContainerPolicy.CheckMetadata.
+/// P1-1: Authoritative metadata map from ContainerPolicy.CheckMetadataEntries.
 /// Key: exact concrete check ID, Value: CheckMetadataEntry record.
 let private metadataByExactId : Map<string, CheckMetadataEntry> =
-    CheckMetadata
-    |> List.map (fun m -> m.Id, m)
+    CheckMetadataEntries
+    |> List.map (fun m -> m.CheckId, m)
     |> Map.ofList
 
-/// P1-1: Exact identity validation using CheckMetadata as single authority.
+/// P1-1: Exact identity validation using CheckMetadataEntries as single authority.
 let validate (rows: ParityRow list) : ValidationOutcome =
     // P1-1: Production metadata from authoritative source
-    let productionMetadata = CheckMetadata
+    let productionMetadata = CheckMetadataEntries
     let productionRuleCount = List.length productionMetadata
     let parityRowCount = List.length rows
 
     // P1-1: Build metadata ID set for exact membership checks
-    let knownIds = productionMetadata |> List.map (fun m -> m.Id) |> Set.ofList
+    let knownIds = productionMetadata |> List.map (fun m -> m.CheckId) |> Set.ofList
 
     // P1-1: Extract CSV identities
     let csvLegacyIds = rows |> List.map (fun r -> r.LegacyCheckId)
@@ -257,7 +257,7 @@ let validate (rows: ParityRow list) : ValidationOutcome =
         |> List.choose (fun (k, g) -> if List.length g > 1 then Some k else None)
 
     // P1-1: Duplicate production IDs from original metadata list (before Set.ofList)
-    let productionIds = productionMetadata |> List.map (fun m -> m.Id)
+    let productionIds = productionMetadata |> List.map (fun m -> m.CheckId)
     let dupProductionIds =
         productionIds
         |> List.groupBy id
@@ -311,8 +311,8 @@ let validate (rows: ParityRow list) : ValidationOutcome =
             match Map.tryFind r.LegacyCheckId metadataByExactId with
             | Some metadata ->
                 match extractFunctionName r.ImplementationLocation with
-                | Some actual when actual = metadata.ImplementationFunction -> None
-                | actual -> Some (r.LegacyCheckId, sprintf "expected %s; got %s" metadata.ImplementationFunction (defaultArg actual "<missing>"))
+                | Some actual when actual = metadata.ImplementationFunctionName -> None
+                | actual -> Some (r.LegacyCheckId, sprintf "expected %s; got %s" metadata.ImplementationFunctionName (defaultArg actual "<missing>"))
             | None -> None)
 
     // P1-1: Invalid status rows

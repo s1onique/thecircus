@@ -1,7 +1,7 @@
 module Circus.Tooling.Tests.SourcePolicy.ParityTests
 
 /// Strict validator tests for ``factory/container-policy-parity.csv`` (CORRECTION01 §P1-1).
-/// P1-1: Uses ContainerPolicy.CheckMetadata as single authority.
+/// P1-1: Uses ContainerPolicy.metadataEntries as single authority.
 
 open System
 open System.IO
@@ -9,6 +9,10 @@ open Expecto
 
 open Circus.Tooling.SourcePolicy.Parity
 open Circus.Tooling.SourcePolicy.ContainerPolicy
+
+/// P1-1: Typed alias for production metadata list.
+let private metadataEntries : CheckMetadataEntry list =
+    CheckMetadataEntries
 
 let private newTempDir () : string =
     let path = Path.Combine(Path.GetTempPath(), "circus-parity-" + Guid.NewGuid().ToString("n"))
@@ -36,10 +40,10 @@ let private findCsv () : string =
     | Some p -> p
     | None -> Path.Combine("factory", "container-policy-parity.csv")
 
-/// P1-1: Implementation location derived from CheckMetadata.
+/// P1-1: Implementation location derived from metadataEntries.
 let private implLocFor (exactId: string) : string =
-    match List.tryFind (fun (m: CheckMetadataEntry) -> m.Id = exactId) CheckMetadata with
-    | Some m -> sprintf "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (%s)" m.ImplementationFunction
+    match List.tryFind (fun (m: CheckMetadataEntry) -> m.CheckId = exactId) metadataEntries with
+    | Some m -> sprintf "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (%s)" m.ImplementationFunctionName
     | None -> "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"
 
 [<Tests>]
@@ -91,16 +95,16 @@ let tests =
                 failtestf "parity validate failed: %s" (String.concat "; " reasons)
         }
 
-        test "P1-1: canonical fixture from CheckMetadata passes validation" {
+        test "P1-1: canonical fixture from metadataEntries passes validation" {
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
-            // P1-1: Construct fixture from CheckMetadata
+            // P1-1: Construct fixture from metadataEntries
             let rows = [
-                for m in CheckMetadata -> [
-                    m.Id
+                for m in metadataEntries -> [
+                    m.CheckId
                     "desc"
-                    m.Id
-                    implLocFor m.Id
+                    m.CheckId
+                    implLocFor m.CheckId
                     "tests/Circus.Tooling.Tests/SourcePolicy/ContainerPolicyTests.fs::positive"
                     "tests/Circus.Tooling.Tests/SourcePolicy/ContainerPolicyMutationTests.fs::negative"
                     "complete"
@@ -110,9 +114,9 @@ let tests =
             match validateFile path with
             | Ok r ->
                 // P1-1: Mechanical accounting
-                Expect.equal r.ProductionRuleCount (List.length CheckMetadata) "production_rule_count from metadata"
-                Expect.equal r.ParityRowCount (List.length CheckMetadata) "parity_row_count from rows"
-                Expect.equal r.ExactMatches (List.length CheckMetadata) "exact_matches equals count"
+                Expect.equal r.ProductionRuleCount (List.length metadataEntries) "production_rule_count from metadata"
+                Expect.equal r.ParityRowCount (List.length metadataEntries) "parity_row_count from rows"
+                Expect.equal r.ExactMatches (List.length metadataEntries) "exact_matches equals count"
                 Expect.equal (List.length r.MissingIdentities) 0 "no missing"
                 Expect.equal (List.length r.UnknownIdentities) 0 "no unknown"
                 Expect.equal (List.length r.DuplicateIdentities) 0 "no duplicates"
@@ -128,10 +132,10 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-01_required_files")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "CP-1"; "desc"; "CP-1"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-01_required_files")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "CP-1"; "desc"; "CP-1"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -145,10 +149,10 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-10_trusted_runner")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "CP-10"; "desc"; "CP-10"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-10_trusted_runner")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "CP-10"; "desc"; "CP-10"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -162,10 +166,10 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-10_trusted_runner")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "CP-010_trusted_runner"; "desc"; "CP-010_trusted_runner"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-10_trusted_runner")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "CP-010_trusted_runner"; "desc"; "CP-010_trusted_runner"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -178,10 +182,10 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-10_trusted_runner")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "CP-10_trusted_runner-extra"; "desc"; "CP-10_trusted_runner-extra"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-10_trusted_runner")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "CP-10_trusted_runner-extra"; "desc"; "CP-10_trusted_runner-extra"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -194,10 +198,10 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-10_trusted_runner")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "CP-10_trusted_runner description"; "desc"; "CP-10_trusted_runner description"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-10_trusted_runner")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "CP-10_trusted_runner description"; "desc"; "CP-10_trusted_runner description"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -210,10 +214,10 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-10_trusted_runner")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "CP-10_trusted_runner/child"; "desc"; "CP-10_trusted_runner/child"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-10_trusted_runner")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "CP-10_trusted_runner/child"; "desc"; "CP-10_trusted_runner/child"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -226,10 +230,10 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-10_trusted_runner")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "cp-10_trusted_runner"; "desc"; "cp-10_trusted_runner"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-10_trusted_runner")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "cp-10_trusted_runner"; "desc"; "cp-10_trusted_runner"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -242,10 +246,10 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-01_required_files")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ " CP-01_required_files"; "desc"; " CP-01_required_files"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkRequiredFiles)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-01_required_files")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ " CP-01_required_files"; "desc"; " CP-01_required_files"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkRequiredFiles)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -258,10 +262,10 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-01_required_files")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "CP-01_required_files "; "desc"; "CP-01_required_files "; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkRequiredFiles)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-01_required_files")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "CP-01_required_files "; "desc"; "CP-01_required_files "; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkRequiredFiles)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -278,9 +282,9 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "CP-01_required_files"; "desc"; "CP-01_required_files"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkRequiredFiles)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "CP-01_required_files"; "desc"; "CP-01_required_files"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkRequiredFiles)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -293,9 +297,9 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "CP-99_unknown_check"; "desc"; "CP-99_unknown_check"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "CP-99_unknown_check"; "desc"; "CP-99_unknown_check"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -311,7 +315,7 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows = [
-                for m in CheckMetadata -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ]
+                for m in metadataEntries -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]
             ]
             writeStrictCsv path rows
             match validateFile path with
@@ -328,9 +332,9 @@ let tests =
             let path = Path.Combine(dir, "parity.csv")
             // Use a valid-format but unknown ID in the FsharpCheckId column
             let rows =
-                CheckMetadata
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ "CP-99_extra_check"; "desc"; "CP-99_extra_check"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ "CP-99_extra_check"; "desc"; "CP-99_extra_check"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -341,54 +345,54 @@ let tests =
         }
 
         // P1-1: Test that function metadata equals nameof for representative checks
-        test "P1-1: CheckMetadata.ImplementationFunction matches nameof for CP-01" {
+        test "P1-1: metadataEntries.ImplementationFunctionName matches nameof for CP-01" {
             // Verify the nameof binding is correct
-            let cp01 = List.find (fun (m: CheckMetadataEntry) -> m.Id = "CP-01_required_files") CheckMetadata
-            Expect.equal cp01.ImplementationFunction "checkRequiredFiles" "CP-01 function name must be checkRequiredFiles"
+            let cp01 = List.find (fun (m: CheckMetadataEntry) -> m.CheckId = "CP-01_required_files") metadataEntries
+            Expect.equal cp01.ImplementationFunctionName "checkRequiredFiles" "CP-01 function name must be checkRequiredFiles"
         }
 
-        test "P1-1: CheckMetadata.ImplementationFunction matches nameof for CP-10" {
-            let cp10 = List.find (fun (m: CheckMetadataEntry) -> m.Id = "CP-10_trusted_runner") CheckMetadata
-            Expect.equal cp10.ImplementationFunction "checkTrustedRunner" "CP-10 function name must be checkTrustedRunner"
+        test "P1-1: metadataEntries.ImplementationFunctionName matches nameof for CP-10" {
+            let cp10 = List.find (fun (m: CheckMetadataEntry) -> m.CheckId = "CP-10_trusted_runner") metadataEntries
+            Expect.equal cp10.ImplementationFunctionName "checkTrustedRunner" "CP-10 function name must be checkTrustedRunner"
         }
 
-        // P1-1: Test canonical cardinality equals List.length CheckMetadata
-        test "P1-1: canonical cardinality equals List.length CheckMetadata (no hard-coded 31)" {
-            let expected = List.length CheckMetadata
-            // The count comes from CheckMetadata, not a hard-coded value
-            Expect.isGreaterThan expected 0 "CheckMetadata is not empty"
+        // P1-1: Test canonical cardinality equals List.length metadataEntries
+        test "P1-1: canonical cardinality equals List.length metadataEntries (no hard-coded 31)" {
+            let expected = List.length metadataEntries
+            // The count comes from metadataEntries, not a hard-coded value
+            Expect.isGreaterThan expected 0 "metadataEntries is not empty"
             // This test would fail if someone hard-coded 31
-            // The actual count is verified by comparing against CheckMetadata list length
+            // The actual count is verified by comparing against metadataEntries list length
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows = [
-                for m in CheckMetadata -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ]
+                for m in metadataEntries -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]
             ]
             writeStrictCsv path rows
             match validateFile path with
             | Ok r ->
-                Expect.equal r.ProductionRuleCount expected "production_rule_count equals List.length CheckMetadata"
+                Expect.equal r.ProductionRuleCount expected "production_rule_count equals List.length metadataEntries"
             | Failed _ -> failtestf "should have passed"
             Directory.Delete(dir, true)
         }
 
         // P1-1: Test valid metadata creates one exact map entry per definition
-        test "P1-1: CheckMetadata produces one exact map entry per CheckDefinition" {
+        test "P1-1: metadataEntries produces one exact map entry per CheckDefinition" {
             // Map construction should not collapse any entries
-            let metadataIds = List.map (fun (m: CheckMetadataEntry) -> m.Id) CheckMetadata
+            let metadataIds = List.map (fun (m: CheckMetadataEntry) -> m.CheckId) metadataEntries
             let uniqueIds = List.distinct metadataIds
             Expect.equal (List.length metadataIds) (List.length uniqueIds) "all metadata IDs are unique"
-            Expect.equal (List.length metadataIds) (List.length CheckMetadata) "metadata count matches CheckMetadata count"
+            Expect.equal (List.length metadataIds) (List.length metadataEntries) "metadata count matches metadataEntries count"
         }
 
         test "P1-1: empty identity rejected" {
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-01_required_files")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
-                @ [ ""; "desc"; ""; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]
+                (metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-01_required_files")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
+                @ [[ ""; "desc"; ""; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match parse path with
             | Result.Error e -> Expect.stringContains e "missing identity" "empty identity rejected"
@@ -401,9 +405,9 @@ let tests =
             let path = Path.Combine(dir, "parity.csv")
             // Exclude CP-01 but include everything else
             let rows =
-                CheckMetadata
-                |> List.filter (fun m -> m.Id <> "CP-01_required_files")
-                |> List.map (fun m -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
+                metadataEntries
+                |> List.filter (fun m -> m.CheckId <> "CP-01_required_files")
+                |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ])
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -416,12 +420,12 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows =
-                CheckMetadata
+                metadataEntries
                 |> List.map (fun m ->
-                    if m.Id = "CP-01_required_files" then
-                        [ m.Id; "desc"; m.Id; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkWrongFunction)"; "p"; "n"; "complete" ]
+                    if m.CheckId = "CP-01_required_files" then
+                        [ m.CheckId; "desc"; m.CheckId; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkWrongFunction)"; "p"; "n"; "complete" ]
                     else
-                        [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ])
+                        [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ])
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
@@ -438,7 +442,7 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows = [
-                for m in CheckMetadata -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "bogus" ]
+                for m in metadataEntries -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "bogus" ]
             ]
             writeStrictCsv path rows
             match parse path with
@@ -501,7 +505,7 @@ let tests =
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
             let rows = [
-                for m in CheckMetadata -> [ m.Id; "desc"; m.Id; implLocFor m.Id; "p"; "n"; "complete" ]
+                for m in metadataEntries -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]
             ]
             writeStrictCsv path rows
             let summary = renderSummary (validateFile path)
