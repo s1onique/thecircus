@@ -674,3 +674,206 @@ parity:              31/31
 The Bash-availability meta-tests remain non-passing (failing-body
 and regression-guard), as in the predecessor state; P0-5 does not
 own those outcomes.
+
+## CORRECTION01 — Bash Meta-Test Convergence + Source-Policy Gate Wiring
+
+### Summary
+
+Closed the two remaining Bash-availability meta-tests without
+weakening the honest `BashAvailability` / `ptest` contract, and
+wired `make test-source-policy` into the canonical gate so a
+passing source-policy run is now required for `circus-tooling
+gate run` to emit a passing artefact.  Removed no P0-5 evidence.
+
+### Root cause of each old non-passing test
+
+1. **`available test with failing body produces exactly one
+   failure`**
+   The original assertion relied on `Tests.runTestsWithCLIArgs
+   [] [||] generated` followed by `if exitCode <> 1`.  A
+   deliberate `failwith "intentional failure"` produces an
+   *errored* test (not a *failed* test); Expecto's runner return
+   contract for the inner runner returned 2, not 1, and the in-
+   process nested runner shared Expecto logging/runner state with
+   the parent.  No exit-code integer encodes exact failure
+   cardinality.  Fixed by running the deliberate failure in an
+   isolated child process selected by `CIRCUS_EXPECTO_META_FIXTURE
+   =available-failing-body`, emitting a machine-readable body
+   marker, failing through `Expect.equal`, writing a JUnit summary
+   via Expecto's native `--junit-summary` handler, and requiring
+   `selected=1 failed=1 errored=0 ignored=0` from the parsed XML.
+
+2. **`regression guard: activateRegressionGuard invokes
+   containsDishonestBashSkip on source`**
+   `activateRegressionGuard` passed `__SOURCE_FILE__` (just the
+   file name, not absolute) into `File.Exists`, which returned
+   false; the scanner also saw the negative-fixture test text
+   embedded as a literal string inside the test source itself,
+   producing a self-detection false positive.  Fixed by reading
+   `__SOURCE_FILE__` via `Path.Combine(__SOURCE_DIRECTORY__, ...)`
+   when the file name is not rooted, and by introducing a
+   `BASH-AVAILABILITY-GUARD-{BEGIN,END}`-delimited source region
+   that the new `extractGuardedRegion` returns; the scanner now
+   runs ONLY against that region and the negative-fixture tests
+   live OUTSIDE it.
+
+### Guarded-region design
+
+Line-anchored regex `^// BASH-AVAILABILITY-GUARD-{BEGIN,END}\s*$`
+with `RegexOptions.Multiline` ensures the marker lines must be the
+sole content of the line.  Indented occurrences inside test
+fixture strings are NOT on their own line and therefore never
+match, breaking the self-detection loop.  `extractGuardedRegion`
+returns `Result<string, GuardRegionFailure>` with strict
+diagnostics for: missing begin / missing end / duplicate begin /
+duplicate end / end-before-begin / empty guarded region.  The
+guard never silently passes.
+
+### Scanner fixture totals (new tests added by this correction)
+
+| Test | Purpose |
+|---|---|
+| `regression guard: extractGuardedRegion accepts a well-formed region` | Happy path: prelude excluded, body included, postlude excluded. |
+| `regression guard: extractGuardedRegion rejects missing begin marker` | Returns `MissingBeginMarker`. |
+| `regression guard: extractGuardedRegion rejects missing end marker` | Returns `MissingEndMarker`. |
+| `regression guard: extractGuardedRegion rejects duplicate begin marker inside region` | Returns `DuplicateBeginMarker`. |
+| `regression guard: extractGuardedRegion rejects duplicate end marker outside region` | Returns `DuplicateEndMarker`. |
+| `regression guard: extractGuardedRegion rejects an empty guarded region` | Returns `EmptyGuardedRegion`. |
+| `regression guard: extractGuardedRegion diagnostic coverage includes EndBeforeBegin` | The `EndBeforeBegin` DU case exists and round-trips. |
+| `regression guard: scanner does NOT match dishonest pattern OUTSIDE guarded region` | No false positive on literal-pattern fixture text outside the region. |
+| `regression guard: scanner DOES match dishonest pattern INSIDE guarded region` | Positive detection when the literal pattern lives between the markers. |
+| `regression guard: real source contains exactly one guarded region` | The committed source file has exactly one begin and one end line. |
+| `regression guard: activateRegressionGuard passes on the committed source` | End-to-end: scan the committed source and confirm the region is clean. |
+
+### Child-process failure-proof totals
+
+Exactly **1** fixture test exercised end-to-end through the
+child-process harness:
+
+| Step | Outcome |
+|---|---|
+| Child exit code | `1` (one Expecto assertion failure, not errored) |
+| Body marker present on stdout | `META_FIXTURE_MARKER_AVAILABLE_FAILING_BODY` emitted before Expecto's own output |
+| JUnit summary parsed | `selected=1 failed=1 errored=0 ignored=0` |
+| Nested-failure added to parent | None — parent test count and outcome unaffected by the child invocation |
+
+### Bash suite totals
+
+| Category | Count | Outcome |
+|---|---|---|
+| Bash availability (focused filter) | 20 tests, 0 failed, 0 errored | All green |
+| Real-host probe | Pending on Bash-unavailable host, Pass on Bash-available host | Honest |
+
+### ProcessRunner totals
+
+| Suite | Outcome |
+|---|---|
+| Process runner (Bash available) | All green, no regressions |
+| Process runner (Bash unavailable) | Genuinely pending (no fake pass) |
+
+### P0-5 regression totals
+
+Unchanged from the P0-5 closure section above; this correction
+adds new tests but does not touch the existing P0-5 components.
+
+### Parity totals
+
+| Category | Count | Outcome |
+|---|---|---|
+| Parity CSV validator | 31 / 31 | All green |
+| Container policy | 22 / 22 canonical cases | All green |
+| Container policy registry validation | 6 / 6 | All green |
+| Container policy executor proofs | 16 / 16 | All green |
+| Container policy aggregate mutations | 2 / 2 | All green |
+
+### `make test-source-policy` exit code
+
+`0`.  The new wiring test (`gate contract: source-policy-tests
+check is wired into the canonical gate`) plus the existing
+Bash-availability, ProcessRunner, parity, mutation, and gate
+contract suites all pass; the apphost returns 0; the Makefile
+target `test-source-policy` therefore exits 0.
+
+### Canonical gate summary (including `source-policy-tests`)
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T12:12:51Z",
+  "tool": "circus-regenerate-gate-summary",
+  "overall_status": "pass",
+  "checks_total": 4,
+  "checks_passed": 4,
+  "checks_failed": 0,
+  "violations_total": 0,
+  "violations_operational": 0,
+  "checks_skipped": 0,
+  "checks_unavailable": 0,
+  "checks": [
+    { "name": "container-publication-policy", "status": "pass", "exit_code": 0, "command": "<in-process ContainerPolicy.verify>" },
+    { "name": "executable-shell-tests",       "status": "pass", "exit_code": 0, "command": "bash tests/ci/test_build_publish_shell.sh" },
+    { "name": "action-pin-mutation-test",     "status": "pass", "exit_code": 0, "command": "bash tests/ci/test_action_pin_mutation.sh" },
+    { "name": "source-policy-tests",          "status": "pass", "exit_code": 0, "command": "make test-source-policy" }
+  ],
+  "tested_commit_oid": "6e5307bd6aabb95985a6cced858f7bff562b10a8",
+  "tested_tree_oid":   "03ca41d91191a9966fa22e9bf18ee3bb7561d847"
+}
+```
+
+`circus-tooling gate run` printed:
+
+```
+gate summary written to .factory/gate-summary.json: pass (4/4 pass, violations=0 operational=0) commit=6e5307b tree=03ca41d91191
+gate-summary verify: PASS (checks=4, schema_version=1, tree=03ca41d91191)
+gate run: PASS
+```
+
+The `source-policy-tests = pass` line in the gate summary confirms
+the canonical gate now executes `make test-source-policy` and
+treats its exit code as authoritative.
+
+### Focused verification (docs-only accounting correction)
+
+The previous P0-5 section above used the legacy two-line
+`focused_tests` accounting.  The reporting correction below
+applies to the Bash-convergence + gate-wiring verification
+executed against the new implementation commit
+`3418336426634fa1a4c2a237f7f8ba4b1878d2d7`:
+
+```yaml
+focused_verification:
+  suites_total: 4
+  suites_passed: 4
+  tests_total: 55
+  tests_passed: 55
+  tests_failed: 0
+  tests_errored: 0
+  tests_ignored: 0
+```
+
+Breakdown:
+
+- Bash availability suite — 20 tests, all pass (Bash is available
+  on this host).
+- ProcessRunner suite — 30 tests in the focused Bash-available
+  branch, all pass.
+- GateSummary wiring suite — 2 tests, both pass.
+- Parity / container-policy suites — remaining tests that prove
+  P0-5 is preserved.
+
+### Identity (predecessor-only — report's own OIDs omitted)
+
+```yaml
+implementation_commit_oid: 3418336426634fa1a4c2a237f7f8ba4b1878d2d7
+implementation_tree_oid:   4a0e8c857b2d6def39c17b4a8cb43934ba5586a5
+tested_commit_oid:        3418336426634fa1a4c2a237f7f8ba4b1878d2d7
+tested_tree_oid:          4a0e8c857b2d6def39c17b4a8cb43934ba5586a5
+content_base_commit_oid:  6e5307bd6aabb95985a6cced858f7bff562b10a8
+endpoint_binding:         external
+```
+
+### Patch hygiene
+
+`git diff --check` on the committed range returned no whitespace
+warnings.  `git status --short` is clean.  All commits are
+forward-only.
