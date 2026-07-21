@@ -309,37 +309,33 @@ let tests =
         }
 
         // P1-1: Tests for duplicate production detection before map construction
-        test "P1-1: duplicate production IDs would be detected (not lost to Set.ofList)" {
-            // This test verifies the logic exists; actual duplicates don't exist in production
-            // If production metadata had duplicates, they would appear in DuplicateProductionIds
-            let dir = newTempDir ()
-            let path = Path.Combine(dir, "parity.csv")
-            let rows = [
-                for m in metadataEntries -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]
-            ]
-            writeStrictCsv path rows
-            match validateFile path with
-            | Ok r ->
-                // With no duplicates, this list is empty
-                Expect.equal (List.length r.DuplicateProductionIds) 0 "no duplicate production IDs"
-            | Failed _ -> failtestf "should have passed"
-            Directory.Delete(dir, true)
+        test "P1-1: duplicate production identity is diagnosed" {
+            // Prove the pure detector finds duplicates that would otherwise be collapsed by Set/Map
+            let actual =
+                duplicateIds [
+                    "CP-01_required_files"
+                    "CP-01_required_files"
+                ]
+            Expect.equal actual [ "CP-01_required_files" ] "duplicate metadata must not be collapsed"
         }
 
-        // P1-1: Test that valid-format unknown FsharpCheckId is recorded as unknown
-        test "P1-1: valid-format unknown FsharpCheckId in FsharpCheckId column flagged as unknown" {
+        // P1-1: Test that an isolated unknown FsharpCheckId is reported as unknown AND as a field mismatch.
+        // LegacyCheckId stays canonical; only FsharpCheckId is mutated.
+        test "P1-1: isolated unknown FsharpCheckId reported as unknown and as column mismatch" {
             let dir = newTempDir ()
             let path = Path.Combine(dir, "parity.csv")
-            // Use a valid-format but unknown ID in the FsharpCheckId column
+            // Use canonical LegacyCheckId for CP-10, but unknown FsharpCheckId CP-99_extra_check
             let rows =
                 (metadataEntries
                 |> List.map (fun m -> [ m.CheckId; "desc"; m.CheckId; implLocFor m.CheckId; "p"; "n"; "complete" ]))
-                @ [[ "CP-99_extra_check"; "desc"; "CP-99_extra_check"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkXxx)"; "p"; "n"; "complete" ]]
+                @ [[ "CP-10_trusted_runner"; "desc"; "CP-99_extra_check"; "tools/Circus.Tooling/SourcePolicy/ContainerPolicy.fs (checkTrustedRunner)"; "p"; "n"; "complete" ]]
             writeStrictCsv path rows
             match validateFile path with
             | Failed (r, _) ->
-                // CP-99_extra_check is valid format but unknown
-                Expect.isTrue (List.contains "CP-99_extra_check" r.UnknownIdentities) "valid-format unknown FsharpCheckId must be flagged"
+                // CP-99_extra_check is valid format but unknown — must be reported
+                Expect.contains r.UnknownIdentities "CP-99_extra_check" "unknown F# identity must be reported"
+                // Column mismatch must also be reported
+                Expect.contains r.FieldMismatches ("CP-10_trusted_runner", "CP-99_extra_check", "legacy_check_id != fsharp_check_id") "column mismatch must also be reported"
             | Ok _ -> failtestf "should have failed"
             Directory.Delete(dir, true)
         }

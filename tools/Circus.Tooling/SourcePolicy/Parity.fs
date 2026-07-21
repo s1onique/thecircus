@@ -210,6 +210,17 @@ let private extractFunctionName (implLoc: string) : string option =
     let m = Regex(@"\(([^)]+)\)").Match(implLoc)
     if m.Success then Some m.Groups.[1].Value else None
 
+/// P1-1: Pure duplicate detector. Returns identities that appear more than once.
+/// Used by validation BEFORE Set/Map construction so duplicates are not collapsed.
+let duplicateIds (identities: string list) : string list =
+    identities
+    |> List.groupBy id
+    |> List.choose (fun (identity, occurrences) ->
+        if List.length occurrences > 1 then
+            Some identity
+        else
+            None)
+
 /// P1-1: Authoritative metadata map from ContainerPolicy.CheckMetadataEntries.
 /// Key: exact concrete check ID, Value: CheckMetadataEntry record.
 let private metadataByExactId : Map<string, CheckMetadataEntry> =
@@ -253,15 +264,13 @@ let validate (rows: ParityRow list) : ValidationOutcome =
     // P1-1: Duplicate parity IDs from original list (before Set.ofList)
     let dupCsvIds =
         csvLegacyIds
-        |> List.groupBy id
-        |> List.choose (fun (k, g) -> if List.length g > 1 then Some k else None)
+        |> duplicateIds
 
     // P1-1: Duplicate production IDs from original metadata list (before Set.ofList)
     let productionIds = productionMetadata |> List.map (fun m -> m.CheckId)
     let dupProductionIds =
         productionIds
-        |> List.groupBy id
-        |> List.choose (fun (k, g) -> if List.length g > 1 then Some k else None)
+        |> duplicateIds
 
     // P1-1: Known IDs from valid legacy partition
     let validLegacyIds = validLegacy |> List.map fst
