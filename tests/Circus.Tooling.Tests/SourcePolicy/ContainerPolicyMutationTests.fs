@@ -173,8 +173,8 @@ module RegistryValidationProofs =
                 | RegistryOk -> ()
                 | DuplicateCaseIds dups ->
                     failtestf "registry contains duplicate ids: %A" dups
-                | EmptyCaseIds empty ->
-                    failtestf "registry contains empty ids: %A" empty
+                | MismatchedCaseIdentities mismatches ->
+                    failtestf "registry contains mismatched identities: %A" mismatches
                 | UnknownExpectedCheckIds unknown ->
                     failtestf "registry contains unknown expected check ids: %A" unknown
             }
@@ -184,8 +184,8 @@ module RegistryValidationProofs =
                 | RegistryOk -> ()
                 | DuplicateCaseIds dups ->
                     failtestf "registry contains duplicate ids: %A" dups
-                | EmptyCaseIds empty ->
-                    failtestf "registry contains empty ids: %A" empty
+                | MismatchedCaseIdentities mismatches ->
+                    failtestf "registry contains mismatched identities: %A" mismatches
                 | UnknownExpectedCheckIds unknown ->
                     failtestf "registry contains unknown expected check ids: %A" unknown
             }
@@ -207,18 +207,38 @@ module RegistryValidationProofs =
                     failtestf "expected DuplicateCaseIds, got %A" other
             }
 
-            test "empty case id fails registry validation before any case body runs" {
-                let cases = [ makeSyntheticCase ""; makeSyntheticCase "CP-01_required_files" ]
+            test "empty mutation case ID is unrepresentable" {
+                match MutationCaseId.tryCreate "" with
+                | Result.Error msg ->
+                    Expect.stringContains msg "non-empty"
+                        "tryCreate must reject empty case id"
+                | Result.Ok _ ->
+                    failtestf "tryCreate must reject empty case id"
+            }
+
+            test "executor: mismatched Id and ExpectedCheckId is rejected before any case body runs" {
+                let case =
+                    { Id = MutationCaseId.fromString "CP-01_required_files"
+                      Description = "mismatched"
+                      ExpectedCheckId = "CP-99_does_not_match"
+                      PrepareBaseline = fun _ -> Result.Ok ()
+                      ApplyMutation = fun _ ->
+                          Result.Ok {
+                              ChangedPaths = [ "x" ]
+                              BeforeHashes = Map.ofList [ "x", "a" ]
+                              AfterHashes = Map.ofList [ "x", "b" ]
+                          }
+                      AllowedAdditionalCheckIds = Set.empty }
                 let mutable ran = false
                 let trapSeam =
                     { defaultWorkspaceSeam with
                         CreateTempDir = fun () -> ran <- true; Ok (System.IO.Path.GetTempPath()) }
-                match executeMutationRegistryWithSeam cases trapSeam with
-                | Error (InvalidRegistry (EmptyCaseIds empty)) ->
-                    Expect.isNonEmpty empty "empty ids must be reported"
+                match executeMutationRegistryWithSeam [case] trapSeam with
+                | Result.Error (InvalidRegistry (MismatchedCaseIdentities mismatches)) ->
+                    Expect.isNonEmpty mismatches "mismatches must be reported"
                     Expect.isFalse ran
                         "no case body may run when registry is invalid"
-                | other -> failtestf "expected EmptyCaseIds, got %A" other
+                | other -> failtestf "expected MismatchedCaseIdentities, got %A" other
             }
 
             test "unknown expected check id fails registry validation before any case body runs" {
@@ -251,7 +271,7 @@ module ExecutorProofs =
     /// ``.github/workflows/harbor.yml`` with the canonical harbour
     /// triggers and ``.dockerignore`` with the canonical exclusions.
     let private trivialBaseline (root: string) : Result<unit, string> =
-        (writeAndHash root ".github/workflows/harbor.yml" "name: harbor\non:\n  pull_request:\n  push:\n    branches:\n      - main\n  workflow_dispatch:\npermissions:\n  contents: read\n") |> Result.bind (fun () -> (writeAndHash root ".dockerignore" ".git\n.github\n.factory\n") |> Result.bind (fun () -> Ok (())))
+        (writeAndHash root ".github/workflows/harbor.yml" "name: harbor\non:\n  pull_request:\n  push:\n    branches:\n      - main\n  workflow_dispatch:\npermissions:\n  contents: read\n") |> Result.bind (fun (_) -> (writeAndHash root ".dockerignore" ".git\n.github\n.factory\n") |> Result.bind (fun (_) -> Ok (())))
 
     /// A trivial non-vacuous mutator: replaces a single file.
     let private trivialMutator (root: string) : Result<MutationReceipt, string> =
@@ -332,21 +352,17 @@ permissions:
     let tests =
         testList "Container policy mutation non-vacuity and executor proofs" [
             test "executor-level: baseline already non-compliant returns BaselineNotCompliant" {
-                let badBaseline _ : Result<unit, string> =
-                    (writeAndHash root ".github/workflows/harbor.yml" "name: harbor\non:\n  pull_request:\n  push:\n    branches:\n      - main\n  workflow_dispatch:\npermissions:\n  contents: read\n") |> Result.bind (fun () -> (writeAndHash root ".dockerignore" ".git\n") |> Result.bind (fun () -> Ok (()))) |> ignore
-                    // Force a non-compliant baseline by injecting
-                    // a missing required file.  CP-01_required_files
-                    // would catch this, but for a case bound to
-                    // CP-04_workflow_triggers we need to make the
-                    // target rule itself fail: drop the workflow
-                    // triggers.
-                    Ok ()
-                // The case is bound to CP-04_workflow_triggers.
-                // To force a baseline failure for that target we
-                // build a workspace with no harbor.yml at all.
-                let badBaseline2 _ : Result<unit, string> =
-                    Ok () // intentionally leave the workspace empty
-                let case = trivialCase "CP-04_baseline_already_bad" trivialMutator badBaseline2
+                // CP-04_workflow_triggers requires pull_request,
+                // push, and workflow_dispatch.  Writing a harbor.yml
+                // without those triggers is a genuinely non-compliant
+                // baseline for that target, so the check returns
+                // BaselineNotCompliant instead of failing because
+                // its input file is missing.
+                let badBaseline (root: string) : Result<unit, string> =
+                    writeAndHash root ".github/workflows/harbor.yml"
+                        "name: harbor\non:\n  push:\n    branches:\n      - main\n"
+                    |> Result.map (fun _ -> ())
+                let case = trivialCase "CP-04_workflow_triggers" trivialMutator badBaseline
                 match executeMutationRegistryWithSeam [case] defaultWorkspaceSeam with
                 | Result.Error _ -> failtestf "registry must validate"
                 | Result.Ok results ->
