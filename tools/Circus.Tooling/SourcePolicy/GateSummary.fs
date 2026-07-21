@@ -156,7 +156,37 @@ let private externalChecks (root: string) : CheckStatus list =
             [ "bash"; "tests/ci/test_build_publish_shell.sh" ] root
         runExternalCheck "action-pin-mutation-test"
             [ "bash"; "tests/ci/test_action_pin_mutation.sh" ] root
+        // Canonical source-policy test invocation.  The gate summary
+        // records ``source-policy-tests`` as ``pass`` only when
+        // ``make test-source-policy`` exits 0.  The Makefile target
+        // builds the tooling and the tooling tests, then runs the
+        // full Expecto suite through ``Circus.Tooling.Tests``.  This
+        // is the same command wired into ``dev-gate-linux`` so the
+        // artefact is fail-closed at every consumer.
+        //
+        // To break the otherwise-circular dependency between
+        // ``make test-source-policy`` and the gate producer (which
+        // would otherwise re-invoke make via ``gate run``), the
+        // caller can set ``CIRCUS_GATE_SKIP_SOURCE_POLICY=1`` so the
+        // check is recorded as ``unavailable`` without launching the
+        // make invocation.  The wiring test in ``GateSummaryWiringTests``
+        // uses this escape hatch so the producer can be exercised
+        // without recursing into another ``make test-source-policy``.
+        let sourcePolicySkip =
+            System.Environment.GetEnvironmentVariable("CIRCUS_GATE_SKIP_SOURCE_POLICY")
+        let sourcePolicyCheck =
+            if sourcePolicySkip = "1" then
+                { Name = "source-policy-tests"
+                  Status = "unavailable"
+                  ExitCode = -1
+                  Command = "make test-source-policy (skipped via CIRCUS_GATE_SKIP_SOURCE_POLICY)" }
+            else
+                runExternalCheck "source-policy-tests"
+                    [ "make"; "test-source-policy" ] root
+        sourcePolicyCheck
     ]
+
+
 
 let private nowIso () : string =
     DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")

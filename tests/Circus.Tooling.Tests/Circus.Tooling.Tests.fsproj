@@ -23,6 +23,8 @@
     <Compile Include="SourcePolicy/ProcessRunnerTests.fs" />
     <Compile Include="SourcePolicy/GateSummaryTests.fs" />
     <Compile Include="SourcePolicy/GateSummaryVerifyTests.fs" />
+    <Compile Include="SourcePolicy/GateSummaryWiringTests.fs" />
+
     <Compile Include="SourcePolicy/ContainerPolicyTests.fs" />
     <Compile Include="SourcePolicy/ContainerPolicyMutationRegistry.fs" />
     <Compile Include="SourcePolicy/ContainerPolicyMutationCases.fs" />
