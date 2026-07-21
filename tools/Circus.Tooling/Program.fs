@@ -8,7 +8,7 @@ open Circus.Tooling.SourcePolicy.Cli
 let main (argv: string[]) : int =
     let args = argv |> Array.toList
 
-    match parse args with
+    match parseTopLevel args with
     | Error msg ->
         stderr.WriteLine("error: " + msg)
         eprintfn "%s" (helpText ())
@@ -41,3 +41,5 @@ let main (argv: string[]) : int =
             match resolveRepoRoot () with
             | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
             | Ok repoRoot -> runGate repoRoot
+        | NoForcePushCmd subArgs ->
+            Circus.Tooling.NoForcePush.Cli.run subArgs

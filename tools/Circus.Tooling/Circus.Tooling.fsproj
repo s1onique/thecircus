@@ -41,6 +41,14 @@
     <Compile Include="SourcePolicy\GateSummaryVerify.fs" />
     <Compile Include="SourcePolicy\HumanReport.fs" />
     <Compile Include="SourcePolicy\Cli.fs" />
+    <Compile Include="NoForcePush\Types.fs" />
+    <Compile Include="NoForcePush\SurfaceInventory.fs" />
+    <Compile Include="NoForcePush\CommandLexer.fs" />
+    <Compile Include="NoForcePush\StaticPolicy.fs" />
+    <Compile Include="NoForcePush\PrePush.fs" />
+    <Compile Include="NoForcePush\GitHubRules.fs" />
+    <Compile Include="NoForcePush\Rendering.fs" />
+    <Compile Include="NoForcePush\Cli.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

@@ -298,3 +298,36 @@ dev-container-smoke:
 .PHONY: dev-gate-linux
 dev-gate-linux: build-source-policy
 	$(CIRCUS_TOOLING) gate run
+
+# =============================================================================
+# No-force-push verification (ACT-CIRCUS-NO-FORCE-PUSH-DOCTRINE-GATE01)
+# =============================================================================
+
+.PHONY: no-force-push
+no-force-push: build-source-policy
+	$(CIRCUS_TOOLING) no-force-push verify
+
+.PHONY: test-no-force-push
+test-no-force-push: build-source-policy
+	$(DOTNET) run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release --no-restore -- --focus "NoForcePush"
+
+.PHONY: install-git-safety-hooks
+install-git-safety-hooks:
+	@hooks_path=".githooks"; \
+	if [ -d ".git/hooks" ]; then \
+		git config core.hooksPath "$$hooks_path"; \
+		echo "Git safety hooks installed at: $$hooks_path"; \
+		git config --local --get core.hooksPath; \
+	else \
+		echo "ERROR: Not in a git repository"; \
+		exit 1; \
+	fi
+
+.PHONY: verify-github-no-force-push
+verify-github-no-force-push:
+	$(CIRCUS_TOOLING) no-force-push github-rules verify --repository s1onique/thecircus --branch main
+
+.PHONY: publication-gate
+publication-gate: build-source-policy
+	$(CIRCUS_TOOLING) no-force-push verify
+	$(MAKE) verify-github-no-force-push

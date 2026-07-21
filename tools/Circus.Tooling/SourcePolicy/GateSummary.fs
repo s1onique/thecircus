@@ -173,11 +173,18 @@ let private containerPolicyCheck (report: ContainerPolicy.ContainerPolicyReport)
 /// runner.  The source-policy-tests entry is the canonical
 /// invocation of ``make test-source-policy``; the wiring test
 /// proves this exact command is issued.
+///
+/// NO-FORCE-PUSH DOCTRINE GATE01 (P0-9):
+/// The canonical gate now includes two no-force-push checks:
+///   - no-force-push-policy: Static policy verification
+///   - no-force-push-tests: F# unit tests
 let CanonicalChecks : (string * string list) list =
     [
         "executable-shell-tests",   [ "bash"; "tests/ci/test_build_publish_shell.sh" ]
         "action-pin-mutation-test", [ "bash"; "tests/ci/test_action_pin_mutation.sh" ]
         "source-policy-tests",      [ "make"; "test-source-policy" ]
+        "no-force-push-policy",     [ "make"; "no-force-push" ]
+        "no-force-push-tests",      [ "make"; "test-no-force-push" ]
     ]
 
 

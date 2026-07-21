@@ -1,0 +1,32 @@
+#!/bin/sh
+# Stage-zero pre-push launcher.
+# Maximum 50 physical lines.
+# No classification logic.
+# No OID interpretation.
+# No policy decisions.
+# exec the compiled F# command and propagate its exact exit code.
+
+# Locate the repository root safely
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    echo "error: not in a git repository" >&2
+    exit 1
+}
+
+# Locate the tooling DLL
+TOOLING_DLL="${REPO_ROOT}/tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll"
+
+# Verify tooling exists
+if [ ! -f "$TOOLING_DLL" ]; then
+    echo "error: circus-tooling not built. Run: make build-source-policy" >&2
+    exit 1
+fi
+
+# Read remote info from stdin
+REMOTE_NAME="${1:-origin}"
+REMOTE_URL="${2:-}"
+
+# Execute the F# pre-push verifier via exec
+exec dotnet "$TOOLING_DLL" no-force-push pre-push \
+    --repo "$REPO_ROOT" \
+    --remote-name "$REMOTE_NAME" \
+    --remote-url "$REMOTE_URL"

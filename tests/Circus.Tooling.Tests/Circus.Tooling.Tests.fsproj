@@ -30,6 +30,16 @@
     <Compile Include="SourcePolicy/ContainerPolicyMutationCases.fs" />
     <Compile Include="SourcePolicy/ContainerPolicyMutationTests.fs" />
     <Compile Include="SourcePolicy/ParityTests.fs" />
+
+    <Compile Include="NoForcePush/InventoryTests.fs" />
+    <Compile Include="NoForcePush/CommandLexerTests.fs" />
+    <Compile Include="NoForcePush/StaticPolicyTests.fs" />
+    <Compile Include="NoForcePush/MutationTests.fs" />
+    <Compile Include="NoForcePush/PrePushTests.fs" />
+    <Compile Include="NoForcePush/GitHubRulesTests.fs" />
+    <Compile Include="NoForcePush/CliTests.fs" />
+    <Compile Include="NoForcePush/GateWiringTests.fs" />
+
     <Compile Include="Program.fs" />
   </ItemGroup>
 

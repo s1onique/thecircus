@@ -25,6 +25,7 @@ type Command =
     | GateSummaryRegenerateCmd
     | GateSummaryVerifyCmd
     | GateRunCmd
+    | NoForcePushCmd of subArgs: string list
     | HelpCmd
     | VersionCmd
 
@@ -48,7 +49,8 @@ let private parseFormat (args: string list) : Result<string, string> =
     | [ "--format"; _ ] -> Error "format must be 'human' or 'json'"
     | _ -> Error "unrecognised arguments after subcommand"
 
-let parse (argv: string list) : Result<Command, string> =
+/// Top-level parser that also handles the no-force-push subcommand.
+let parseTopLevel (argv: string list) : Result<Command, string> =
     match argv with
     | [] | [ "help" ] | [ "-h" ] | [ "--help" ] -> Ok HelpCmd
     | [ "version" ] -> Ok VersionCmd
@@ -63,7 +65,12 @@ let parse (argv: string list) : Result<Command, string> =
     | "gate-summary" :: "regenerate" :: [] -> Ok GateSummaryRegenerateCmd
     | "gate-summary" :: "verify" :: [] -> Ok GateSummaryVerifyCmd
     | "gate" :: "run" :: [] -> Ok GateRunCmd
-    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|help|version}"
+    | "no-force-push" :: rest -> Ok(NoForcePushCmd rest)
+    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|no-force-push|help|version}"
+
+/// Legacy parser for backward compatibility (delegates to top-level).
+let parse (argv: string list) : Result<Command, string> =
+    parseTopLevel argv
 
 let resolveRepoRoot () : Result<string, string> =
     match Inventory.discoverRoot Environment.CurrentDirectory with

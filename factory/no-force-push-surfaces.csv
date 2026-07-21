@@ -1,0 +1,2 @@
+path,surface_kind,parser_kind,authority,reason
+.githooks/pre-push,agent-executable,shell,repository,Tracked stage-zero pre-push launcher
