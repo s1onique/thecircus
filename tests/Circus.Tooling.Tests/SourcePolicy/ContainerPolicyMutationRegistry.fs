@@ -34,10 +34,19 @@ type MutationCaseId =
 module MutationCaseId =
     let value (MutationCaseId v) = v
 
+    /// Smart constructor: empty or whitespace-only ids are
+    /// rejected.  A valid case identifier is therefore
+    /// unrepresentable as the empty string.
+    let tryCreate (s: string) : Result<MutationCaseId, string> =
+        if String.IsNullOrWhiteSpace s then
+            Result.Error "mutation case id must be non-empty"
+        else
+            Result.Ok (MutationCaseId s)
+
     let fromString (s: string) : MutationCaseId =
-        if String.IsNullOrEmpty s then
-            invalidArg "s" "mutation case id must be non-empty"
-        MutationCaseId s
+        match tryCreate s with
+        | Result.Ok id -> id
+        | Result.Error msg -> invalidArg "s" msg
 
     let compare (a: MutationCaseId) (b: MutationCaseId) : int =
         String.CompareOrdinal(value a, value b)
@@ -157,7 +166,7 @@ type MutationCase = {
 type RegistryValidation =
     | RegistryOk
     | DuplicateCaseIds of string list
-    | EmptyCaseIds of string list
+    | MismatchedCaseIdentities of (string * string) list
     | UnknownExpectedCheckIds of string list
 
 type RegistryExecutionFailure =
@@ -175,21 +184,29 @@ let private allProductionCheckIds : Set<string> =
     set CheckIds
 
 let validateMutationRegistry (cases: MutationCase list) : RegistryValidation =
-    let emptyIds =
+    let duplicates =
         cases
-        |> List.filter (fun c -> String.IsNullOrEmpty (MutationCaseId.value c.Id))
         |> List.map (fun c -> MutationCaseId.value c.Id)
-    if not (List.isEmpty emptyIds) then
-        EmptyCaseIds emptyIds
+        |> List.groupBy id
+        |> List.filter (fun (_, g) -> List.length g > 1)
+        |> List.map fst
+    if not (List.isEmpty duplicates) then
+        DuplicateCaseIds duplicates
     else
-        let duplicates =
+        // P0-5 closure: every case must identify itself by the
+        // exact check id it is targeting.  An ``Id`` of
+        // ``CP-04_vacuous`` bound to ``ExpectedCheckId =
+        // CP-04_workflow_triggers`` is no longer allowed.
+        let mismatches =
             cases
-            |> List.map (fun c -> MutationCaseId.value c.Id)
-            |> List.groupBy id
-            |> List.filter (fun (_, g) -> List.length g > 1)
-            |> List.map fst
-        if not (List.isEmpty duplicates) then
-            DuplicateCaseIds duplicates
+            |> List.choose (fun c ->
+                let cid = MutationCaseId.value c.Id
+                if cid <> c.ExpectedCheckId then
+                    Some (cid, c.ExpectedCheckId)
+                else
+                    None)
+        if not (List.isEmpty mismatches) then
+            MismatchedCaseIdentities mismatches
         else
             let unknown =
                 cases
@@ -321,6 +338,31 @@ let private collectWorkspaceFiles (root: string) : string list =
         acc
     walk root
 
+/// Snapshot of the workspace: every relative path mapped to its
+/// SHA-256 hash at the moment of the snapshot.  Used to verify
+/// that the mutator actually changed the filesystem and did not
+/// just hand the executor a fabricated receipt.
+let snapshotWorkspace (root: string) : Map<string, string> =
+    collectWorkspaceFiles root
+    |> List.map (fun rel ->
+        let full = Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar))
+        rel, sha256OfFile full)
+    |> Map.ofList
+
+/// Derive the set of paths that genuinely changed between two
+/// snapshots: every path present in either snapshot whose hash
+/// differs (or is missing on one side).
+let deriveChangedPaths
+    (before: Map<string, string>)
+    (after: Map<string, string>)
+    : Set<string> =
+    let allKeys =
+        Set.union
+            (before |> Map.keys |> Set.ofSeq)
+            (after |> Map.keys |> Set.ofSeq)
+    Set.filter (fun path ->
+        Map.tryFind path before <> Map.tryFind path after) allKeys
+
 let private combineFailures
     (primary: MutationFailure)
     (cleanupMsg: string)
@@ -380,35 +422,50 @@ let private executeCase
                         match mutationStep () with
                         | Error e -> Error e
                         | Ok receipt ->
-                            // Validate the receipt structurally.
-                            if not (receipt.KeysMatch ()) then
-                                Error (MutationApplicationFailed
-                                    (sprintf "receipt key sets are inconsistent: changed=%d before=%d after=%d"
-                                        (List.length receipt.ChangedPaths)
-                                        (Map.count receipt.BeforeHashes)
-                                        (Map.count receipt.AfterHashes)))
-                            else
-                                // Verify every changed path is contained in the workspace.
-                                let allContained =
-                                    receipt.ChangedPaths
-                                    |> List.forall (fun p ->
-                                        match resolveContainedPath root p with
-                                        | Ok _ -> true
-                                        | Error _ -> false)
-                                if not allContained then
-                                    Error (MutationApplicationFailed
-                                        "receipt contains a path that escapes the workspace")
-                                else if List.isEmpty receipt.ChangedPaths then
+                            // Validate the receipt independently of the mutator
+                            // by comparing its claimed before/after hashes to
+                            // an executor-supplied snapshot of the real
+                            // filesystem.
+                            let beforeSnap = snapshotWorkspace root
+                            match c.ApplyMutation root with
+                            | Error e ->
+                                Error (MutationApplicationFailed e)
+                            | Ok receipt ->
+                                let afterSnap = snapshotWorkspace root
+                                let actualChanged = deriveChangedPaths beforeSnap afterSnap
+                                let claimedChanged =
+                                    receipt.ChangedPaths |> Set.ofList
+                                if actualChanged = Set.empty then
                                     Error (MutationWasVacuous
-                                        (sprintf "mutator for %s changed no paths"
+                                        (sprintf "mutator for %s changed no paths on disk"
                                             (MutationCaseId.value c.Id)))
-                                else if not (receipt.HasObservableChange ()) then
+                                elif not (receipt.HasObservableChange ()) then
                                     Error (MutationWasVacuous
                                         (sprintf "mutator for %s produced no observable change"
                                             (MutationCaseId.value c.Id)))
+                                elif actualChanged <> claimedChanged then
+                                    Error (MutationApplicationFailed
+                                        (sprintf "mutator for %s claimed changed paths %A but actual changed paths are %A"
+                                            (MutationCaseId.value c.Id)
+                                            (Set.toList claimedChanged)
+                                            (Set.toList actualChanged)))
                                 else
-                                    // Phase D: detection proof.
-                                    match seam.RunCheck c.ExpectedCheckId root with
+                                    // Receipt hashes must match the executor
+                                    // snapshot restricted to the claimed paths.
+                                    let actualReceipt =
+                                        { receipt with
+                                            BeforeHashes = Map.filter (fun k _ -> Set.contains k actualChanged) beforeSnap
+                                            AfterHashes = Map.filter (fun k _ -> Set.contains k actualChanged) afterSnap }
+                                    if not (actualReceipt.KeysMatch ()) then
+                                        Error (MutationApplicationFailed
+                                            (sprintf "mutator for %s receipt key sets do not match observed changed paths"
+                                                (MutationCaseId.value c.Id)))
+                                    else
+                                        // Inject the verified receipt into the
+                                        // next phase.
+                                        Some actualReceipt
+                                // Phase D: detection proof.
+                                match seam.RunCheck c.ExpectedCheckId root with
                                     | Error e -> Error (CaseExecutionFailed e)
                                     | Ok mutatedViolations ->
                                         let targetIds = set [ c.ExpectedCheckId ]
@@ -427,13 +484,19 @@ let private executeCase
                                             match unexpected with
                                             | first :: _ -> Error (UnexpectedViolation first)
                                             | [] ->
-                                                Ok {
-                                                    CaseId = c.Id
-                                                    ExpectedCheckId = c.ExpectedCheckId
-                                                    BaselineViolations = []
-                                                    MutatedViolations = mutatedViolations
-                                                    Receipt = receipt
-                                                }
+                                                match actualReceipt with
+                                                | Some verified ->
+                                                    Ok {
+                                                        CaseId = c.Id
+                                                        ExpectedCheckId = c.ExpectedCheckId
+                                                        BaselineViolations = []
+                                                        MutatedViolations = mutatedViolations
+                                                        Receipt = verified
+                                                    }
+                                                | None ->
+                                                    Error (CaseExecutionFailed
+                                                        (sprintf "case %s finished without a verified receipt"
+                                                            (MutationCaseId.value c.Id)))
         match runOnce () with
         | Ok _ as ok ->
             match seam.DeleteRecursive root with
