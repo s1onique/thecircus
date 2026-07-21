@@ -35,6 +35,20 @@ WEB_SOURCES := \
 .PHONY: restore
 restore: dotnet-tool-restore dotnet-restore-locked npm-ci
 
+# =============================================================================
+# .NET environment check (ACT-CIRCUS-DOTNET-USER-PATH-PERSISTENCE01)
+# =============================================================================
+
+.PHONY: dotnet-env-check
+dotnet-env-check:
+	@command -v dotnet >/dev/null 2>&1 || { \
+		echo "ERROR: dotnet is installed but is not visible in PATH, or is absent."; \
+		echo "Run ACT-CIRCUS-DOTNET-USER-PATH-PERSISTENCE01 diagnostics."; \
+		exit 2; \
+	}
+	@dotnet --version
+	@dotnet --list-sdks
+
 .PHONY: dotnet-tool-restore
 dotnet-tool-restore:
 	$(DOTNET) tool restore

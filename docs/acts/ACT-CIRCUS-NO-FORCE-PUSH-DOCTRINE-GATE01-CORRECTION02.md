@@ -247,6 +247,14 @@ CORRECTION01 was appended to `ACT-CIRCUS-ML-ONLY-SOURCE-POLICY01-VERIFIER-INTEGR
 
 This CORRECTION02 is the correct ACT. No evidence should be appended to the already-closed ML-source-policy report.
 
+## Adjacent enablement ACT
+
+`ACT-CIRCUS-DOTNET-USER-PATH-PERSISTENCE01`
+
+This ACT owns persistent user and Cline visibility of the already-installed
+.NET SDK. Once its preflight passes, resume CORRECTION02 at P0-1 build
+verification.
+
 ## Required Fixes
 
 1. [ ] Fix all compiler errors before any completion claim
