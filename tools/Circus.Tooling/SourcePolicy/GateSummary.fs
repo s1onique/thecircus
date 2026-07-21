@@ -6,7 +6,8 @@ module Circus.Tooling.SourcePolicy.GateSummary
 /// tests can exercise the producer with an injected
 /// ``ExternalCheckRunner`` and write only to a unique temporary
 /// path.  The production ``regenerate`` command composes them
-/// against the real checkout.
+/// against the real checkout; it returns ``Result`` so a writer
+/// failure fails the CLI closed without emitting any PASS message.
 ///
 /// The container-publication-policy check is sourced from
 /// ``ContainerPolicy.verify`` invoked **in-process**.  No subprocess
@@ -95,7 +96,12 @@ let internal ValidCheckStatuses   = set [ "pass"; "fail"; "skip"; "unavailable" 
 let statusForExitCode (exitCode: int) : string =
     if exitCode = 0 then "pass" else "fail"
 
-let private statusForOutcome (outcome: ProcessOutcome) : string * int =
+/// Map a process outcome to the canonical ``(status, exitCode)``
+/// pair used by the gate document.  Extracted from the production
+/// runner so it can be unit-tested independently against the full
+/// outcome alphabet (zero exit, non-zero exit, launch failure,
+/// cancellation, output failure, cleanup failure).
+let classifyOutcome (outcome: ProcessOutcome) : string * int =
     match outcome with
     | Exited (0, _) -> "pass", 0
     | Exited (n, _) -> "fail", n
@@ -119,14 +125,25 @@ let private runGit (args: string list) (workingDir: string) : Result<string, int
     | BodyFailure _ -> Result.Error -1
     | Cancelled _ -> Result.Error -1
 
-let private testedIdentityFromGit (workingDir: string) : TestedIdentity =
+/// Strict diagnostic returned by ``testedIdentityFromGit`` when one
+/// or both identity components cannot be read from the
+/// repository.
+type IdentityFailure =
+    | CommitOidMissing
+    | TreeOidMissing
+
+/// Read the implementation identity from the repository.  Both
+/// ``git rev-parse HEAD`` and ``git rev-parse HEAD^{tree}`` MUST
+/// succeed; an absent or failed component prevents document
+/// generation (fail-closed).
+let testedIdentityFromGit (workingDir: string) : Result<TestedIdentity, IdentityFailure> =
     match runGit [ "rev-parse"; "HEAD" ] workingDir with
-    | Result.Ok v -> { CommitOid = v; TreeOid = "" }
-    | Result.Error _ -> { CommitOid = ""; TreeOid = "" }
-    |> fun partial ->
+    | Result.Ok commit when not (String.IsNullOrWhiteSpace commit) ->
         match runGit [ "rev-parse"; "HEAD^{tree}" ] workingDir with
-        | Result.Ok t -> { partial with TreeOid = t }
-        | Result.Error _ -> partial
+        | Result.Ok tree when not (String.IsNullOrWhiteSpace tree) ->
+            Result.Ok { CommitOid = commit; TreeOid = tree }
+        | _ -> Result.Error TreeOidMissing
+    | _ -> Result.Error CommitOidMissing
 
 /// Build the container-publication-policy ``CheckStatus`` from a
 /// pre-produced ``ContainerPolicyReport``.  The caller is
@@ -213,35 +230,12 @@ let buildDocument
     }
 
 /// Strict diagnostic returned by ``writeDocument`` when the
-/// artefact cannot be written.
+/// artefact cannot be written.  ``DirectoryCreationFailed`` and
+/// ``FileWriteFailed`` are reported as distinct cases so the
+/// CLI can fail closed at the precise failure mode.
 type GateWriteFailure =
     | DirectoryCreationFailed of message: string
     | FileWriteFailed of message: string
-
-/// Serialize and write a gate document to ``outputPath``.  The
-/// directory is created if absent.  Returns ``Ok`` on success and
-/// ``Error`` on failure so callers (including tests) can compose
-/// without ``try``/``raise``.
-let writeDocument
-    (outputPath: string)
-    (doc: GateSummaryDoc)
-    : Result<unit, GateWriteFailure> =
-    try
-        let dir = Path.GetDirectoryName outputPath
-        if not (String.IsNullOrEmpty dir) && not (Directory.Exists dir) then
-            try Directory.CreateDirectory dir |> ignore
-            with ex ->
-                Error (DirectoryCreationFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
-                |> ignore
-        let serialized =
-            let opts = JsonSerializerOptions()
-            opts.WriteIndented <- true
-            opts.DefaultIgnoreCondition <- JsonIgnoreCondition.Never
-            JsonSerializer.Serialize(doc, opts)
-        File.WriteAllText(outputPath, serialized + "\n")
-        Ok ()
-    with ex ->
-        Error (FileWriteFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
 
 /// Serialize a gate document to a string.  Pure.
 let serialize (doc: GateSummaryDoc) : string =
@@ -250,14 +244,109 @@ let serialize (doc: GateSummaryDoc) : string =
     opts.DefaultIgnoreCondition <- JsonIgnoreCondition.Never
     JsonSerializer.Serialize(doc, opts)
 
+/// Atomic publish: write the JSON to a unique sibling, flush, then
+/// rename over the canonical path.  A process interruption between
+/// the write and the rename leaves the canonical artefact
+/// untouched.  Returns ``Ok`` on success and ``Error`` with the
+/// precise failure mode on any error.
+let private tryCreateDirectory (dir: string) : Result<unit, GateWriteFailure> =
+    if not (Directory.Exists dir) then
+        try
+            Directory.CreateDirectory dir |> ignore
+            Ok ()
+        with ex ->
+            Error (DirectoryCreationFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
+    else
+        Ok ()
+
+let private trySerialize (doc: GateSummaryDoc) : Result<string, GateWriteFailure> =
+    try Ok (serialize doc)
+    with ex ->
+        Error (FileWriteFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
+
+let private safeDelete (path: string) : unit =
+    try if File.Exists path then File.Delete path with _ -> ()
+
+let private tryWriteTemp
+    (tmpPath: string)
+    (serialized: string)
+    : Result<unit, GateWriteFailure> =
+    try
+        File.WriteAllText(tmpPath, serialized + "\n")
+        Ok ()
+    with ex ->
+        safeDelete tmpPath
+        Error (FileWriteFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
+
+let private tryReplaceTemp
+    (tmpPath: string)
+    (outputPath: string)
+    : Result<unit, GateWriteFailure> =
+    let backup = outputPath + ".bak-" + Guid.NewGuid().ToString("n")
+    try
+        if File.Exists outputPath then
+            File.Replace(tmpPath, outputPath, backup)
+        else
+            File.Move(tmpPath, outputPath)
+        safeDelete backup
+        Ok ()
+    with ex ->
+        safeDelete tmpPath
+        safeDelete backup
+        Error (FileWriteFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
+
+
+let private tryAtomicPublish
+    (outputPath: string)
+    (dir: string)
+    (serialized: string)
+    : Result<unit, GateWriteFailure> =
+    let tmpPath =
+        Path.Combine(
+            dir,
+            Path.GetFileName outputPath
+            + ".tmp-"
+            + Guid.NewGuid().ToString("n"))
+    match tryWriteTemp tmpPath serialized with
+    | Error e -> Error e
+    | Ok () -> tryReplaceTemp tmpPath outputPath
+
+
+let writeDocument
+    (outputPath: string)
+    (doc: GateSummaryDoc)
+    : Result<unit, GateWriteFailure> =
+    let dir = Path.GetDirectoryName outputPath
+    if String.IsNullOrEmpty dir then
+        Error (DirectoryCreationFailed "output path has no parent directory")
+    else
+        match tryCreateDirectory dir with
+        | Error e -> Error e
+        | Ok () ->
+            match trySerialize doc with
+            | Error e -> Error e
+            | Ok serialized ->
+                tryAtomicPublish outputPath dir serialized
+
+
+
+/// Composite failure diagnostic for ``regenerate``.  Each case
+/// mirrors the underlying cause: identity read failure, document
+/// build failure (which never escapes in practice), or artefact
+/// write failure.  No case may continue silently.
+type RegenerateFailure =
+    | IdentityReadFailed of IdentityFailure
+    | DocumentBuildFailed of message: string
+    | ArtefactWriteFailed of GateWriteFailure
+
 /// Production runner that launches a real subprocess via the
-/// shared ``ProcessRunner``.  Used by ``regenerate`` and by the
-/// canonical gate.  Status is derived from the process outcome.
+/// shared ``ProcessRunner``.  Status is derived from the process
+/// outcome via ``classifyOutcome``.
 let productionRunner : ExternalCheckRunner =
     fun (name: string) (argv: string list) (workingDir: string) ->
         try
             let result = runProcessText argv (Some workingDir) CancellationToken.None
-            let status, exitCode = statusForOutcome result.Outcome
+            let status, exitCode = classifyOutcome result.Outcome
             { Name = name
               Status = status
               ExitCode = exitCode
@@ -265,41 +354,54 @@ let productionRunner : ExternalCheckRunner =
         with _ ->
             { Name = name; Status = "unavailable"; ExitCode = -1; Command = String.concat " " argv }
 
-/// Production entry point.  Reads the implementation identity from
-/// git, composes the canonical artefact against the production
-/// runner, and writes ``.factory/gate-summary.json``.
-let regenerate (root: string) : GateSummaryDoc =
-    let identity = testedIdentityFromGit root
-    let doc = buildDocument root identity productionRunner
-    let target = Path.Combine(root, ".factory", "gate-summary.json")
-    match writeDocument target doc with
-    | Ok () -> ()
-    | Error (DirectoryCreationFailed m) ->
-        stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (mkdir %s)" m)
-    | Error (FileWriteFailed m) ->
-        stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (write %s)" m)
-    doc
+/// Build the canonical document and write it to ``.factory/gate-
+/// summary.json`` against the real checkout.  Returns ``Ok`` with
+/// the document on success; returns ``Error`` with the precise
+/// failure mode on any of: identity read failure, build failure
+/// (escapes only on programmer error), or artefact write failure.
+/// No PASS message is emitted on any error path.
+let regenerate (root: string) : Result<GateSummaryDoc, RegenerateFailure> =
+    match testedIdentityFromGit root with
+    | Result.Error failure ->
+        Result.Error (IdentityReadFailed failure)
+    | Result.Ok identity ->
+        let doc = buildDocument root identity productionRunner
+        let target = Path.Combine(root, ".factory", "gate-summary.json")
+        match writeDocument target doc with
+        | Result.Ok () -> Result.Ok doc
+        | Result.Error failure -> Result.Error (ArtefactWriteFailed failure)
 
 let internal resolveToolingDll (root: string) : string =
     let canonical = Path.Combine(root, "tools", "Circus.Tooling", "bin", "Release", "net10.0", "circus-tooling.dll")
     if File.Exists canonical then canonical
     else canonical
 
+/// CLI entry point.  Runs the producer against the real checkout
+/// and exits non-zero on any failure.  On success, prints a single
+/// PASS line; on failure, prints the failure mode and exits non-zero
+/// WITHOUT printing any PASS line.
 let runRegenerate (root: string) : int =
-    try
-        match runGit [ "rev-parse"; "HEAD^{tree}" ] root with
-        | Result.Error code ->
-            stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (git rev-parse HEAD^{tree} exit=%d)" code)
-            2
-        | Result.Ok _ ->
-            let doc = regenerate root
-            stdout.WriteLine(sprintf "gate summary written to .factory/gate-summary.json: %s (%d/%d pass, violations=%d operational=%d) commit=%s tree=%s"
-                doc.OverallStatus doc.ChecksPassed doc.ChecksTotal doc.ViolationsTotal doc.ViolationsOperational
-                (if doc.TestedCommitOid.Length >= 12 then doc.TestedCommitOid.Substring(0, 12) else doc.TestedCommitOid)
-                (if doc.TestedTreeOid.Length >= 12 then doc.TestedTreeOid.Substring(0, 12) else doc.TestedTreeOid))
-            if doc.OverallStatus = "pass" then 0
-            else if doc.OverallStatus = "fail" then 1
-            else 2
-    with ex ->
-        stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (operational: %s: %s)" (ex.GetType().FullName) ex.Message)
+    match regenerate root with
+    | Result.Ok doc ->
+        stdout.WriteLine(sprintf "gate summary written to .factory/gate-summary.json: %s (%d/%d pass, violations=%d operational=%d) commit=%s tree=%s"
+            doc.OverallStatus doc.ChecksPassed doc.ChecksTotal doc.ViolationsTotal doc.ViolationsOperational
+            (if doc.TestedCommitOid.Length >= 12 then doc.TestedCommitOid.Substring(0, 12) else doc.TestedCommitOid)
+            (if doc.TestedTreeOid.Length >= 12 then doc.TestedTreeOid.Substring(0, 12) else doc.TestedTreeOid))
+        if doc.OverallStatus = "pass" then 0
+        else if doc.OverallStatus = "fail" then 1
+        else 2
+    | Result.Error (IdentityReadFailed CommitOidMissing) ->
+        stderr.WriteLine "gate-summary regenerate: FAIL (commit identity unreadable)"
+        2
+    | Result.Error (IdentityReadFailed TreeOidMissing) ->
+        stderr.WriteLine "gate-summary regenerate: FAIL (tree identity unreadable)"
+        2
+    | Result.Error (DocumentBuildFailed m) ->
+        stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (build: %s)" m)
+        2
+    | Result.Error (ArtefactWriteFailed (DirectoryCreationFailed m)) ->
+        stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (mkdir: %s)" m)
+        2
+    | Result.Error (ArtefactWriteFailed (FileWriteFailed m)) ->
+        stderr.WriteLine(sprintf "gate-summary regenerate: FAIL (write: %s)" m)
         2
