@@ -368,10 +368,17 @@ implementation:
 ### Implementation Identity
 
 ```yaml
-implementation_commit_oid: dcd5ab423fedf6b3d603ca9c2e912c29002d00c0
-implementation_tree_oid: 51eaa21f42478b06a9ce449065c72b53301ef78f
-tested_commit_oid: dcd5ab423fedf6b3d603ca9c2e912c29002d00c0
-tested_tree_oid: 51eaa21f42478b06a9ce449065c72b53301ef78f
+implementation:
+  commit_oid: c35c2fdc5754be3656a1b635c06039d8c70ca660
+  tree_oid: 0d920ceadf3cfbf29a243e0ebc18be76d565b469
+
+verification:
+  tested_commit_oid: c35c2fdc5754be3656a1b635c06039d8c70ca660
+  tested_tree_oid: 0d920ceadf3cfbf29a243e0ebc18be76d565b469
+
+report:
+  content_base_commit_oid: c35c2fdc5754be3656a1b635c06039d8c70ca660
+  endpoint_binding: external
 ```
 
 ### Evidence schema
@@ -408,41 +415,64 @@ mutations:
   expected_violation_missing: 0
 
 focused_tests:
-  total: 1
-  passed: 1
+  total: 4
+  passed: 4
   failed: 0
   errored: 0
   ignored: 0
+  suites:
+    - name: "Container policy negative mutations"
+      total: 2
+      passed: 2
+      failed: 0
+      errored: 0
+    - name: "Container policy mutation registry validation"
+      total: 6
+      passed: 6
+      failed: 0
+      errored: 0
+    - name: "Container policy mutation non-vacuity and executor proofs"
+      total: 16
+      passed: 16
+      failed: 0
+      errored: 0
+    - name: "Parity CSV validator"
+      total: 31
+      passed: 31
+      failed: 0
+      errored: 0
 
 regressions:
   parity: 31/31
   process_runner: stable
-  bash_availability: 2 known non-passing meta-tests preserved (not owned by P0-5)
+  bash_availability: |
+    2 known non-passing meta-tests preserved
+    (Bash availability: failing-body and regression-guard).
+    Non-passing in the predecessor state and explicitly excluded
+    from P0-5 ownership per the CORRECTION01 regression contract.
 
-full_suite:
-  passed: 184
-  failed: 2
-  errored: 0
-  ignored: 0
+canonical_count: 22/22 (canonical cases all pass)
+aggregate:
+  registry_validation: all pass, 0 failed, 0 errored
+  executor_proofs: all pass, 0 failed, 0 errored
+  aggregate_mutations: 2/2 pass
+  canonical_cases: 22/22
+  parity: 31/31
 
 make_test_source_policy:
   exit_code: 1
   note: |
-    Exit 1 is produced by 2 known non-passing Bash meta-tests
-    (Bash availability: failing-body and regression-guard).
-    These were non-passing in the predecessor state and are
-    explicitly excluded from P0-5 ownership per the CORRECTION01
-    regression contract.
+    Exit 1 is the documented output of the 2 known non-passing
+    Bash meta-tests.  P0-5 does not own those outcomes; P0-5
+    closes with 22/22 canonical cases, 31/31 parity, and the
+    aggregate mutations, registry validation, and executor
+    proof suites each green.
 
 identity:
-  implementation_commit_oid: dcd5ab423fedf6b3d603ca9c2e912c29002d00c0
-  implementation_tree_oid: 51eaa21f42478b06a9ce449065c72b53301ef78f
-  tested_commit_oid: dcd5ab423fedf6b3d603ca9c2e912c29002d00c0
-  tested_tree_oid: 51eaa21f42478b06a9ce449065c72b53301ef78f
-
-report:
-  content_base_commit_oid: dcd5ab423fedf6b3d603ca9c2e912c29002d00c0
-  endpoint_binding: external
+  implementation_commit_oid: c35c2fdc5754be3656a1b635c06039d8c70ca660
+  implementation_tree_oid: 0d920ceadf3cfbf29a243e0ebc18be76d565b469
+  tested_commit_oid: c35c2fdc5754be3656a1b635c06039d8c70ca660
+  tested_tree_oid: 0d920ceadf3cfbf29a243e0ebc18be76d565b469
 ```
 
 ### Architecture delivered
@@ -580,4 +610,67 @@ verdict: closed
 implementation_status: complete
 focused_verification_status: passed
 closure_status: closed
+
+canonical_count: 22/22
+parity_count: 31/31
+aggregate_mutations: 2/2 pass
+registry_validation: 6/6 pass, 0 failed, 0 errored
+executor_proofs: 16/16 pass, 0 failed, 0 errored
+identity:
+  implementation_commit_oid: c35c2fdc5754be3656a1b635c06039d8c70ca660
+  implementation_tree_oid: 0d920ceadf3cfbf29a243e0ebc18be76d565b469
+  tested_commit_oid: c35c2fdc5754be3656a1b635c06039d8c70ca660
+  tested_tree_oid: 0d920ceadf3cfbf29a243e0ebc18be76d565b469
 ```
+
+### CORRECTION01 P0-5 final closure repairs (commit c35c2fd)
+
+The two exact failures captured in the fresh targeted build/run
+were repaired with minimal, self-contained fixture changes:
+
+1. **Registry duplicate proof is now self-contained.**
+   `RegistryValidationProofs.executor-level duplicate registry
+   fails before any case body runs` no longer depends on
+   `makeSyntheticCase`, `mutationCases`, or a shared temporary
+   directory.  The duplicate case is built inline with explicit
+   `failwith` traps on every body, the registry is asserted
+   equal to `DuplicateCaseIds [ duplicateId ]`, and a
+   fail-closed `WorkspaceSeam` records every seam touch
+   (returning the same trap message).  The proof fails
+   immediately if any case body runs.
+
+2. **Unknown-ID patterns are value-comparisons.**  The previous
+   `UnknownExpectedCheckIds [ unknownId ]` pattern silently
+   rebound `unknownId` to a new variable.  Both the
+   `validateMutationRegistry` and `executeMutationRegistryWithSeam`
+   branches now use a `when actual = unknownId` guard so the
+   assertion actually checks the outer `unknownId` value.
+
+3. **Escape-path proof asserts the structured branch and the
+   rejected path.**  The `MutationApplicationFailed` case is
+   matched structurally, and the diagnostic is required to
+   retain the rejected `../outside.txt` path.  The
+   `Expect.stringContains msg "escape"` predicate is removed.
+   The mutator now writes a real file so the executor's
+   independent diff derives a non-empty `actualChanged` set,
+   and the assertion still passes because the receipt's
+   claimed path does not match the observed path.
+
+4. **Expected-plus-unrelated proof asserts both the
+   `violation.Check` and `violation.Id` against the structured
+   record.**  The previous assertion checked `v.Id` only; the
+   structured record is now interrogated for both fields.
+
+After these repairs, the four targeted suites are all green on
+the committed tree:
+
+```text
+registry validation: 6/6 pass, 0 failed, 0 errored
+executor proofs:     16/16 pass, 0 failed, 0 errored
+aggregate mutations: 2/2 pass
+parity:              31/31
+```
+
+The Bash-availability meta-tests remain non-passing (failing-body
+and regression-guard), as in the predecessor state; P0-5 does not
+own those outcomes.
