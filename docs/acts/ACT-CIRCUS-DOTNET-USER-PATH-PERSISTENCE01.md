@@ -19,7 +19,7 @@ current_immediate_act:
 
 this_act:
   id: ACT-CIRCUS-DOTNET-USER-PATH-PERSISTENCE01
-  status: OPEN
+  status: PARTIAL
   relationship: adjacent environment prerequisite
   blocks:
     - dotnet build

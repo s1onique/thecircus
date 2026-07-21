@@ -308,17 +308,13 @@ Expected:
 
 ### Repository Commit
 
-Stage only the environment-ACT files:
-```bash
-git add \
-  .clinerules/05-dotnet-environment-preflight.md \
-  Makefile \
-  docs/acts/ACT-CIRCUS-DOTNET-USER-PATH-PERSISTENCE01.md \
-  docs/acts/ACT-CIRCUS-NO-FORCE-PUSH-DOCTRINE-GATE01-CORRECTION02.md \
-  docs/close-reports/ACT-CIRCUS-DOTNET-USER-PATH-PERSISTENCE01.md
+```yaml
+repository:
+  implementation_commit_oid: 1fbbbd4f1d74b56655446c2c3b1c45d02b39fa63
+  implementation_tree_oid: 8ca835304b6c08b04679e720cc20b68316e7b4d7
+  close_report_commit_oid: 6a9645a
+  repository_artifacts_status: committed
 ```
-
-Commit separately from no-force-push implementation, then update the close report with actual commit/tree OIDs.
 
 ---
 
