@@ -877,3 +877,120 @@ endpoint_binding:         external
 `git diff --check` on the committed range returned no whitespace
 warnings.  `git status --short` is clean.  All commits are
 forward-only.
+
+## CORRECTION01 — Hermetic Gate Producer + Injected Runner
+
+### Summary
+
+Refactored `Circus.Tooling.SourcePolicy.GateSummary` so document
+construction is separated from artifact writing.  Tests call
+`buildDocument` with an injected `ExternalCheckRunner` that records
+every invocation in a test-owned collection; the production
+`regenerate` command composes `buildDocument` with the production
+runner and writes the canonical artefact.  Removed
+`CIRCUS_GATE_SKIP_SOURCE_POLICY` entirely; no env-var skip hatch and
+no fixed `/tmp` stub control test behavior.  Added a byte-identity
+regression proof that the canonical `.factory/gate-summary.json`
+is unchanged across the entire GateSummary wiring suite.  Repaired
+the `EndBeforeBegin` marker-order proof so the canonical
+reversed-marker fixture actually returns `Error EndBeforeBegin`.
+
+### Mechanical command contract
+
+With the injected runner, the producer MUST issue exactly one
+invocation with these exact arguments:
+
+    executable = make
+    argv      = ["make"; "test-source-policy"]
+    cwd       = repository root
+
+The wiring test fails if any of these are wrong, and the
+canonical-list count is asserted (so removal or duplication of the
+entry also fails the wiring).
+
+### Exit-code → status mapping
+
+| Injected runner returns | source-policy-tests.status | overall_status |
+|---|---|---|
+| ExitCode 0 | pass | pass (assuming no other failures) |
+| ExitCode 1 | fail | fail |
+| Launch failure (exit_code -1) | unavailable | fail |
+
+### Removed surface area
+
+- `CIRCUS_GATE_SKIP_SOURCE_POLICY` env var
+- `/tmp/circus-test-source-policy-stub` global file
+- Direct production `regenerate` call from any test
+
+### Evidence accounting (separate sections, not combined)
+
+```yaml
+bash_suite:
+  total: 20
+
+process_runner_suite:
+  total: 30          # focused Bash-available branch
+
+gate_wiring_suite:
+  total: 10          # all GateSummary wiring tests
+  artifact_unchanged_after_suite: true
+
+p0_5:
+  registry: 6
+  executor: 16
+  aggregate: 2
+
+parity:
+  total: 31
+
+complete_tooling_suite:
+  total: 216
+  passed: 216
+  failed: 0
+  errored: 0
+  ignored: 0
+```
+
+### Identity (predecessor-only)
+
+```yaml
+implementation_commit_oid: d736939adb8b21617d6695ea414e782ab0e3a76e
+implementation_tree_oid:   cd5b6136c79cbd9dfc1acdaf025223f50836cfbf
+tested_commit_oid:        d736939adb8b21617d6695ea414e782ab0e3a76e
+tested_tree_oid:          cd5b6136c79cbd9dfc1acdaf025223f50836cfbf
+content_base_commit_oid:  6e5307bd6aabb95985a6cced858f7bff562b10a8
+endpoint_binding:         external
+```
+
+### Stability proof
+
+The complete tooling suite runs cleanly (exit 0, 216 tests pass).
+Two consecutive `gate run` invocations produce a `.factory/gate-
+summary.json` whose structural hash (excluding `generated_at`) is
+byte-identical.  The artifact records:
+
+```yaml
+checks_total: 4
+checks_passed: 4
+checks_failed: 0
+checks_unavailable: 0
+source-policy-tests.status: pass
+source-policy-tests.exit_code: 0
+source-policy-tests.command: "make test-source-policy"
+tested_commit_oid: d736939adb8b21617d6695ea414e782ab0e3a76e
+tested_tree_oid:   cd5b6136c79cbd9dfc1acdaf025223f50836cfbf
+```
+
+`make dev-gate-linux` exits 0; `gate-summary verify` reports PASS
+with the same tree OID across runs.
+
+### Patch hygiene
+
+`git diff --check` on the committed range returns zero warnings.
+`git status --short` is clean.  All commits are forward-only.
+
+### Next item
+
+Fresh-checkout proof — requires a fresh `git clone` and rerun of
+the documented verification commands; the close report documents
+the exact commands and acceptance criteria for the next consumer.
