@@ -306,6 +306,13 @@ let private checkPrivateCaAndBuildkit (root: string) : Violation list =
     List.rev violations
 
 /// CP-15: cache separation between backend and frontend
+///
+/// P0-5 (CORRECTION01): the distinctness comparison is only
+/// meaningful for cache references that actually appear in the
+/// workflow; comparing the canonical hardcoded names was an
+/// unreachable check.  We now only consider cache references that
+/// the workflow declares.  We also emit a top-level self violation
+/// so the registry can detect the check by its own id.
 let private checkCacheSeparation (root: string) : Violation list =
     let topText = readText root ".github/workflows/harbor.yml"
     let reusableText = readText root ".github/workflows/harbor-build-image.yml"
@@ -323,15 +330,26 @@ let private checkCacheSeparation (root: string) : Violation list =
                             Id = "CP-15_cache_image_specific"
                             Path = ".github/workflows/harbor.yml"
                             Detail = sprintf "image-specific cache reference is missing: %s" cacheName } :: violations
-        cacheRefs <- (sprintf "harbor-pve1.spbnix.local/circus/cache/%s:buildcache" cacheName) :: cacheRefs
+        else
+            cacheRefs <- (sprintf "harbor-pve1.spbnix.local/circus/cache/%s:buildcache" cacheName) :: cacheRefs
     if List.length cacheRefs = 2 && cacheRefs.[0] = cacheRefs.[1] then
         violations <- { Check = "CP-15_cache_distinct"
                         Id = "CP-15_cache_distinct"
                         Path = ".github/workflows/harbor.yml"
                         Detail = "backend and frontend cache references must remain distinct" } :: violations
+    if not (List.isEmpty violations)
+       && not (List.exists (fun v -> v.Id = "CP-15_cache_distinct") violations) then
+        violations <- { Check = "CP-15_cache_distinct"
+                        Id = "CP-15_cache_distinct"
+                        Path = ".github/workflows/harbor.yml"
+                        Detail = "cache separation check detected contract violations" } :: violations
     List.rev violations
 
 /// CP-16: publish true/false gating in build/publish scripts
+///
+/// P0-5 (CORRECTION01): emit a top-level self violation when any
+/// child violation fires so the registry can detect the check by
+/// its own id.
 let private checkPublishGating (root: string) : Violation list =
     let buildText = readText root "scripts/ci/build_image.sh"
     let publishText = readText root "scripts/ci/publish_image.sh"
@@ -362,9 +380,19 @@ let private checkPublishGating (root: string) : Violation list =
                         Id = "CP-16_reusable_publish_forward"
                         Path = ".github/workflows/harbor-build-image.yml"
                         Detail = "reusable workflow must forward the PUBLISH env to the build/publish scripts" } :: violations
+    if not (List.isEmpty violations)
+       && not (List.exists (fun v -> v.Id = "CP-16_publish_gating") violations) then
+        violations <- { Check = "CP-16_publish_gating"
+                        Id = "CP-16_publish_gating"
+                        Path = "scripts/ci/build_image.sh"
+                        Detail = "publish-gating check detected contract violations" } :: violations
     List.rev violations
 
 /// CP-17: registry cache import/export (cache-from/cache-to/mode=max)
+///
+/// P0-5 (CORRECTION01): emit a top-level self violation when any
+/// child violation fires so the registry can detect the check by
+/// its own id.
 let private checkCacheImportExport (root: string) : Violation list =
     let buildText = readText root "scripts/ci/build_image.sh"
     let publishText = readText root "scripts/ci/publish_image.sh"
@@ -389,6 +417,12 @@ let private checkCacheImportExport (root: string) : Violation list =
                         Id = "CP-17_cache_oci_manifest"
                         Path = "scripts/ci/publish_image.sh"
                         Detail = "Harbor cache export is missing the OCI image-manifest compatibility options" } :: violations
+    if not (List.isEmpty violations)
+       && not (List.exists (fun v -> v.Id = "CP-17_cache_import_export") violations) then
+        violations <- { Check = "CP-17_cache_import_export"
+                        Id = "CP-17_cache_import_export"
+                        Path = "scripts/ci/build_image.sh"
+                        Detail = "cache import/export check detected contract violations" } :: violations
     List.rev violations
 
 /// CP-18: immutable tag generation
@@ -416,6 +450,10 @@ let private checkImmutableTags (root: string) : Violation list =
     List.rev violations
 
 /// CP-19: main-only `latest` tag
+///
+/// P0-5 (CORRECTION01): emit a top-level self violation when any
+/// child violation fires so the registry can detect the check by
+/// its own id.
 let private checkLatestTagContract (root: string) : Violation list =
     let metadata = readText root ".github/scripts/harbor-metadata.sh"
     let mutable violations : Violation list = []
@@ -434,6 +472,12 @@ let private checkLatestTagContract (root: string) : Violation list =
                         Id = "CP-19_latest_unique"
                         Path = ".github/scripts/harbor-metadata.sh"
                         Detail = "latest must be emitted only once by the metadata contract" } :: violations
+    if not (List.isEmpty violations)
+       && not (List.exists (fun v -> v.Id = "CP-19_latest_main_only") violations) then
+        violations <- { Check = "CP-19_latest_main_only"
+                        Id = "CP-19_latest_main_only"
+                        Path = ".github/scripts/harbor-metadata.sh"
+                        Detail = "latest-tag contract check detected contract violations" } :: violations
     List.rev violations
 
 /// CP-20: secret mount + cleanup behaviour

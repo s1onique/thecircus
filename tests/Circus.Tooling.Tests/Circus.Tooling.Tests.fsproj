@@ -24,6 +24,8 @@
     <Compile Include="SourcePolicy/GateSummaryTests.fs" />
     <Compile Include="SourcePolicy/GateSummaryVerifyTests.fs" />
     <Compile Include="SourcePolicy/ContainerPolicyTests.fs" />
+    <Compile Include="SourcePolicy/ContainerPolicyMutationRegistry.fs" />
+    <Compile Include="SourcePolicy/ContainerPolicyMutationCases.fs" />
     <Compile Include="SourcePolicy/ContainerPolicyMutationTests.fs" />
     <Compile Include="SourcePolicy/ParityTests.fs" />
     <Compile Include="Program.fs" />
