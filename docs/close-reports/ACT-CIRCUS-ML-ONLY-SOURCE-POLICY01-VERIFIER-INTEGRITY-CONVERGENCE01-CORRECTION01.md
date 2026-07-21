@@ -330,3 +330,255 @@ endpoint: external (path binding, NOT commit ID)
 - **P0-5**: Mutation convergence (blocked until P1-1 fully verified)
 - **Canonical gate**: Pending P1-1 verification
 - **Fresh checkout**: After all verifications pass
+
+## P0-5 — Immutable Mutation Registry Convergence
+
+### Summary
+
+CORRECTION01 P0-5: replaced the global mutable mutation accounting
+(`ResizeArray` + per-case `recordResult`) with one immutable
+mutation registry and one authoritative result map. The aggregate
+verdict is now derived mechanically from the result map and can
+no longer be inflated by hand. All 22 mutation cases pass from
+genuinely compliant pre-mutation baselines; the production checks
+themselves were corrected for unreachable comparisons (CP-15
+`cacheRefs` bug) and missing self-violation emission (CP-16, CP-17,
+CP-19).
+
+### Identity (Subject)
+
+```yaml
+schema_version: circus-close-report/v2
+work_package_id: P0-5
+implementation_status: complete
+focused_verification_status: passed
+closure_status: closed
+
+implementation:
+  subject: P0-5 CORRECTION01: immutable mutation registry convergence
+  type: implementation correction
+  area: Circus.Tooling.Tests.SourcePolicy.ContainerPolicyMutationTests
+  components:
+    - ContainerPolicyMutationRegistry.fs (types, execution, derived views)
+    - ContainerPolicyMutationCases.fs (22-case registry, repaired baselines)
+    - ContainerPolicyMutationTests.fs (single sequenced test, non-vacuity proofs)
+    - ContainerPolicy.fs (CP-15 cacheRefs fix; CP-15/16/17/19 self-violation)
+```
+
+### Implementation Identity
+
+```yaml
+implementation_commit_oid: dcd5ab423fedf6b3d603ca9c2e912c29002d00c0
+implementation_tree_oid: 51eaa21f42478b06a9ce449065c72b53301ef78f
+tested_commit_oid: dcd5ab423fedf6b3d603ca9c2e912c29002d00c0
+tested_tree_oid: 51eaa21f42478b06a9ce449065c72b53301ef78f
+```
+
+### Evidence schema
+
+```yaml
+work_package:
+  id: P0-5
+  implementation_status: complete
+  focused_verification_status: passed
+  closure_status: closed
+
+registry:
+  registered_count: 22
+  duplicate_ids: []
+  expected_inventory_count: 22
+  missing_registry_ids: []
+  unexpected_registry_ids: []
+
+execution:
+  executed_count: 22
+  passed_count: 22
+  failed_count: 0
+  missing_result_ids: []
+  unexpected_result_ids: []
+
+baselines:
+  compliant_before_mutation: 22
+  non_compliant_before_mutation: 0
+
+mutations:
+  non_vacuous: 22
+  vacuous: 0
+  expected_violation_observed: 22
+  expected_violation_missing: 0
+
+focused_tests:
+  total: 1
+  passed: 1
+  failed: 0
+  errored: 0
+  ignored: 0
+
+regressions:
+  parity: 31/31
+  process_runner: stable
+  bash_availability: 2 known non-passing meta-tests preserved (not owned by P0-5)
+
+full_suite:
+  passed: 184
+  failed: 2
+  errored: 0
+  ignored: 0
+
+make_test_source_policy:
+  exit_code: 1
+  note: |
+    Exit 1 is produced by 2 known non-passing Bash meta-tests
+    (Bash availability: failing-body and regression-guard).
+    These were non-passing in the predecessor state and are
+    explicitly excluded from P0-5 ownership per the CORRECTION01
+    regression contract.
+
+identity:
+  implementation_commit_oid: dcd5ab423fedf6b3d603ca9c2e912c29002d00c0
+  implementation_tree_oid: 51eaa21f42478b06a9ce449065c72b53301ef78f
+  tested_commit_oid: dcd5ab423fedf6b3d603ca9c2e912c29002d00c0
+  tested_tree_oid: 51eaa21f42478b06a9ce449065c72b53301ef78f
+
+report:
+  content_base_commit_oid: dcd5ab423fedf6b3d603ca9c2e912c29002d00c0
+  endpoint_binding: external
+```
+
+### Architecture delivered
+
+- `MutationCaseId` is a private, comparable domain type whose
+  string is bound to the exact concrete container-policy check
+  id. Construction is restricted to the registry module via the
+  `private` union case.
+- `MutationReceipt` carries `ChangedPaths`, `BeforeHashes`, and
+  `AfterHashes`. A receipt is non-vacuous iff at least one
+  changed path has differing before/after hashes.
+- `MutationSuccess` and `MutationFailure` are the explicit result
+  types. `MutationFailure` is a DU of
+  `BaselinePreparationFailed | BaselineNotCompliant |
+  MutationApplicationFailed | MutationWasVacuous |
+  ExpectedViolationMissing | UnexpectedViolation |
+  CaseExecutionFailed | CleanupFailed`.
+- `executeMutationRegistry` returns
+  `Map<MutationCaseId, Result<MutationSuccess, MutationFailure>>`.
+  No global mutable accounting. No `finally` increment/decrement.
+- `validateRegistry` rejects duplicate case ids, empty case ids,
+  and unknown `ExpectedCheckId` values before map construction.
+- Pure derived views (`registeredCount`, `executedCount`,
+  `passedCount`, `failedCount`, `missingResultIds`,
+  `unexpectedResultIds`, `duplicateRegisteredIds`) compute every
+  count and verdict from inputs only.
+
+### Per-case mechanical contract
+
+Every case runs through:
+
+- Phase A: isolated workspace + compliant baseline materialisation
+- Phase B: baseline proof (`runCheckById` returns no violation)
+- Phase C: non-vacuous mutation (receipt with at least one
+  differing hash)
+- Phase D: detection proof (expected id present, no unexpected
+  ids outside the allowed set)
+- Phase E: deterministic cleanup with primary/cleanup failure
+  preservation
+
+### Repaired baselines (formerly failing 9 + 1 aggregate)
+
+- **CP-10_trusted_runner** — `compliantReusable` now contains the
+  literal `runner` token in the build step name and the
+  `spbnix-k8s-docker` runner label.
+- **CP-11_harbor_naming** — `compliantReusable` now contains
+  `harbor-pve1.spbnix.local/circus/${{ inputs.image_name }}` as
+  the IMAGE_REPOSITORY env.
+- **CP-14_ca_secret** — `CP-14_reusable_ca` is now an allowed
+  child; the mutation only touches the CA script, so the
+  reusable's SPBNIX_CA_CERT_PEM declaration remains intact and
+  the test no longer expects that violation.
+- **CP-15_cache_distinct** — registry id preserved; the
+  production check's `cacheRefs` builder is now gated on the
+  workflow actually declaring the cache name (so the distinctness
+  comparison is reachable). `CP-15_cache_image_specific` and
+  `CP-15_cache_template` are added to the allowed set.
+- **CP-16_publish_gating** — `compliantBuildScript` and
+  `compliantPublishScript` now use the canonical
+  `== "true"` / `!= "true"` comparison; the production
+  `checkPublishGating` emits a `CP-16_publish_gating` self
+  violation when any child fires.
+- **CP-18_immutable_tag** — `compliantMetadata` now contains
+  `GITHUB_SHA` and `local-${sha}`.
+- **CP-21_elm_marker** — `compliantFrontend` now contains the
+  literal `Elm ${ELM_VERSION}` marker and `0.19.2` version
+  literal so both the marker and version checks pass on the
+  baseline.
+- **CP-25_digest_pull** — `compliantReusable` now contains
+  `linux/amd64`; verify script unchanged.
+- **CP-27_github_output** — `compliantWireScript` and
+  `compliantVerify` now write through `$GITHUB_OUTPUT`;
+  `compliantReusable` references all three required
+  `steps.*.outputs.*` ids.
+- **Aggregate** — replaced by the single sequenced test that
+  derives its verdict from the immutable result map.
+
+### Production defects corrected
+
+- **CP-15_cache_distinct** was unreachable: `cacheRefs` was
+  always built from the canonical hardcoded names
+  ("circus-backend" and "circus-frontend"), so the distinctness
+  comparison never held. The check now only adds to `cacheRefs`
+  when the workflow actually declares the cache name.
+- **CP-15, CP-16, CP-17, CP-19** did not emit a self violation
+  with their own id; the registry could not detect them. They
+  now emit a top-level self violation when any child violation
+  fires, so `violation.Check == case.ExpectedCheckId` is
+  reachable for every case.
+
+### Non-vacuity proofs
+
+`NonVacuityProofs` covers all ten negative proof axes from
+§8: duplicate registry ids, omitted results, unexpected result
+keys, baseline-already-violates-target, mutator-changes-no-bytes,
+unrelated-only violation, no-violation result, executor exception,
+cleanup failure, and a deliberately-broken count claim that
+`passedCount` cannot be inflated.
+
+### Verification commands
+
+```sh
+export PATH="$HOME/.dotnet:$PATH"
+dotnet build tools/Circus.Tooling/Circus.Tooling.fsproj -c Release --no-incremental
+dotnet build tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release --no-incremental
+dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj \
+    -c Release --no-build -- \
+    --filter-test-list "Container policy negative mutations" \
+    --sequenced --no-spinner
+git diff --check 8a5f8f0..HEAD
+git status --short
+```
+
+### Verification outcome
+
+```yaml
+focused_run:
+  command: dotnet run ... --filter-test-list "Container policy negative mutations" --sequenced
+  result: 1 tests run, 1 passed, 0 ignored, 0 failed, 0 errored
+parity_csv: 31/31 valid rows, no defect collection non-empty
+process_runner: stable (no regressions)
+bash_availability: 2 known non-passing meta-tests preserved
+make_test_source_policy_exit_code: 1
+make_test_source_policy_note: |
+  Exit 1 is the expected output of the 2 known non-passing
+  Bash meta-tests.  P0-5 does not own those outcomes.
+patch_hygiene: clean (`git diff --check 8a5f8f0..HEAD` returns zero)
+working_tree: clean
+```
+
+### P0-5 CLOSED
+
+```yaml
+verdict: closed
+implementation_status: complete
+focused_verification_status: passed
+closure_status: closed
+```
+
