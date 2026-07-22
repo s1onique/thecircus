@@ -142,6 +142,8 @@ let private renderLeafBodies
     let sortedFps =
         fingerprints
         |> List.sortBy (fun fp -> fp.Sha256)
+    // A zero-record occurrences stream has an empty logical body.  The
+    // line-oriented writer materialises that body as exactly one LF byte.
     let occLines =
         sortedOccs
         |> List.map renderOccurrence
@@ -170,6 +172,7 @@ let private renderLeafBodies
       { CanonicalFileName = occurrencesFile; Body = occLines }
       { CanonicalFileName = fingerprintsFile; Body = fpLines }
       { CanonicalFileName = duplicatesFile; Body = dupLines }
+      // No migrations means zero records: publish exactly one LF byte.
       { CanonicalFileName = migrationMapFile; Body = "" }
     ]
 
@@ -183,9 +186,6 @@ let private renderLeafBodies
 /// so the caller is responsible for hashing the actual on-disk bytes
 /// AFTER all other files have been written.  Hashing before write
 /// would embed a stale digest in the manifest.
-let private manifestCanonicalPath : string =
-    normalizedSubdir + "/" + artifactsManifestFile
-
 let buildArtifactManifestEntries
     (repoRoot: string)
     (captures: LoadedCapture list)
@@ -195,7 +195,7 @@ let buildArtifactManifestEntries
     let entries =
         digest
         |> Map.toList
-        |> List.filter (fun (rel, _) -> rel <> manifestCanonicalPath)
+        |> List.filter (fun (rel, _) -> rel <> artifactsManifestCanonicalPath)
         |> List.map (fun (rel, (length, hash)) ->
             let cls = classifyCanonicalPath rel
             let auth = authorityFor rel

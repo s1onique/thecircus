@@ -33,41 +33,95 @@ let canonicalise (relativePath: string) : string =
 let isAbsolute (path: string) : bool =
     System.IO.Path.IsPathRooted path
 
-/// Canonical root for the tracked F# diagnostics corpus.
-let CanonicalCorpusRoot = "factory/evidence/fsharp-diagnostics"
+/// Repository-relative root for the tracked F# diagnostics corpus.
+let canonicalRootRelative = "factory/evidence/fsharp-diagnostics"
 
-/// Canonical subdirectory for raw captures.
-let rawSubdir = CanonicalCorpusRoot + "/corpus/raw"
+/// Backwards-compatible name for the repository-relative canonical corpus root.
+let CanonicalCorpusRoot = canonicalRootRelative
 
-/// Canonical subdirectory for normalized outputs.
-let normalizedSubdir = CanonicalCorpusRoot + "/corpus/normalized"
+/// Canonical subdirectory for raw captures, relative to the repository root.
+let rawSubdir = canonicalRootRelative + "/corpus/raw"
 
-/// Canonical subdirectory for manifests.
-let manifestsSubdir = CanonicalCorpusRoot + "/corpus/manifests"
+/// Normalized-output directory relative to the canonical corpus root.
+let normalizedCorpusRelativeSubdir = "corpus/normalized"
 
-/// Canonical subdirectory for schemas.
-let schemasSubdir = CanonicalCorpusRoot + "/schemas"
+/// Canonical subdirectory for normalized outputs, relative to the repository root.
+let normalizedSubdir = canonicalRootRelative + "/" + normalizedCorpusRelativeSubdir
 
-/// Canonical subdirectory for fixtures.
-let fixturesSubdir = CanonicalCorpusRoot + "/fixtures"
+/// Canonical subdirectory for manifests, relative to the repository root.
+let manifestsSubdir = canonicalRootRelative + "/corpus/manifests"
 
-/// Canonical file name for the artifact manifest (jsonl).
+/// Canonical subdirectory for schemas, relative to the repository root.
+let schemasSubdir = canonicalRootRelative + "/schemas"
+
+/// Canonical subdirectory for fixtures, relative to the repository root.
+let fixturesSubdir = canonicalRootRelative + "/fixtures"
+
+/// Leaf filename for the artifact manifest (JSONL).
 let artifactsManifestFile = "artifacts-v1.jsonl"
 
-/// Canonical file name for the migration map (tsv).
+/// Artifact-manifest path relative to the canonical corpus root.
+let artifactsManifestCorpusRelativePath =
+    normalizedCorpusRelativeSubdir + "/" + artifactsManifestFile
+
+/// Artifact-manifest canonical path relative to the repository root.
+let artifactsManifestCanonicalPath =
+    canonicalRootRelative + "/" + artifactsManifestCorpusRelativePath
+
+/// Leaf filename for the migration map (TSV).
 let migrationMapFile = "migration-map-v1.tsv"
 
-/// Canonical file name for occurrences jsonl.
+/// Migration-map path relative to the canonical corpus root.
+let migrationMapCorpusRelativePath =
+    normalizedCorpusRelativeSubdir + "/" + migrationMapFile
+
+/// Migration-map canonical path relative to the repository root.
+let migrationMapCanonicalPath =
+    canonicalRootRelative + "/" + migrationMapCorpusRelativePath
+
+/// Leaf filename for diagnostic occurrences (JSONL).
 let occurrencesFile = "occurrences-v1.jsonl"
 
-/// Canonical file name for fingerprints tsv.
+/// Diagnostic-occurrences path relative to the canonical corpus root.
+let occurrencesCorpusRelativePath =
+    normalizedCorpusRelativeSubdir + "/" + occurrencesFile
+
+/// Diagnostic-occurrences canonical path relative to the repository root.
+let occurrencesCanonicalPath =
+    canonicalRootRelative + "/" + occurrencesCorpusRelativePath
+
+/// Leaf filename for exact fingerprints (TSV).
 let fingerprintsFile = "exact-fingerprints-v1.tsv"
 
-/// Canonical file name for duplicates tsv.
+/// Exact-fingerprints path relative to the canonical corpus root.
+let fingerprintsCorpusRelativePath =
+    normalizedCorpusRelativeSubdir + "/" + fingerprintsFile
+
+/// Exact-fingerprints canonical path relative to the repository root.
+let fingerprintsCanonicalPath =
+    canonicalRootRelative + "/" + fingerprintsCorpusRelativePath
+
+/// Leaf filename for duplicate occurrences (TSV).
 let duplicatesFile = "duplicate-occurrences-v1.tsv"
 
-/// Canonical file name for corpus summary json.
+/// Duplicate-occurrences path relative to the canonical corpus root.
+let duplicatesCorpusRelativePath =
+    normalizedCorpusRelativeSubdir + "/" + duplicatesFile
+
+/// Duplicate-occurrences canonical path relative to the repository root.
+let duplicatesCanonicalPath =
+    canonicalRootRelative + "/" + duplicatesCorpusRelativePath
+
+/// Leaf filename for the corpus summary (JSON).
 let summaryFile = "corpus-summary-v1.json"
+
+/// Corpus-summary path relative to the canonical corpus root.
+let summaryCorpusRelativePath =
+    normalizedCorpusRelativeSubdir + "/" + summaryFile
+
+/// Corpus-summary canonical path relative to the repository root.
+let summaryCanonicalPath =
+    canonicalRootRelative + "/" + summaryCorpusRelativePath
 
 /// Combine repository root with a repository-relative posix path.
 let repoRelative (repoRoot: string) (relativePath: string) : string =
