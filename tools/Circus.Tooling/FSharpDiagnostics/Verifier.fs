@@ -183,6 +183,9 @@ let private renderLeafBodies
 /// so the caller is responsible for hashing the actual on-disk bytes
 /// AFTER all other files have been written.  Hashing before write
 /// would embed a stale digest in the manifest.
+let private manifestCanonicalPath : string =
+    normalizedSubdir + "/" + artifactsManifestFile
+
 let buildArtifactManifestEntries
     (repoRoot: string)
     (captures: LoadedCapture list)
@@ -192,7 +195,7 @@ let buildArtifactManifestEntries
     let entries =
         digest
         |> Map.toList
-        |> List.filter (fun (rel, _) -> rel <> artifactsManifestFile)
+        |> List.filter (fun (rel, _) -> rel <> manifestCanonicalPath)
         |> List.map (fun (rel, (length, hash)) ->
             let cls = classifyCanonicalPath rel
             let auth = authorityFor rel
