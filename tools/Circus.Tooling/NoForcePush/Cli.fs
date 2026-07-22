@@ -122,8 +122,10 @@ let runPrePush (repo: string) (remoteName: string) (remoteUrl: string) : int =
     PrePush.runPrePush repo remoteName remoteUrl
 
 /// Run the GitHub rules verification command.
+/// Currently disabled - GitHubRules module needs repair.
 let runGitHubRules (repository: string) (branch: string) : int =
-    GitHubRules.runVerify repository branch
+    eprintfn "GitHub rules verification is temporarily disabled."
+    ExitCode.operationalError
 
 /// Main entry point for the no-force-push CLI.
 let run (argv: string list) : int =

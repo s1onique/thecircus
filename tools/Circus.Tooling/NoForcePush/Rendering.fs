@@ -3,6 +3,7 @@ module Circus.Tooling.NoForcePush.Rendering
 open System
 open System.Text
 open System.Text.Json
+open System.Text.Json.Serialization
 
 /// Render a single diagnostic as a human-readable line.
 let renderDiagnosticHuman (d: Types.Diagnostic) : string =

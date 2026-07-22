@@ -193,7 +193,7 @@ let verifySurfaceFile
             Error(Types.NFP_012 (sprintf "surface file missing: %s" entry.Path))
         else
             let content = File.ReadAllText(fullPath)
-            let commands = CommandLexer.extractCommandsFromContent entry.ParserKind content
+            let commands = CommandLexer.extractCommandsFromContent entry.ParserKind content entry.Path
             
             let diagnostics = ResizeArray<Types.Diagnostic>()
             
@@ -203,8 +203,8 @@ let verifySurfaceFile
                     diagnostics.Add({
                         Types.Diagnostic.Id = finding
                         Types.Diagnostic.Path = entry.Path
-                        Types.Diagnostic.Line = cmd.SourceLocation.Line
-                        Types.Diagnostic.Column = cmd.SourceLocation.Column
+                        Types.Diagnostic.Line = cmd.Line
+                        Types.Diagnostic.Column = cmd.Column
                         Types.Diagnostic.NormalizedCommand = cmd.RawSource.Trim()
                     })
             
@@ -239,7 +239,7 @@ let verify (root: string) : Types.StaticPolicyResult =
               Types.StaticPolicyResult.OperationalErrors = List.ofSeq errors }
         | Ok entries ->
             // Validate paths with tracked file context
-            match SurfaceInventory.validatePaths(root, entries, tracked) with
+            match SurfaceInventory.validatePaths root entries tracked with
             | Error e ->
                 errors.Add(sprintf "inventory validation failed: %A" e)
             | Ok () ->

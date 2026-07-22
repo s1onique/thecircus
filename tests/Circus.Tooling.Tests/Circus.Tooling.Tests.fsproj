@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
     <OutputType>Exe</OutputType>
     <RootNamespace>Circus.Tooling.Tests</RootNamespace>
     <IsPackable>false</IsPackable>

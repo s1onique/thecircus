@@ -26,11 +26,11 @@ let parseSurfaceKind (s: string) : Types.SurfaceKind option =
 /// Parse a parser kind string to the discriminated union.
 let parseParserKind (s: string) : Types.ParserKind option =
     match s.Trim().ToLowerInvariant() with
-    | "shell" -> Some Types.Shell
-    | "make" -> Some Types.Make
-    | "yaml-run" -> Some Types.YamlRun
-    | "dockerfile" -> Some Types.Dockerfile
-    | "plaintext-command" -> Some Types.PlaintextCommand
+    | "shell" -> Some Types.ParserKind.Shell
+    | "make" -> Some Types.ParserKind.Make
+    | "yaml-run" -> Some Types.ParserKind.YamlRun
+    | "dockerfile" -> Some Types.ParserKind.Dockerfile
+    | "plaintext-command" -> Some Types.ParserKind.PlaintextCommand
     | _ -> None
 
 /// Parse an authority level string.
@@ -56,20 +56,28 @@ let parseRow (rowNumber: int) (fields: string array) : Result<Types.SurfaceEntry
             if String.IsNullOrWhiteSpace path then
                 Error(MalformedCsvRow(rowNumber, "path is empty"))
             else
-                Ok { Types.SurfaceEntry.Path = path
-                     Types.SurfaceEntry.SurfaceKind = sk
-                     Types.SurfaceEntry.ParserKind = pk
-                     Types.SurfaceEntry.Authority = auth
-                     Types.SurfaceEntry.Reason = reason }
+                Ok
+                    { Types.SurfaceEntry.Path = path
+                      Types.SurfaceEntry.SurfaceKind = sk
+                      Types.SurfaceEntry.ParserKind = pk
+                      Types.SurfaceEntry.Authority = auth
+                      Types.SurfaceEntry.Reason = reason }
         | _ ->
-            Error(MalformedCsvRow(rowNumber,
-                sprintf "invalid surface_kind='%s', parser_kind='%s', authority='%s'"
-                    fields.[1] fields.[2] fields.[3]))
+            Error(
+                MalformedCsvRow(
+                    rowNumber,
+                    sprintf
+                        "invalid surface_kind='%s', parser_kind='%s', authority='%s'"
+                        fields.[1]
+                        fields.[2]
+                        fields.[3]
+                )
+            )
 
 /// Parse the CSV content into surface entries.
 let parseCsv (content: string) : Result<Types.SurfaceEntry list, InventoryError> =
     let lines = content.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
-    
+
     if Array.isEmpty lines then
         Ok []
     else
@@ -82,7 +90,7 @@ let parseCsv (content: string) : Result<Types.SurfaceEntry list, InventoryError>
         for i, line in dataLines |> Array.indexed do
             let rowNumber = i + 2 // 1-based, accounting for header
             let fields = line.Split(',')
-            
+
             match parseRow rowNumber fields with
             | Ok entry ->
                 if Set.contains entry.Path seenPaths then
@@ -90,8 +98,7 @@ let parseCsv (content: string) : Result<Types.SurfaceEntry list, InventoryError>
                 else
                     seenPaths <- Set.add entry.Path seenPaths
                     entries <- entry :: entries
-            | Error e ->
-                errors <- e :: errors
+            | Error e -> errors <- e :: errors
 
         match errors with
         | [] -> Ok(List.rev entries)
@@ -110,32 +117,40 @@ let validatePaths
     for entry in entries do
         // 1. Check path exists
         let fullPath = Path.Combine(root, entry.Path)
+
         if not (File.Exists fullPath) && not (Directory.Exists fullPath) then
             errors <- FileMissing entry.Path :: errors
-        
+
         // 2. Check path is tracked
         if not (Set.contains entry.Path trackedFiles) then
             errors <- FileMissing entry.Path :: errors
-        
+
         // 3. Check for symlinks that escape the repository (fail-closed)
         if File.Exists fullPath then
             try
                 let info = FileInfo(fullPath)
+
                 if info.Attributes.HasFlag(FileAttributes.ReparsePoint) then
                     // Symlink found - resolve it safely and check containment
                     let target = info.LinkTarget
+
                     if not (String.IsNullOrEmpty target) then
                         let targetFull =
                             if Path.IsPathRooted target then
                                 Path.GetFullPath(target)
                             else
                                 Path.GetFullPath(Path.Combine(Path.GetDirectoryName(fullPath), target))
-                        
+
                         // Use path-relative containment check
                         let targetUri = Uri(targetFull + Path.DirectorySeparatorChar.ToString())
                         let rootUri = Uri(rootFull + Path.DirectorySeparatorChar.ToString())
-                        
-                        if not (targetUri.IsBaseOf(rootUri) || targetUri.ToString().StartsWith(rootUri.ToString())) then
+
+                        if
+                            not (
+                                targetUri.IsBaseOf(rootUri)
+                                || targetUri.ToString().StartsWith(rootUri.ToString())
+                            )
+                        then
                             errors <- SymlinkEscapes entry.Path :: errors
                     else
                         // Unresolved symlink - fail closed
@@ -147,24 +162,6 @@ let validatePaths
     match errors with
     | [] -> Ok()
     | first :: _ -> Error(first)
-
-/// Read and validate the surface inventory from the factory directory.
-let readInventory (root: string) : Result<Types.SurfaceEntry list, InventoryError> =
-    let inventoryPath = Path.Combine(root, "factory", "no-force-push-surfaces.csv")
-    
-    if not (File.Exists inventoryPath) then
-        Error(MissingInventoryFile inventoryPath)
-    else
-        try
-            let content = File.ReadAllText(inventoryPath, Encoding.UTF8)
-            match parseCsv content with
-            | Ok entries ->
-                match validatePaths(root, entries) with
-                | Ok () -> Ok entries
-                | Error e -> Error e
-            | Error e -> Error e
-        with ex ->
-            Error(MalformedCsvRow(0, sprintf "failed to read inventory: %s" ex.Message))
 
 /// Get tracked files from git ls-files -z, returning a set of paths.
 let getTrackedFiles (root: string) : Result<Set<string>, InventoryError> =
@@ -187,12 +184,37 @@ let getTrackedFiles (root: string) : Result<Set<string>, InventoryError> =
             Error(GitListFilesFailed(sprintf "git ls-files -z failed: %s" error))
         else
             // Parse null-terminated output
+            let nullChar = char 0
+
             let files =
-                output.Split([| '\0' |], StringSplitOptions.RemoveEmptyEntries)
+                output.Split([| nullChar |], StringSplitOptions.RemoveEmptyEntries)
                 |> Set.ofArray
+
             Ok files
     with ex ->
         Error(GitListFilesFailed(sprintf "failed to run git ls-files: %s" ex.Message))
+
+/// Read and validate the surface inventory from the factory directory.
+let readInventory (root: string) : Result<Types.SurfaceEntry list, InventoryError> =
+    let inventoryPath = Path.Combine(root, "factory", "no-force-push-surfaces.csv")
+
+    if not (File.Exists inventoryPath) then
+        Error(MissingInventoryFile inventoryPath)
+    else
+        try
+            let content = File.ReadAllText(inventoryPath, Encoding.UTF8)
+
+            match parseCsv content with
+            | Error e -> Error e
+            | Ok entries ->
+                match getTrackedFiles root with
+                | Error e -> Error e
+                | Ok trackedFiles ->
+                    match validatePaths root entries trackedFiles with
+                    | Error e -> Error e
+                    | Ok() -> Ok entries
+        with ex ->
+            Error(MalformedCsvRow(0, sprintf "failed to read inventory: %s" ex.Message))
 
 /// Find executable files in the tracked set that are not in the inventory.
 let findUnclassifiedExecutables
@@ -201,31 +223,34 @@ let findUnclassifiedExecutables
     (inventory: Types.SurfaceEntry list)
     : string list =
     let inventoryPaths = inventory |> List.map (fun e -> e.Path) |> Set.ofList
-    
+
     trackedFiles
     |> Set.toList
     |> List.filter (fun path ->
         let fullPath = Path.Combine(root, path)
+
         if File.Exists fullPath then
             try
                 let info = FileInfo(fullPath)
                 // Check if executable (Unix-style)
                 let isExecutable =
-                    info.UnixFileMode.HasFlag(UnixFileMode.UserExecute) ||
-                    info.UnixFileMode.HasFlag(UnixFileMode.GroupExecute) ||
-                    info.UnixFileMode.HasFlag(UnixFileMode.OtherExecute)
-                
+                    info.UnixFileMode.HasFlag(UnixFileMode.UserExecute)
+                    || info.UnixFileMode.HasFlag(UnixFileMode.GroupExecute)
+                    || info.UnixFileMode.HasFlag(UnixFileMode.OtherExecute)
+
                 // Check if it's a script with shebang
                 let hasShebang =
                     try
                         use sr = new StreamReader(fullPath)
                         let first = sr.ReadLine()
                         not (isNull first) && first.StartsWith("#!")
-                    with _ -> false
-                
+                    with _ ->
+                        false
+
                 // It's a governed surface if executable or has shebang
                 // and not already in inventory
                 (isExecutable || hasShebang) && not (Set.contains path inventoryPaths)
-            with _ -> false
+            with _ ->
+                false
         else
             false)

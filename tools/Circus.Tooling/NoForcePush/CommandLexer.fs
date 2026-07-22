@@ -10,50 +10,46 @@ open System.Text.RegularExpressions
 // ============================================================================
 
 /// Source location for a parsed token.
-type SourceLocation = {
-    Line: int
-    Column: int
-    AbsoluteOffset: int
-}
+type SourceLocation =
+    { Line: int
+      Column: int
+      AbsoluteOffset: int }
 
 // ============================================================================
 // Parsed argument
 // ============================================================================
 
 /// A parsed argument with its position.
-type ParsedArgument = {
-    Index: int
-    Value: string
-    IsQuoted: bool
-    IsVariable: bool
-}
+type ParsedArgument =
+    { Index: int
+      Value: string
+      IsQuoted: bool
+      IsVariable: bool }
 
 // ============================================================================
 // Parsed command record (P0-3 requirement)
 // ============================================================================
 
 /// A parsed command with full provenance.
-type ParsedCommand = {
-    Path: string
-    Line: int
-    Column: int
-    Executable: string
-    Arguments: ParsedArgument list
-    RawSource: string
-    NormalizedCommand: string
-}
+type ParsedCommand =
+    { Path: string
+      Line: int
+      Column: int
+      Executable: string
+      Arguments: ParsedArgument list
+      RawSource: string
+      NormalizedCommand: string }
 
 // ============================================================================
 // Lexer state
 // ============================================================================
 
 /// State for the command lexer.
-type LexerState = {
-    Source: string
-    Position: int
-    Line: int
-    Column: int
-}
+type LexerState =
+    { Source: string
+      Position: int
+      Line: int
+      Column: int }
 
 // ============================================================================
 // Command parsing
@@ -98,7 +94,7 @@ let rec parseCommandParts (input: string) : string list =
 /// Parse a single command line into a ParsedCommand.
 and parseCommand (source: string) (location: SourceLocation) (filePath: string) : ParsedCommand option =
     let parts = parseCommandParts source
-    
+
     match parts with
     | [] -> None
     | exe :: args ->
@@ -109,21 +105,20 @@ and parseCommand (source: string) (location: SourceLocation) (filePath: string) 
                   Value = arg
                   IsQuoted = arg.StartsWith("\"") || arg.StartsWith("'")
                   IsVariable = Regex.IsMatch(arg, @"^\$[{@*]|\$\{") })
-        
+
         let normalized =
             exe :: args
             |> List.map (fun a -> a.Replace("\"", "").Replace("'", ""))
             |> String.concat " "
-        
-        Some {
-            ParsedCommand.Path = filePath
-            ParsedCommand.Line = location.Line
-            ParsedCommand.Column = location.Column
-            ParsedCommand.Executable = exe
-            ParsedCommand.Arguments = parsedArgs
-            ParsedCommand.RawSource = source
-            ParsedCommand.NormalizedCommand = normalized
-        }
+
+        Some
+            { ParsedCommand.Path = filePath
+              ParsedCommand.Line = location.Line
+              ParsedCommand.Column = location.Column
+              ParsedCommand.Executable = exe
+              ParsedCommand.Arguments = parsedArgs
+              ParsedCommand.RawSource = source
+              ParsedCommand.NormalizedCommand = normalized }
 
 // ============================================================================
 // Content extraction per parser kind
@@ -133,9 +128,10 @@ and parseCommand (source: string) (location: SourceLocation) (filePath: string) 
 let normalizeShellContent (content: string) : string =
     let sb = StringBuilder()
     let lines = content.Split([| '\n'; '\r' |])
-    
+
     for line in lines do
         let trimmed = line.TrimEnd([| ' '; '\t' |])
+
         if trimmed.EndsWith("\\") then
             // Line continuation - remove backslash and trailing space
             let withoutBackslash = trimmed.TrimEnd('\\').TrimEnd([| ' '; '\t' |])
@@ -143,7 +139,7 @@ let normalizeShellContent (content: string) : string =
         else
             sb.Append(line) |> ignore
             sb.Append('\n') |> ignore
-    
+
     sb.ToString()
 
 /// Extract YAML run: block content from a workflow or action file.
@@ -156,7 +152,7 @@ let extractYamlRunBlocks (content: string) : (string * int) list =
 
     for lineIdx in 0 .. lines.Length - 1 do
         let line = lines.[lineIdx]
-        
+
         // Check for run: key (with possible | or > for blocks)
         if Regex.IsMatch(line, @"^\s*run:\s*[|>~]?\s*$") then
             inBlock <- true
@@ -166,6 +162,7 @@ let extractYamlRunBlocks (content: string) : (string * int) list =
             // Check if we've exited the block (non-indented non-empty line)
             if not (String.IsNullOrWhiteSpace line) then
                 let leadingSpaces = line.Length - line.TrimStart().Length
+
                 if leadingSpaces <= 1 && not (Regex.IsMatch(line, @"^\s+")) then
                     // Exited block
                     results.Add((String.concat "\n" blockLines, blockStartLine))
@@ -175,19 +172,24 @@ let extractYamlRunBlocks (content: string) : (string * int) list =
                     blockLines <- line.TrimStart() :: blockLines
             elif not (Regex.IsMatch(line, @"^\s+$")) then
                 blockLines <- line.TrimStart() :: blockLines
-        
+
         // Single-line run: value
         let singleLine = Regex.Match(line, @"^\s*run:\s*(.+)\s*$")
+
         if singleLine.Success then
             let value = singleLine.Groups.[1].Value.Trim()
-            if not (String.IsNullOrEmpty value) && not (value.StartsWith("|") || value.StartsWith(">")) then
+
+            if
+                not (String.IsNullOrEmpty value)
+                && not (value.StartsWith("|") || value.StartsWith(">"))
+            then
                 results.Add((value, lineIdx + 1)) |> ignore
 
     // Don't forget last block
     if inBlock && not (List.isEmpty blockLines) then
         results.Add((String.concat "\n" blockLines, blockStartLine))
 
-    List.ofArray results
+    List.ofArray (results.ToArray())
 
 /// Extract commands from Makefile content.
 let extractMakeCommands (content: string) : (string * int) list =
@@ -199,15 +201,18 @@ let extractMakeCommands (content: string) : (string * int) list =
 
     for lineIdx in 0 .. lines.Length - 1 do
         let line = lines.[lineIdx]
-        
+
         // Tab or space-indented recipe line
         if Regex.IsMatch(line, @"^\t|^\s{8}") then
             inRecipe <- true
+
             if recipeStartLine = 0 then
                 recipeStartLine <- lineIdx + 1 // 1-based
+
             let trimmed = line.TrimStart([| '\t'; ' ' |])
             // Keep variable references but remove comments
             let cleaned = Regex.Replace(trimmed, @"\s*#.*$", "").Trim()
+
             if not (String.IsNullOrEmpty cleaned) then
                 recipeLines <- cleaned :: recipeLines
         elif inRecipe then
@@ -216,6 +221,7 @@ let extractMakeCommands (content: string) : (string * int) list =
                 // Reverse to get correct order, join with semicolons for compound commands
                 let recipe = String.concat "; " (List.rev recipeLines)
                 results.Add((recipe, recipeStartLine)) |> ignore
+
             recipeLines <- []
             inRecipe <- false
             recipeStartLine <- 0
@@ -224,7 +230,7 @@ let extractMakeCommands (content: string) : (string * int) list =
         let recipe = String.concat "; " (List.rev recipeLines)
         results.Add((recipe, recipeStartLine)) |> ignore
 
-    List.ofArray results
+    List.ofArray (results.ToArray())
 
 /// Extract commands from Dockerfile RUN instructions.
 let extractDockerfileCommands (content: string) : (string * int) list =
@@ -236,11 +242,12 @@ let extractDockerfileCommands (content: string) : (string * int) list =
     for lineIdx in 0 .. lines.Length - 1 do
         let line = lines.[lineIdx]
         let trimmed = line.Trim()
-        
+
         // Handle line continuations
         if trimmed.EndsWith("\\") then
             if continuationStartLine = 0 then
                 continuationStartLine <- lineIdx + 1
+
             continuation <- (trimmed.TrimEnd('\\')) :: continuation
         else
             let fullLine =
@@ -248,11 +255,13 @@ let extractDockerfileCommands (content: string) : (string * int) list =
                     String.concat " " (List.rev (trimmed :: continuation))
                 else
                     trimmed
+
             continuation <- []
             continuationStartLine <- 0
-            
+
             // Extract RUN commands
             let runMatch = Regex.Match(fullLine, @"^\s*RUN\s+(.+)\s*$", RegexOptions.IgnoreCase)
+
             if runMatch.Success then
                 results.Add((runMatch.Groups.[1].Value.Trim(), lineIdx + 1)) |> ignore
 
@@ -260,10 +269,11 @@ let extractDockerfileCommands (content: string) : (string * int) list =
     if not (List.isEmpty continuation) then
         let last = String.concat " " (List.rev continuation)
         let runMatch = Regex.Match(last, @"^\s*RUN\s+(.+)\s*$", RegexOptions.IgnoreCase)
+
         if runMatch.Success then
             results.Add((runMatch.Groups.[1].Value.Trim(), continuationStartLine)) |> ignore
 
-    List.ofArray results
+    List.ofArray (results.ToArray())
 
 // ============================================================================
 // Command extraction from content
@@ -275,26 +285,27 @@ let extractCommandsFromContent
     (content: string)
     (filePath: string)
     : ParsedCommand list =
-    
+
     let rawCommands =
         match parserKind with
-        | Types.Shell ->
-            [ normalizeShellContent content ]
-            |> List.mapi (fun i cmd -> (cmd, i + 1))
-        | Types.Make ->
-            extractMakeCommands content
-        | Types.YamlRun ->
-            extractYamlRunBlocks content
-        | Types.Dockerfile ->
-            extractDockerfileCommands content
-        | Types.PlaintextCommand ->
-            [ normalizeShellContent content ]
-            |> List.mapi (fun i cmd -> (cmd, i + 1))
-    
+        | Types.ParserKind.Shell -> [ normalizeShellContent content ] |> List.mapi (fun i cmd -> (cmd, i + 1))
+        | Types.ParserKind.Make -> extractMakeCommands content
+        | Types.ParserKind.YamlRun -> extractYamlRunBlocks content
+        | Types.ParserKind.Dockerfile -> extractDockerfileCommands content
+        | Types.ParserKind.PlaintextCommand ->
+            [ normalizeShellContent content ] |> List.mapi (fun i cmd -> (cmd, i + 1))
+
     rawCommands
     |> List.filter (fun (cmd, _) -> not (String.IsNullOrWhiteSpace cmd))
     |> List.map (fun (rawSource, line) ->
-        match parseCommand rawSource { Line = line; Column = 1; AbsoluteOffset = 0 } filePath with
+        match
+            parseCommand
+                rawSource
+                { Line = line
+                  Column = 1
+                  AbsoluteOffset = 0 }
+                filePath
+        with
         | Some cmd -> cmd
         | None ->
             // Create a minimal command for non-empty content
@@ -313,15 +324,20 @@ let extractCommandsFromContent
 /// Get the effective executable after safe prefixes like 'env' or 'command'.
 let getEffectiveExecutable (cmd: ParsedCommand) : string =
     let args = cmd.Arguments |> List.map (fun a -> a.Value)
-    
+
     match cmd.Executable.ToLowerInvariant() with
     | "env" ->
         // env FOO=bar git push -> git
-        args |> List.tryFind (fun a -> not (a.Contains("="))) |> Option.defaultValue (if args.IsEmpty then "" else args.Head)
+        args
+        |> List.tryFind (fun a -> not (a.Contains("=")))
+        |> Option.defaultValue (if args.IsEmpty then "" else args.Head)
     | "command" ->
         // command git push -> git
         args |> List.tryHead |> Option.defaultValue cmd.Executable
-    | "sh" | "bash" | "dash" | "zsh" ->
+    | "sh"
+    | "bash"
+    | "dash"
+    | "zsh" ->
         // Check if first arg is -c
         match args with
         | "-c" :: rest when not (List.isEmpty rest) ->
@@ -359,8 +375,7 @@ let classifyExecutable (exe: string) : ExecutableKind =
 
 /// Normalize a Git option by removing adjacent quotes.
 /// e.g., "--for" + "ce" -> "--force"
-let denormalizeGitOption (s: string) : string =
-    s.Replace("\"", "").Replace("'", "")
+let denormalizeGitOption (s: string) : string = s.Replace("\"", "").Replace("'", "")
 
 /// Check if a string looks like it contains adjacent quoted fragments.
 let hasAdjacentQuotes (s: string) : bool =
@@ -370,6 +385,7 @@ let hasAdjacentQuotes (s: string) : bool =
 let parseAdjacentQuotes (s: string) : string option =
     if hasAdjacentQuotes s then
         let normalized = denormalizeGitOption s
+
         if normalized.StartsWith("--") || normalized.StartsWith("-") then
             Some normalized
         else

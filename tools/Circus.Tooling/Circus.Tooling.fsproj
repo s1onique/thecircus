@@ -44,6 +44,7 @@
     <Compile Include="NoForcePush\Types.fs" />
     <Compile Include="NoForcePush\SurfaceInventory.fs" />
     <Compile Include="NoForcePush\CommandLexer.fs" />
+    <Compile Include="NoForcePush\BoundedProcess.fs" />
     <Compile Include="NoForcePush\StaticPolicy.fs" />
     <Compile Include="NoForcePush\PrePush.fs" />
     <Compile Include="NoForcePush\GitHubRules.fs" />

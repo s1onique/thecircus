@@ -91,9 +91,9 @@ type Diagnostic = {
     Column: int
     NormalizedCommand: string
 }
-
-    member this.RuleId = this.Id.RuleId
-    member this.Detail = this.Id.Detail
+    with
+        member this.RuleId = this.Id.RuleId
+        member this.Detail = this.Id.Detail
 
 /// Result of static policy verification.
 type StaticPolicyResult = {
