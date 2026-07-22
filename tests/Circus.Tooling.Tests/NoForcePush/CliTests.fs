@@ -20,7 +20,16 @@ let tests =
               | Error e -> failwithf "parse error: %s" e
           }
           test "parses pre-push command" {
-              match parse [ "pre-push"; "--repo"; "/path/to/repo"; "--remote-name"; "origin"; "--remote-url"; "git@github.com:o/r.git" ] with
+              match
+                  parse
+                      [ "pre-push"
+                        "--repo"
+                        "/path/to/repo"
+                        "--remote-name"
+                        "origin"
+                        "--remote-url"
+                        "git@github.com:o/r.git" ]
+              with
               | Ok(PrePushCmd(repo, remote, url)) ->
                   Expect.equal repo "/path/to/repo" "repo"
                   Expect.equal remote "origin" "remote"
@@ -29,7 +38,15 @@ let tests =
               | Ok _ -> failwith "wrong command"
           }
           test "parses github-rules verify command" {
-              match parse [ "github-rules"; "verify"; "--repository"; "s1onique/thecircus"; "--branch"; "main" ] with
+              match
+                  parse
+                      [ "github-rules"
+                        "verify"
+                        "--repository"
+                        "s1onique/thecircus"
+                        "--branch"
+                        "main" ]
+              with
               | Ok(GitHubRulesCmd(repo, branch)) ->
                   Expect.equal repo "s1onique/thecircus" "repo"
                   Expect.equal branch "main" "branch"
@@ -53,12 +70,23 @@ let tests =
               | Error _ -> ()
           }
           test "rejects duplicate pre-push args" {
-              match parse [ "pre-push"; "--repo"; "/path"; "--repo"; "/other"; "--remote-name"; "origin"; "--remote-url"; "url" ] with
+              match
+                  parse
+                      [ "pre-push"
+                        "--repo"
+                        "/path"
+                        "--repo"
+                        "/other"
+                        "--remote-name"
+                        "origin"
+                        "--remote-url"
+                        "url" ]
+              with
               | Ok _ -> failwith "should fail"
               | Error _ -> ()
           }
           test "helpText is non-empty" {
-              let text = helpText()
+              let text = helpText ()
               Expect.isNonEmpty text "help text"
               Expect.stringContains text "no-force-push" "mentions no-force-push"
           } ]
