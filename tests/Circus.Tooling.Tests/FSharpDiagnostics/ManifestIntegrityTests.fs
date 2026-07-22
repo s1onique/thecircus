@@ -30,19 +30,23 @@ let private repoPath (root: string) (repoRelative: string) =
 
 /// Join a corpus-relative path (without the canonical corpus root
 /// prefix) with the test root.  This matches the relative names stored
-/// in the manifest's ``CanonicalPath`` field.
+/// in the manifest's ``CanonicalPath`` field of the test's hard-coded
+/// list.
 let private corpusPath (root: string) (corpusRelative: string) =
     Path.Combine(canonicalCorpus root, corpusRelative)
 
 /// All canonical corpus files expected in a minimal corpus, relative
-/// to the canonical corpus root.
-let private canonicalRelativeNames : string list = [
-    "corpus/normalized/artifacts-v1.jsonl"
-    "corpus/normalized/corpus-summary-v1.json"
-    "corpus/normalized/duplicate-occurrences-v1.tsv"
-    "corpus/normalized/exact-fingerprints-v1.tsv"
-    "corpus/normalized/migration-map-v1.tsv"
-    "corpus/normalized/occurrences-v1.jsonl"
+/// to the canonical corpus root.  The manifest's ``CanonicalPath``
+/// field stores the *full repository-relative* path; we therefore use
+/// the production ``Paths`` constants to derive the canonical name and
+/// verify it.
+let private expectedCanonicalNames : string list = [
+    Circus.Tooling.FSharpDiagnostics.Paths.artifactsManifestFile
+    Circus.Tooling.FSharpDiagnostics.Paths.summaryFile
+    Circus.Tooling.FSharpDiagnostics.Paths.duplicatesFile
+    Circus.Tooling.FSharpDiagnostics.Paths.fingerprintsFile
+    Circus.Tooling.FSharpDiagnostics.Paths.migrationMapFile
+    Circus.Tooling.FSharpDiagnostics.Paths.occurrencesFile
     "schemas/placeholder.schema.json"
 ]
 
@@ -56,14 +60,6 @@ let private writeMinimalCorpus (root: string) =
     Directory.CreateDirectory manifests |> ignore
     File.WriteAllText(Path.Combine(schemas, "placeholder.schema.json"), "{}")
     canonical
-
-let private summarize (root: string) (rel: string) : string =
-    let p = corpusPath root rel
-    let info = FileInfo p
-    sprintf "%s\t%d\t%s"
-        rel
-        info.Length
-        (sha256OfFile p)
 
 [<Tests>]
 let tests =
@@ -79,7 +75,7 @@ let tests =
                   entries
                   |> List.tryFind (fun e ->
                       e.CanonicalPath
-                      = "factory/evidence/fsharp-diagnostics/corpus/normalized/artifacts-v1.jsonl")
+                      = Circus.Tooling.FSharpDiagnostics.Paths.artifactsManifestFile)
               Expect.isNone manifestSelf "manifest must not inventory itself"
           finally
               cleanup root
@@ -140,22 +136,24 @@ let tests =
               let _, outcome, _, _ = runPipeline root (Some normalizedDir)
               Expect.isTrue outcome.Success "publish succeeded"
               let manifestPath = Path.Combine(normalizedDir, artifactsManifestFile)
-              let summaryPath = Path.Combine(normalizedDir, summaryFile)
+              let summaryPath = repoPath root Circus.Tooling.FSharpDiagnostics.Paths.summaryFile
+              if not (File.Exists summaryPath) then
+                  failwithf "summary file missing: %s" summaryPath
               let entries = readArtifactManifestEntries manifestPath
-              // summaryFile is already a full canonical path; no
-              // prefix concatenation needed.
-              let summaryCanonical = summaryFile
               let summaryEntry =
                   entries
-                  |> List.tryFind (fun e -> e.CanonicalPath = summaryCanonical)
+                  |> List.tryFind (fun e ->
+                      e.CanonicalPath = Circus.Tooling.FSharpDiagnostics.Paths.summaryFile)
               match summaryEntry with
               | Some entry ->
-                  if not (File.Exists summaryPath) then
-                      failwithf "summary file missing: %s" summaryPath
                   let expectedHash = sha256OfFile summaryPath
                   Expect.equal expectedHash entry.Sha256 "summary sha256"
               | None ->
-                  failwithf "summary must be in manifest at %s" summaryCanonical
+                  let available = entries |> List.map (fun e -> e.CanonicalPath) |> String.concat "\n"
+                  failwithf
+                      "summary must be in manifest at %s\navailable canonical paths:\n%s"
+                      Circus.Tooling.FSharpDiagnostics.Paths.summaryFile
+                      available
           finally
               cleanup root
       }
@@ -174,18 +172,28 @@ let tests =
               let _, o2, _, _ = runPipeline root2 (Some norm2)
               Expect.isTrue o1.Success "run 1 ok"
               Expect.isTrue o2.Success "run 2 ok"
-              // Compare every expected canonical file in path order.
-              // The set of expected files is the hard-coded list of
-              // canonicalRelativeNames.  Both roots must contain every
-              // file.  We compare the (length, sha256, bytes) tuple in
-              // order.
-              for rel in canonicalRelativeNames do
+              // Enumerate all files under each canonical root, convert
+              // to canonical-corpus-relative paths, sort ordinally.
+              let enumRoot (root: string) : string list =
+                  let canonical = canonicalCorpus root
+                  Directory.GetFiles(canonical, "*", SearchOption.AllDirectories)
+                  |> Array.map (fun p ->
+                      Path.GetRelativePath(canonical, p).Replace('\\', '/'))
+                  |> Array.toList
+                  |> List.sort
+              let files1 = enumRoot root1
+              let files2 = enumRoot root2
+              Expect.equal files1 files2 "canonical file sets match"
+              // Compare every shared file's bytes in canonical-path order.
+              let sharedFiles =
+                  List.zip files1 files2
+                  |> List.filter (fun (a, b) -> a = b)
+              Expect.isGreaterThan (List.length sharedFiles) 0 "should have shared files"
+              for rel in sharedFiles |> List.map fst do
                   let p1 = corpusPath root1 rel
                   let p2 = corpusPath root2 rel
-                  if not (File.Exists p1) then
-                      failwithf "run1 missing: %s" p1
-                  if not (File.Exists p2) then
-                      failwithf "run2 missing: %s" p2
+                  if not (File.Exists p1) || not (File.Exists p2) then
+                      failwithf "expected file missing: %s" p1
                   let b1 = File.ReadAllBytes p1
                   let b2 = File.ReadAllBytes p2
                   Expect.equal
@@ -205,7 +213,7 @@ let tests =
               Expect.isTrue o1.Success "first publish ok"
               // Capture initial bytes for every canonical output.
               let initialFiles =
-                  canonicalRelativeNames
+                  expectedCanonicalNames
                   |> List.map (fun rel ->
                       (rel, File.ReadAllBytes(corpusPath root rel)))
               // Try to publish to a sub-path whose parent cannot be
