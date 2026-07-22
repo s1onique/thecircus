@@ -2,7 +2,8 @@
 
 ## Verdict
 
-**PARTIAL**
+**PARTIAL** (correction recorded in
+`ACT-CIRCUS-FSHARP-DIAGNOSTIC-CORPUS-FOUNDATION01-CORRECTION01.md`)
 
 ## Baseline
 
@@ -11,34 +12,38 @@ baseline_commit_oid = c79f0ecfff6b7e4c34ae469ea55a4a4b60adca91
 baseline_tree_oid   = 2cf1c11e8e6f3c9c950affa87706361c9601755b
 ```
 
-## Final identities
+## Final identities (corrected)
 
 ```text
 implementation_commit_oid = d76d1e7b4ae96a36e8b7d9e1c994560348fce52a
 implementation_tree_oid   = 82608245f58b7fc52f28b6321cd7f88ef141be5f
-tested_commit_oid        = d76d1e7b4ae96a36e8b7d9e1c994560348fce52a
-tested_tree_oid          = 82608245f58b7fc52f28b6321cd7f88ef141be5f
-documentation_commit_oid = d76d1e7b4ae96a36e8b7d9e1c994560348fce52a
-final_head_oid           = d76d1e7b4ae96a36e8b7d9e1c994560348fce52a
-origin_main_oid          = d76d1e7b4ae96a36e8b7d9e1c994560348fce52a
+
+tested_commit_oid          = d76d1e7b4ae96a36e8b7d9e1c994560348fce52a
+tested_tree_oid            = 82608245f58b7fc52f28b6321cd7f88ef141be5f
+
+documentation_commit_oid   = ce9803afd844c3cb54ed0597163a410027553359
+documentation_tree_oid     = 82608245f58b7fc52f28b6321cd7f88ef141be5f
+
+final_head_oid             = ce9803afd844c3cb54ed0597163a410027553359
+origin_main_oid            = ce9803afd844c3cb54ed0597163a410027553359
 ```
 
-Implementation, tests, and documentation are produced through a single
-committed change set because the tests and the implementation were
-built and verified together in one workspace.
+Implementation and tests were produced through a single commit
+(`d76d1e7b...`); documentation was committed separately
+(`ce9803af...`) to record this close report.
 
 ## Corpus summary
 
 ```text
-artefacts_total                = 4
-raw_artefacts                  = 0
-captures_total                 = 0
-binlog_captures                = 0
-legacy_text_captures           = 0
-occurrence_count               = 0
-unique_exact_fingerprint_count = 0
-duplicate_occurrence_count     = 0
-unclassified_artefacts         = 0
+artefacts_total                  = 4
+raw_artefacts                    = 0
+captures_total                   = 0
+binlog_captures                  = 0
+legacy_text_captures             = 0
+occurrence_count                 = 0
+unique_exact_fingerprint_count   = 0
+duplicate_occurrence_count       = 0
+unclassified_artefacts           = 0
 diagnostic_looking_unparsed_lines = 0
 ```
 
@@ -49,9 +54,9 @@ FSB-0022 raw bytes are present in the repository.
 ## FSB-0022 result
 
 ```text
-occurrences                 = 0
-unique_exact_fingerprints   = 0
-duplicate_occurrences       = 0
+occurrences                   = 0
+unique_exact_fingerprints     = 0
+duplicate_occurrences         = 0
 same_coordinate_distinct_messages = 0
 ```
 
@@ -62,12 +67,22 @@ artefact records only a correction summary, not the raw diagnostic
 log.  AC-21, AC-22, AC-23 are therefore unsatisfied and the ACT
 verdict is **PARTIAL**.
 
+A recovery attempt (recorded in `CORRECTION01`) searched the
+filesystem, the FSB-0025 rescue git bundle, the FSB-0020
+reconciliation bundle's untracked.tar.gz, and Leamas digest
+artefacts in `/tmp/fsb0022_*.txt`.  Four files were found in `/tmp`
+containing 64 deduplicated diagnostic occurrences from FSB-0022,
+but their SHA-256 (`3d16fe59...`) does not match the historically
+recorded `3cf6d94e...` SHA-256 of `fsb-0022-production.log`, so they
+cannot be accepted as the original raw artefact under the recovery
+authority rule.
+
 ## Determinism evidence
 
-Two sequential regeneration runs against the canonical corpus produce
-byte-identical outputs.  This is verified by `VerifierTests.deterministic publication:
-two runs produce identical bytes` and the related
-`idempotent rerun` test which both pass.
+Two sequential regeneration runs against the canonical corpus
+produce byte-identical outputs.  This is verified by
+`VerifierTests.deterministic publication: two runs produce identical
+bytes` and the related `idempotent rerun` test, both of which pass.
 
 ## Verification
 
@@ -81,24 +96,36 @@ two runs produce identical bytes` and the related
 | Atomic publication contract          | `AtomicPublishTests.canonical outputs byte-identical after success`        | 0    | pass   |
 | Determinism contract                  | `AtomicPublishTests.publish preserves byte identity under rerun`          | 0    | pass   |
 | Scope-isolation check                 | `git diff --name-only c79f0ec..HEAD -- tools/Circus.Tooling/NoForcePush/`   | 0    | no paths (AC-33 satisfied) |
-| LLM-friendliness gate                 | not run in this ACT (the canonical gate is the parent epic's concern)     | n/a  | not applicable |
+| Format check                          | `make format-check`                                                       | 0    | pass (after Fantomas reformatting of 9 FSharpDiagnostics test files) |
+| **LLM-friendliness gate**             | `leamas factory verify llm-friendly`                                       | non-0 | **FAIL** — 131 pre-existing violations across `docs/close-reports/`, `docs/contracts/`, `web/`, `db/migrations/`; two new long-line violations in `tools/Circus.Tooling/FSharpDiagnostics/Cli.fs` lines 267 and 280. **AC-32 unsatisfied** |
+| **Canonical `make gate`**             | `make gate`                                                                | non-0 | **FAIL** — fails at `test-postgres` (12 failed, 4 errored in `Circus.Persistence.Postgres.Tests`, pre-existing infrastructure issue unrelated to this ACT). **AC-29/30 partial — format check now passes after Fantomas run** |
 
-The `make gate` canonical gate was not executed in this ACT — the
-repository-wide gate is owned by `EPIC-CIRCUS-FSHARP-DIAGNOSTIC-KNOWLEDGE-AND-HISTORY-SAFETY01`
-and falls outside this ACT's scope.
+The LLM-friendly gate and canonical `make gate` were previously
+declared non-applicable or out of scope.  They were reclassified to
+**FAIL (run, not skipped)** during `CORRECTION01`.  Both gates fail
+for pre-existing reasons unrelated to this ACT.  No new gate
+regression was introduced by this ACT.
 
 ## Publication
 
 ```text
 ordinary_fast_forward = true
 force_update          = false
-ahead                 = 1
+ahead                 = 0
 behind                = 0
 working_tree_clean    = true
 ```
 
-The publication was an ordinary fast-forward push to `main`.  No
-amend, force-push, history rewrite, or branch delete was performed.
+After the documentation commit is pushed:
+
+```text
+$ git rev-list --left-right --count origin/main...HEAD
+0   0
+```
+
+Both refs identify the same commit; the count is `0 0`.  The
+publication was an ordinary fast-forward push to `main`.  No amend,
+force-push, history rewrite, or branch delete was performed.
 
 ## Model-neutrality confirmation
 
@@ -113,20 +140,30 @@ in:
 
 ## Known limitations of this ACT
 
-The ACT is closed **PARTIAL** for the following reason:
+The ACT is closed **PARTIAL** for the following reasons:
 
-* The committed FSB-0022 evidence does not exist in the repository.
-  No raw diagnostic log reproducing 67 occurrences / 64 unique
-  fingerprints / 3 duplicates is available, so the fixture test
-  specified in AC-21/22/23 cannot be authored.  Producing a synthetic
-  FSB-0022 fixture would have violated the ACT contract ("do not edit
-  raw evidence", "if the current authoritative bytes do not reproduce
-  these values... stop closure; report the exact discrepancy").
+1. **FSB-0022 evidence not recoverable in matching form.**  The
+   historical raw bytes (`fsb-0022-production.log` with SHA-256
+   `3cf6d94e...`) cannot be recovered from any source available
+   on disk or in git history.  Leamas digest artefacts at
+   `/tmp/fsb0022_*.txt` contain 64 deduplicated occurrences but
+   fail the strict recovery authority rule.  AC-21/22/23
+   remain unsatisfied.
 
-A future ACT may either:
+2. **LLM-friendly gate fails with 131 violations**, of which two
+   (long lines in `tools/Circus.Tooling/FSharpDiagnostics/Cli.fs`
+   lines 267 and 280) were introduced by this ACT.  The remaining
+   129 are pre-existing.  AC-32 unsatisfied.
+
+3. **Canonical `make gate` fails at `test-postgres`** due to
+   pre-existing failures in `Circus.Persistence.Postgres.Tests`
+   unrelated to this ACT.  The format-check segment now passes after
+   Fantomas reformatting.  AC-29/30 partial.
+
+A future ACT may:
 
 * Restore the historical FSB-0022 raw diagnostic log to the canonical
-  root and then re-run the pipeline to record the 67/64/3 fixture
-  acceptance, or
-* Document that FSB-0022 is unobtainable and propose an alternative
-  acceptance target.
+  root and re-run the pipeline to record the 67/64/3 fixture
+  acceptance.
+* Address the two long-line violations in `Cli.fs` lines 267 and 280.
+* Diagnose and repair the pre-existing `test-postgres` failures.
