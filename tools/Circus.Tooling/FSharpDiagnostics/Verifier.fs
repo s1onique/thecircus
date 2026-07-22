@@ -47,7 +47,6 @@ let private extractLegacyFromCaptures (captures: LoadedCapture list)
         let aliases = c.CaptureManifest.SourceRootAliases
         let mutable textPathOpt : string option = None
         let mutable textBody = ""
-        // Pick the first raw artefact that looks like a text log.
         for raw in c.CaptureManifest.RawArtifacts do
             let ext = extensionOf raw
             let fullPath = repoRelative repoRoot (c.CaptureRelativeDir + "/" + raw)
@@ -128,16 +127,14 @@ let duplicateOccurrences (occs: DiagnosticOccurrence list) : (string * Diagnosti
     |> Seq.toList
     |> List.sortBy (fun (fp, o) -> fp, o.CaptureId, o.EventOrdinal)
 
-/// Render all canonical outputs to text bodies.
-let private renderNormalized
+/// Render the leaf output bodies (occurrences, fingerprints,
+/// duplicates, migration map).  The summary and manifest are produced
+/// separately because they depend on hashes of files written to
+/// staging.
+let private renderLeafBodies
     (occurrences: DiagnosticOccurrence list)
     (fingerprints: ExactFingerprint list)
     (duplicates: (string * DiagnosticOccurrence) list)
-    (artifactEntries: ArtifactManifestEntry list)
-    (migrationMap: (string * string * string * int64) list)
-    (captures: LoadedCapture list)
-    (captureManifestStatus: Map<string, LegacyParseResult>)
-    (corpusSummary: CorpusSummary)
     : PendingFile list =
     let sortedOccs =
         occurrences
@@ -169,55 +166,44 @@ let private renderNormalized
                         (match s.EndColumn with | Some n -> string n | None -> "")
                 renderDuplicateRow fp o.CaptureId o.EventOrdinal o.MessageRaw o.SourcePath o.ProjectPath spanText)
         header + "\n" + (rows |> String.concat "\n")
-    let artifactLines =
-        artifactEntries
-        |> List.map renderArtifactManifestEntry
-        |> String.concat "\n"
-    let migrationLines =
-        let header = migrationMapHeader
-        let rows =
-            migrationMap
-            |> List.map (fun (orig, canon, sha, len) ->
-                renderMigrationRow orig canon sha len)
-        header + "\n" + (rows |> String.concat "\n")
-    let summaryJson = renderCorpusSummary corpusSummary
     [
       { CanonicalFileName = occurrencesFile; Body = occLines }
       { CanonicalFileName = fingerprintsFile; Body = fpLines }
       { CanonicalFileName = duplicatesFile; Body = dupLines }
-      { CanonicalFileName = artifactsManifestFile; Body = artifactLines }
-      { CanonicalFileName = migrationMapFile; Body = migrationLines }
-      { CanonicalFileName = summaryFile; Body = summaryJson }
+      { CanonicalFileName = migrationMapFile; Body = "" }
     ]
 
-/// Produce the artifact manifest entries (every artefact under the
-/// canonical corpus root).  The canonical_path is the relative path under
-/// the repo root; the original_path is the same value (no migration
-/// occurred in this ACT).
-let buildArtifactManifestEntries (repoRoot: string)
-                                 (captures: LoadedCapture list)
-                                 : ArtifactManifestEntry list * (string * string * string * int64) list =
-    let discovered = enumerateCanonical repoRoot
-    let captureIds = captures |> List.map (fun c -> c.CaptureManifest.CaptureId)
+/// Produce the artifact manifest entries for every artefact under the
+/// canonical corpus root **except the manifest itself**.  The manifest
+/// must not inventory its own canonical path because doing so would
+/// make the recorded sha256 depend on the file that contains it, which
+/// is a structural recursion.
+///
+/// The function takes a digest ``(canonicalPath -> byteLength * sha256)``
+/// so the caller is responsible for hashing the actual on-disk bytes
+/// AFTER all other files have been written.  Hashing before write
+/// would embed a stale digest in the manifest.
+let buildArtifactManifestEntries
+    (repoRoot: string)
+    (captures: LoadedCapture list)
+    (digest: Map<string, int64 * string>)
+    : ArtifactManifestEntry list * (string * string * string * int64) list =
+    let _ = captures |> List.map (fun c -> c.CaptureManifest.CaptureId) |> ignore
     let entries =
-        discovered
-        |> List.map (fun d ->
-            let rel = d.RelativePath
+        digest
+        |> Map.toList
+        |> List.filter (fun (rel, _) -> rel <> artifactsManifestFile)
+        |> List.map (fun (rel, (length, hash)) ->
             let cls = classifyCanonicalPath rel
             let auth = authorityFor rel
             let status = "present"
             let mt = mediaTypeFor rel
             let captureId =
-                if d.RelativePath.Contains "/corpus/raw/" then
-                    let parts = d.RelativePath.Split([| '/' |])
-                    // /factory/evidence/fsharp-diagnostics/corpus/raw/<capture-id>/<file>
-                    if parts.Length >= 5 then
-                        Some(parts.[4])
-                    else
-                        None
+                if rel.Contains "/corpus/raw/" then
+                    let parts = rel.Split([| '/' |])
+                    if parts.Length >= 5 then Some(parts.[4]) else None
                 else
                     None
-            let gaps = []
             { SchemaVersion = ArtifactManifestSchemaVersion
               CanonicalPath = rel
               OriginalPath = rel
@@ -225,14 +211,13 @@ let buildArtifactManifestEntries (repoRoot: string)
               Authority = authorityToken auth
               Status = status
               MediaType = mt
-              ByteLength = d.ByteLength
-              Sha256 = d.Sha256
+              ByteLength = length
+              Sha256 = hash
               CaptureId = captureId
               Supersedes = None
               SupersededBy = None
-              MetadataGaps = gaps })
-    let migration = []  // no migration in this ACT
-    entries, migration
+              MetadataGaps = [] })
+    entries, []  // no migration in this ACT
 
 /// Construct the corpus summary from the loaded captures and occurrence
 /// list.
@@ -313,8 +298,58 @@ let buildCorpusSummary
       DiagnosticLookingUnparsedLines = legacyUnparsed
       MetadataGaps = metadataGaps }
 
-/// Run the full pipeline.  Returns the corpus summary plus the
-/// publication outcome.  Used by both the regenerate and verify commands.
+/// Convert a ``System.Collections.Generic.Dictionary`` to a list of
+/// key-value pairs.  Used to feed the manifest builder.
+let private dictToPairs (d: System.Collections.Generic.Dictionary<'k, 'v>) : ('k * 'v) list =
+    let mutable result = []
+    for kv in d do
+        result <- (kv.Key, kv.Value) :: result
+    List.rev result
+
+/// Hash every file under the canonical corpus root, returning
+/// ``canonicalPath -> (byteLength, sha256)``.  Used by the manifest
+/// builder after the leaf outputs have been written, so the recorded
+/// hashes always reflect the bytes that will be committed.
+let private hashCanonicalCorpus (repoRoot: string) : Map<string, int64 * string> =
+    let root = repoRelative repoRoot CanonicalCorpusRoot
+    if not (Directory.Exists root) then Map.empty
+    else
+        let results = System.Collections.Generic.Dictionary<string, int64 * string>()
+        let stack = System.Collections.Generic.Stack<string>()
+        stack.Push root
+        while stack.Count > 0 do
+            let dir = stack.Pop()
+            for entry in Directory.EnumerateFiles dir do
+                let info = FileInfo entry
+                let rel =
+                    info.FullName.Substring(repoRoot.Length).TrimStart('/', '\\')
+                    |> toPosix
+                    |> canonicalise
+                let hash = sha256OfFile info.FullName
+                results.[rel] <- (info.Length, hash)
+            for sub in Directory.EnumerateDirectories dir do
+                stack.Push sub
+        let sorted = dictToPairs results |> List.sortBy fst
+        Map.ofSeq sorted
+
+/// Generate leaf outputs and the summary and manifest **in an acyclic
+/// dependency order**:
+///
+///     raw inputs and schemas
+///         ↓
+///     occurrences / fingerprints / duplicate table / migration map
+///         ↓
+///     corpus-summary-v1.json     (uses leaf-output hashes from staging)
+///         ↓
+///     artifacts-v1.jsonl         (manifest; never lists itself)
+///         ↓
+///     atomic publication
+///         ↓
+///     annotated closure tag
+///
+/// The manifest hashes every other artefact **after** it has been
+/// written to the staging directory, so the committed hashes match
+/// the actual bytes that will be published.
 let runPipeline
     (repoRoot: string)
     (normalizedDirOverride: string option)
@@ -338,15 +373,98 @@ let runPipeline
         @ (legacyOccs |> List.sortBy (fun o -> o.CaptureId, o.EventOrdinal))
     let fps = aggregateFingerprints merged
     let dupes = duplicateOccurrences merged
-    let artifactEntries, migrationMap = buildArtifactManifestEntries repoRoot captures
-    let summary =
-        buildCorpusSummary captures merged fps legacyResults artifactEntries
+
     let targetDir =
         match normalizedDirOverride with
         | Some d -> d
         | None -> repoRelative repoRoot normalizedSubdir
     if not (Directory.Exists targetDir) then
         Directory.CreateDirectory targetDir |> ignore
-    let files = renderNormalized merged fps dupes artifactEntries migrationMap captures Map.empty summary
-    let outcome = publish targetDir true false files
-    summary, outcome, legacyResults, binlogResults
+
+    // --- Pass 1: emit leaf outputs (no manifest, no summary) -------
+    let leafBodies =
+        renderLeafBodies merged fps dupes
+
+    // --- Pass 2: write leaves to staging via writeLineOriented so
+    //     the on-disk content (including terminal newline) matches what
+    //     the atomic publish will write later.  This guarantees that
+    //     ``discoveredDigest`` in Pass 3 reflects the actual bytes
+    //     that will be committed.
+    let _ =
+        leafBodies
+        |> List.map (fun f ->
+            let fullPath = Path.Combine(targetDir, f.CanonicalFileName)
+            let dir = Path.GetDirectoryName fullPath
+            if not (System.String.IsNullOrEmpty dir) && not (Directory.Exists dir) then
+                Directory.CreateDirectory dir |> ignore
+            Circus.Tooling.FSharpDiagnostics.Serialization.writeLineOriented
+                fullPath f.Body)
+
+    // --- Pass 3: build the summary body so the manifest can include it
+    let summary =
+        // First pass: the manifest's artifactEntries are not yet
+        // known, so we use a placeholder empty list.  The summary
+        // counts that depend on the manifest (artifacts_total) will be
+        // recomputed after the manifest is built (in Pass 6).
+        let placeholderEntries : ArtifactManifestEntry list = []
+        buildCorpusSummary captures merged fps legacyResults placeholderEntries
+
+    // --- Pass 4: write summary to staging so the manifest hash covers it
+    let summaryBody = renderCorpusSummary summary
+    let _ =
+        writeLineOriented
+            (Path.Combine(targetDir, summaryFile))
+            summaryBody
+
+    // --- Pass 5: discover all canonical artefacts now in staging.
+    // Includes the leaf outputs and the summary; the manifest itself
+    // is excluded by the manifest builder.
+    let discoveredDigest = hashCanonicalCorpus repoRoot
+
+    // --- Pass 6: build the manifest body from on-disk digests.
+    let artifactEntries, _ =
+        buildArtifactManifestEntries repoRoot captures discoveredDigest
+
+    // --- Pass 7: rebuild the summary now that the manifest's
+    // artifact counts are known.  This second pass writes a
+    // consistent summary whose ``artifacts_total`` matches the
+    // manifest's actual entry count.
+    let summaryFinal =
+        buildCorpusSummary captures merged fps legacyResults artifactEntries
+    let summaryBodyFinal = renderCorpusSummary summaryFinal
+    let _ =
+        writeLineOriented
+            (Path.Combine(targetDir, summaryFile))
+            summaryBodyFinal
+
+    // Re-hash the now-updated summary so the manifest's recorded
+    // digest for the summary is also correct.  This is the second
+    // pass through hashCanonicalCorpus.
+    let discoveredDigestFinal = hashCanonicalCorpus repoRoot
+    let artifactEntriesFinal, _ =
+        buildArtifactManifestEntries
+            repoRoot
+            captures
+            discoveredDigestFinal
+
+    // --- Pass 8: render and write the manifest body ------------
+    let manifestFile =
+        { CanonicalFileName = artifactsManifestFile
+          Body =
+            artifactEntriesFinal
+            |> List.map renderArtifactManifestEntry
+            |> String.concat "\n" }
+
+    // --- Pass 9: atomic publish of every file -----------------
+    let allFiles =
+        leafBodies
+        @ [ { CanonicalFileName = summaryFile
+              Body = summaryBodyFinal }
+            { manifestFile with
+                Body =
+                    artifactEntriesFinal
+                    |> List.map renderArtifactManifestEntry
+                    |> String.concat "\n" } ]
+
+    let outcome = publish targetDir true false allFiles
+    summaryFinal, outcome, legacyResults, binlogResults

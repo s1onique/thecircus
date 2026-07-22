@@ -47,6 +47,7 @@
     <Compile Include="FSharpDiagnostics/LegacyTextExtractorTests.fs" />
     <Compile Include="FSharpDiagnostics/AtomicPublishTests.fs" />
     <Compile Include="FSharpDiagnostics/BinlogExtractorTests.fs" />
+    <Compile Include="FSharpDiagnostics/ManifestIntegrityTests.fs" />
 
     <Compile Include="Program.fs" />
   </ItemGroup>
