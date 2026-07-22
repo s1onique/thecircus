@@ -261,11 +261,26 @@ let runVerify (repoRoot: string) (outputJson: bool) : int =
         || not (List.isEmpty undeclared)
         || unparsed > 0
         || summary.UnclassifiedArtifacts > 0
+    let verdictStr = if fail then "FAIL" else "PASS"
+    let verdictJson = if fail then "fail" else "pass"
+    let canonicalStr =
+        if outcome.CanonicalByteIdenticalAfterFailure then "true"
+        else "false"
     let resultText =
         if outputJson then
             sprintf
-                "{\"verdict\":\"%s\",\"occurrence_count\":%d,\"unique_exact_fingerprint_count\":%d,\"duplicate_occurrence_count\":%d,\"captures_total\":%d,\"binlog_failures\":%d,\"undeclared_absolute_paths\":%d,\"diagnostic_looking_unparsed_lines\":%d,\"unclassified_artefacts\":%d,\"canonical_byte_identical\":%s}"
-                (if fail then "fail" else "pass")
+                "{\
+\"verdict\": \"%s\", \
+\"occurrence_count\": %d, \
+\"unique_exact_fingerprint_count\": %d, \
+\"duplicate_occurrence_count\": %d, \
+\"captures_total\": %d, \
+\"binlog_failures\": %d, \
+\"undeclared_absolute_paths\": %d, \
+\"diagnostic_looking_unparsed_lines\": %d, \
+\"unclassified_artefacts\": %d, \
+\"canonical_byte_identical\": %s}"
+                verdictJson
                 summary.OccurrenceCount
                 summary.UniqueExactFingerprintCount
                 summary.DuplicateOccurrenceCount
@@ -274,11 +289,20 @@ let runVerify (repoRoot: string) (outputJson: bool) : int =
                 (List.length undeclared)
                 unparsed
                 summary.UnclassifiedArtifacts
-                (if outcome.CanonicalByteIdenticalAfterFailure then "true" else "false")
+                canonicalStr
         else
             sprintf
-                "verdict: %s\noccurrences: %d\nunique_fingerprints: %d\nduplicates: %d\ncaptures: %d\nbinlog_failures: %d\nundeclared_absolute_paths: %d\ndiagnostic_looking_unparsed_lines: %d\nunclassified_artefacts: %d\ncanonical_byte_identical_after_failure: %s"
-                (if fail then "FAIL" else "PASS")
+                "verdict: %s\n\
+occurrences: %d\n\
+unique_fingerprints: %d\n\
+duplicates: %d\n\
+captures: %d\n\
+binlog_failures: %d\n\
+undeclared_absolute_paths: %d\n\
+diagnostic_looking_unparsed_lines: %d\n\
+unclassified_artefacts: %d\n\
+canonical_byte_identical_after_failure: %s"
+                verdictStr
                 summary.OccurrenceCount
                 summary.UniqueExactFingerprintCount
                 summary.DuplicateOccurrenceCount
