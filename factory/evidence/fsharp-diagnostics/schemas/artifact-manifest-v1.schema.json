@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circus.local/schemas/fsharp-diagnostics/artifact-manifest-v1.schema.json",
+  "title": "F# diagnostics artifact manifest entry (v1)",
+  "description": "One entry in artifacts-v1.jsonl, describing a single artefact under the canonical F# diagnostics corpus root.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "canonical_path",
+    "original_path",
+    "artifact_class",
+    "authority",
+    "status",
+    "media_type",
+    "byte_length",
+    "sha256",
+    "metadata_gaps"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "artifact-manifest-v1"
+    },
+    "canonical_path": {
+      "type": "string",
+      "pattern": "^factory/evidence/fsharp-diagnostics/.*"
+    },
+    "original_path": {
+      "type": "string"
+    },
+    "artifact_class": {
+      "type": "string",
+      "enum": [
+        "raw",
+        "normalized",
+        "derived",
+        "correction",
+        "source_snapshot",
+        "obsolete_retained"
+      ]
+    },
+    "authority": {
+      "type": "string",
+      "enum": [
+        "canonical_corpus",
+        "legacy_authoritative",
+        "non_authoritative_scratch",
+        "unclassified"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["present", "migrated", "obsolete"]
+    },
+    "media_type": {
+      "type": "string"
+    },
+    "byte_length": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "capture_id": {
+      "type": ["string", "null"]
+    },
+    "supersedes": {
+      "type": ["string", "null"]
+    },
+    "superseded_by": {
+      "type": ["string", "null"]
+    },
+    "metadata_gaps": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

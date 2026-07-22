@@ -314,6 +314,20 @@ dev-gate-linux: build-source-policy
 	$(CIRCUS_TOOLING) gate run
 
 # =============================================================================
+# F# diagnostics corpus (ACT-CIRCUS-FSHARP-DIAGNOSTIC-CORPUS-FOUNDATION01)
+# =============================================================================
+
+CIRCUS_FSHARP_DIAGNOSTICS_DLL := tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll
+CIRCUS_FSHARP_DIAGNOSTICS     := $(DOTNET) $(CIRCUS_FSHARP_DIAGNOSTICS_DLL)
+
+.PHONY: gate-fsharp-diagnostics
+gate-fsharp-diagnostics: build-source-policy
+	$(CIRCUS_FSHARP_DIAGNOSTICS) fsharp-diagnostics verify
+
+.PHONY: test-fsharp-diagnostics
+test-fsharp-diagnostics: build-source-policy
+	$(DOTNET) run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release --no-build --no-restore -- --summary --filter-test-list "FSharpDiagnostics"
+
 # No-force-push verification (ACT-CIRCUS-NO-FORCE-PUSH-DOCTRINE-GATE01)
 # =============================================================================
 

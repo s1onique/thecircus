@@ -43,3 +43,5 @@ let main (argv: string[]) : int =
             | Ok repoRoot -> runGate repoRoot
         | NoForcePushCmd subArgs ->
             Circus.Tooling.NoForcePush.Cli.run subArgs
+        | FSharpDiagnosticsCmd subArgs ->
+            Circus.Tooling.FSharpDiagnostics.Cli.run subArgs

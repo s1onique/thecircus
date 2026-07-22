@@ -26,6 +26,7 @@ type Command =
     | GateSummaryVerifyCmd
     | GateRunCmd
     | NoForcePushCmd of subArgs: string list
+    | FSharpDiagnosticsCmd of subArgs: string list
     | HelpCmd
     | VersionCmd
 
@@ -66,7 +67,8 @@ let parseTopLevel (argv: string list) : Result<Command, string> =
     | "gate-summary" :: "verify" :: [] -> Ok GateSummaryVerifyCmd
     | "gate" :: "run" :: [] -> Ok GateRunCmd
     | "no-force-push" :: rest -> Ok(NoForcePushCmd rest)
-    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|no-force-push|help|version}"
+    | "fsharp-diagnostics" :: rest -> Ok(FSharpDiagnosticsCmd rest)
+    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|no-force-push|fsharp-diagnostics|help|version}"
 
 /// Legacy parser for backward compatibility (delegates to top-level).
 let parse (argv: string list) : Result<Command, string> =

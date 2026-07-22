@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circus.local/schemas/fsharp-diagnostics/diagnostic-occurrence-v1.schema.json",
+  "title": "F# diagnostic occurrence (v1)",
+  "description": "One emitted diagnostic occurrence preserved verbatim from the source event.  Occurrences are never deduplicated.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "extractor_version",
+    "capture_id",
+    "source_kind",
+    "event_ordinal",
+    "severity",
+    "message_raw",
+    "message_normalized",
+    "location_kind",
+    "span"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "diagnostic-occurrence-v1" },
+    "extractor_version": { "type": "string" },
+    "capture_id": { "type": "string" },
+    "source_kind": { "type": "string", "enum": ["binlog", "legacy_text"] },
+    "event_ordinal": { "type": "integer", "minimum": 0 },
+    "severity": { "type": "string", "enum": ["warning", "error"] },
+    "subcategory": { "type": ["string", "null"] },
+    "code": { "type": ["string", "null"] },
+    "message_raw": { "type": "string" },
+    "message_normalized": { "type": "string" },
+    "location_kind": {
+      "type": "string",
+      "enum": ["source", "project", "tool"]
+    },
+    "source_path": { "type": ["string", "null"] },
+    "project_path": { "type": ["string", "null"] },
+    "span": {
+      "type": "object",
+      "required": ["start_line", "start_column", "end_line", "end_column"],
+      "additionalProperties": false,
+      "properties": {
+        "start_line": { "type": ["integer", "null"], "minimum": 1 },
+        "start_column": { "type": ["integer", "null"], "minimum": 1 },
+        "end_line": { "type": ["integer", "null"], "minimum": 1 },
+        "end_column": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "sender_name": { "type": ["string", "null"] },
+    "event_timestamp": { "type": ["string", "null"] },
+    "build_context": {
+      "type": ["object", "null"],
+      "properties": {
+        "node_id": { "type": ["integer", "null"] },
+        "project_context_id": { "type": ["integer", "null"] },
+        "target_id": { "type": ["integer", "null"] },
+        "task_id": { "type": ["integer", "null"] },
+        "evaluation_id": { "type": ["integer", "null"] },
+        "submission_id": { "type": ["integer", "null"] }
+      }
+    },
+    "legacy_source_line_start": { "type": ["integer", "null"] },
+    "legacy_source_line_end": { "type": ["integer", "null"] }
+  }
+}

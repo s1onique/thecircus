@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circus.local/schemas/fsharp-diagnostics/capture-manifest-v1.schema.json",
+  "title": "F# diagnostics capture manifest (v1)",
+  "description": "Manifest describing one capture of MSBuild output, written to capture.json inside each raw capture directory.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "capture_id",
+    "capture_kind",
+    "raw_artifacts",
+    "source_root_aliases",
+    "metadata_gaps"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "capture-manifest-v1" },
+    "capture_id": { "type": "string" },
+    "capture_kind": {
+      "type": "string",
+      "enum": ["binlog", "legacy_text", "mixed"]
+    },
+    "raw_artifacts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "command": { "type": ["string", "null"] },
+    "working_directory": { "type": ["string", "null"] },
+    "repository_commit_oid": { "type": ["string", "null"] },
+    "repository_tree_oid": { "type": ["string", "null"] },
+    "working_tree_state": { "type": ["string", "null"] },
+    "source_root_aliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["absolute_root", "canonical_root"],
+        "additionalProperties": false,
+        "properties": {
+          "absolute_root": { "type": "string" },
+          "canonical_root": { "type": "string" }
+        }
+      }
+    },
+    "dotnet_sdk_version": { "type": ["string", "null"] },
+    "msbuild_version": { "type": ["string", "null"] },
+    "fsharp_compiler_version": { "type": ["string", "null"] },
+    "operating_system": { "type": ["string", "null"] },
+    "architecture": { "type": ["string", "null"] },
+    "culture": { "type": ["string", "null"] },
+    "started_at": { "type": ["string", "null"] },
+    "completed_at": { "type": ["string", "null"] },
+    "exit_code": { "type": ["integer", "null"] },
+    "metadata_gaps": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

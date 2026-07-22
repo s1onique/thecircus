@@ -41,6 +41,13 @@
     <Compile Include="NoForcePush/CliTests.fs" />
     <Compile Include="NoForcePush/GateWiringTests.fs" />
 
+    <Compile Include="FSharpDiagnostics/HashingTests.fs" />
+    <Compile Include="FSharpDiagnostics/NormalizationTests.fs" />
+    <Compile Include="FSharpDiagnostics/OccurrenceIdentityTests.fs" />
+    <Compile Include="FSharpDiagnostics/LegacyTextExtractorTests.fs" />
+    <Compile Include="FSharpDiagnostics/AtomicPublishTests.fs" />
+    <Compile Include="FSharpDiagnostics/BinlogExtractorTests.fs" />
+
     <Compile Include="Program.fs" />
   </ItemGroup>
 

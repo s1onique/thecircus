@@ -16,8 +16,8 @@
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <AssemblyInformationalVersion>1.0.0</AssemblyInformationalVersion>
     <Version>1.0.0</Version>
-    <!-- BCL-only: no external runtime packages beyond FSharp.Core. -->
-    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <!-- BCL-only plus Microsoft.Build for binlog replay. -->
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
 
   <ItemGroup>
@@ -50,11 +50,26 @@
     <Compile Include="NoForcePush\GitHubRules.fs" />
     <Compile Include="NoForcePush\Rendering.fs" />
     <Compile Include="NoForcePush\Cli.fs" />
+    <Compile Include="FSharpDiagnostics\Paths.fs" />
+    <Compile Include="FSharpDiagnostics\Hashing.fs" />
+    <Compile Include="FSharpDiagnostics\Domain.fs" />
+    <Compile Include="FSharpDiagnostics\Normalization.fs" />
+    <Compile Include="FSharpDiagnostics\Serialization.fs" />
+    <Compile Include="FSharpDiagnostics\OccurrenceIdentity.fs" />
+    <Compile Include="FSharpDiagnostics\Inventory.fs" />
+    <Compile Include="FSharpDiagnostics\Manifest.fs" />
+    <Compile Include="FSharpDiagnostics\LegacyTextExtractor.fs" />
+    <Compile Include="FSharpDiagnostics\BinlogExtractor.fs" />
+    <Compile Include="FSharpDiagnostics\AtomicPublish.fs" />
+    <Compile Include="FSharpDiagnostics\Verifier.fs" />
+    <Compile Include="FSharpDiagnostics\Cli.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="FSharp.Core" Version="7.0.200" />
+    <PackageReference Include="FSharp.Core" />
+    <PackageReference Include="Microsoft.Build" />
+    <PackageReference Include="Microsoft.Build.Framework" />
   </ItemGroup>
 
   <ItemGroup>
