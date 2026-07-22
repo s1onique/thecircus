@@ -36,6 +36,19 @@ let private writeMinimalCorpus (root: string) =
     File.WriteAllText(Path.Combine(schemas, "placeholder.schema.json"), "{}")
     canonical
 
+let private canonicalCorpus (root: string) =
+    Path.Combine(root, "factory/evidence/fsharp-diagnostics")
+
+let private canonicalRelativeNames : string list = [
+    "corpus/normalized/artifacts-v1.jsonl"
+    "corpus/normalized/corpus-summary-v1.json"
+    "corpus/normalized/duplicate-occurrences-v1.tsv"
+    "corpus/normalized/exact-fingerprints-v1.tsv"
+    "corpus/normalized/migration-map-v1.tsv"
+    "corpus/normalized/occurrences-v1.jsonl"
+    "schemas/placeholder.schema.json"
+]
+
 [<Tests>]
 let tests =
     testList "FSharpDiagnostics.ManifestIntegrity" [
@@ -48,7 +61,7 @@ let tests =
                   buildArtifactManifestEntries root [] empty
               let manifestSelf =
                   entries
-                  |> List.tryFind (fun e -> e.CanonicalPath = artifactsManifestFile)
+                  |> List.tryFind (fun e -> e.CanonicalPath = "factory/evidence/fsharp-diagnostics/corpus/normalized/artifacts-v1.jsonl")
               Expect.isNone manifestSelf "manifest must not inventory itself"
           finally
               cleanup root
@@ -57,7 +70,7 @@ let tests =
           let root = newTempDir()
           try
               let _ = writeMinimalCorpus root
-              let normalizedDir = Path.Combine(root, "factory/evidence/fsharp-diagnostics/corpus/normalized")
+              let normalizedDir = Path.Combine(canonicalCorpus root, "corpus/normalized")
               let _summary, outcome, _, _ = runPipeline root (Some normalizedDir)
               Expect.isTrue outcome.Success "publish succeeded"
               let manifestPath = Path.Combine(normalizedDir, artifactsManifestFile)
@@ -65,7 +78,7 @@ let tests =
               let entries = readArtifactManifestEntries manifestPath
               Expect.isGreaterThan (List.length entries) 0 "manifest non-empty"
               for entry in entries do
-                  let fullPath = Path.Combine(normalizedDir, entry.CanonicalPath)
+                  let fullPath = Path.Combine(canonicalCorpus root, entry.CanonicalPath)
                   if File.Exists fullPath then
                       let actualLen = (FileInfo fullPath).Length
                       Expect.equal
@@ -79,13 +92,13 @@ let tests =
           let root = newTempDir()
           try
               let _ = writeMinimalCorpus root
-              let normalizedDir = Path.Combine(root, "factory/evidence/fsharp-diagnostics/corpus/normalized")
+              let normalizedDir = Path.Combine(canonicalCorpus root, "corpus/normalized")
               let _summary, outcome, _, _ = runPipeline root (Some normalizedDir)
               Expect.isTrue outcome.Success "publish succeeded"
               let manifestPath = Path.Combine(normalizedDir, artifactsManifestFile)
               let entries = readArtifactManifestEntries manifestPath
               for entry in entries do
-                  let fullPath = Path.Combine(normalizedDir, entry.CanonicalPath)
+                  let fullPath = Path.Combine(canonicalCorpus root, entry.CanonicalPath)
                   if File.Exists fullPath then
                       let actualHash = sha256OfFile fullPath
                       Expect.equal
@@ -99,15 +112,19 @@ let tests =
           let root = newTempDir()
           try
               let _ = writeMinimalCorpus root
-              let normalizedDir = Path.Combine(root, "factory/evidence/fsharp-diagnostics/corpus/normalized")
+              let normalizedDir = Path.Combine(canonicalCorpus root, "corpus/normalized")
               let _summary, outcome, _, _ = runPipeline root (Some normalizedDir)
               Expect.isTrue outcome.Success "publish succeeded"
               let manifestPath = Path.Combine(normalizedDir, artifactsManifestFile)
               let summaryPath = Path.Combine(normalizedDir, summaryFile)
               let entries = readArtifactManifestEntries manifestPath
+              // Prepend the canonical corpus root prefix because the
+              // manifest records full repo-relative paths.
+              let summaryCanonical =
+                  "factory/evidence/fsharp-diagnostics/" + canonicalRelativeNames.[1]
               let summaryEntry =
                   entries
-                  |> List.tryFind (fun e -> e.CanonicalPath = summaryFile)
+                  |> List.tryFind (fun e -> e.CanonicalPath = summaryCanonical)
               match summaryEntry with
               | Some entry ->
                   let expectedHash = sha256OfFile summaryPath
@@ -117,32 +134,33 @@ let tests =
           finally
               cleanup root
       }
-      test "two complete regenerations produce byte-identical output" {
+      test "two complete regenerations produce byte-identical output (canonical tuples)" {
+          // Compare the canonical tuple list in path order.  This is
+          // path-order independent of any Map iteration order.
           let root = newTempDir()
           try
               let _ = writeMinimalCorpus root
-              let normalizedDir1 = Path.Combine(root, "factory/evidence/fsharp-diagnostics/corpus/normalized")
-              let normalizedDir2 = Path.Combine(root, "run2/factory/evidence/fsharp-diagnostics/corpus/normalized")
+              let normalizedDir1 = Path.Combine(canonicalCorpus root, "corpus/normalized")
+              let normalizedDir2 = Path.Combine(root, "run2", canonicalRelativeNames.[0] |> String.removeStart "corpus/normalized" |> ignore)
+              // Just use canonicalCorpus for the second run under a different
+              // root prefix.
+              let normalizedDir2' = Path.Combine(root, "run2", "factory/evidence/fsharp-diagnostics/corpus/normalized")
               let _, o1, _, _ = runPipeline root (Some normalizedDir1)
-              let _, o2, _, _ = runPipeline root (Some normalizedDir2)
+              let _, o2, _, _ = runPipeline root (Some normalizedDir2')
               Expect.isTrue o1.Success "run 1 ok"
               Expect.isTrue o2.Success "run 2 ok"
-              let files : string list = [
-                  artifactsManifestFile
-                  summaryFile
-                  occurrencesFile
-                  fingerprintsFile
-                  duplicatesFile
-                  migrationMapFile ]
-              files
-              |> List.iter (fun f ->
-                  let p1 = Path.Combine(normalizedDir1, f)
-                  let p2 = Path.Combine(normalizedDir2, f)
+              // For each canonical corpus file, compare tuple
+              // (byte_length, sha256, bytes) in path order.
+              for rel in canonicalRelativeNames do
+                  let p1 = Path.Combine(root, rel)
+                  let p2 = Path.Combine(root, "run2", rel)
                   if File.Exists p1 && File.Exists p2 then
+                      let b1 = File.ReadAllBytes p1
+                      let b2 = File.ReadAllBytes p2
                       Expect.equal
-                          (sha256OfFile p1)
-                          (sha256OfFile p2)
-                          (sprintf "byte-identical: %s" f))
+                          (System.Convert.ToBase64String b1)
+                          (System.Convert.ToBase64String b2)
+                          (sprintf "byte-identical: %s" rel)
           finally
               cleanup root
       }
@@ -150,17 +168,16 @@ let tests =
           let root = newTempDir()
           try
               let _ = writeMinimalCorpus root
-              let normalizedDir = Path.Combine(root, "factory/evidence/fsharp-diagnostics/corpus/normalized")
+              let normalizedDir = Path.Combine(canonicalCorpus root, "corpus/normalized")
               // First generation: success.
               let _, o1, _, _ = runPipeline root (Some normalizedDir)
               Expect.isTrue o1.Success "first publish ok"
-              let beforeHash = sha256OfFile(Path.Combine(normalizedDir, summaryFile))
+              let beforeHash = sha256OfFile(Path.Combine(canonicalCorpus root, "corpus/normalized/" + summaryFile))
               // Capture initial bytes for every canonical output.
               let initialFiles =
-                  [ artifactsManifestFile; summaryFile; occurrencesFile
-                    fingerprintsFile; duplicatesFile; migrationMapFile ]
-                  |> List.map (fun f ->
-                      (f, File.ReadAllBytes(Path.Combine(normalizedDir, f))))
+                  canonicalRelativeNames
+                  |> List.map (fun rel ->
+                      (rel, File.ReadAllBytes(Path.Combine(canonicalCorpus root, rel))))
               // Try to publish to a sub-path whose parent cannot be
               // created.  We use an explicitly bad target that
               // triggers the exception.
@@ -171,14 +188,14 @@ let tests =
               ]
               Expect.isFalse outcome.Success "second publish must fail"
               // The canonical outputs in normalizedDir remain byte-identical.
-              for f, before in initialFiles do
-                  let path = Path.Combine(normalizedDir, f)
+              for rel, before in initialFiles do
+                  let path = Path.Combine(canonicalCorpus root, rel)
                   if File.Exists path then
                       let after = File.ReadAllBytes path
                       Expect.equal
                           (System.Convert.ToBase64String before)
                           (System.Convert.ToBase64String after)
-                          (sprintf "byte-identical after failure: %s" f)
+                          (sprintf "byte-identical after failure: %s" rel)
               let _ = beforeHash
               ()
           finally
