@@ -21,16 +21,20 @@ implementation_tree_oid   = 82608245f58b7fc52f28b6321cd7f88ef141be5f
 tested_commit_oid          = d76d1e7b4ae96a36e8b7d9e1c994560348fce52a
 tested_tree_oid            = 82608245f58b7fc52f28b6321cd7f88ef141be5f
 
-documentation_commit_oid   = ce9803afd844c3cb54ed0597163a410027553359
+correction_commit_oid      = 646921141a4caecc8d943aaf4ef8c5224dfa94d4
+
+documentation_commit_oid   = 646921141a4caecc8d943aaf4ef8c5224dfa94d4
 documentation_tree_oid     = 82608245f58b7fc52f28b6321cd7f88ef141be5f
 
-final_head_oid             = ce9803afd844c3cb54ed0597163a410027553359
-origin_main_oid            = ce9803afd844c3cb54ed0597163a410027553359
+final_head_oid             = 646921141a4caecc8d943aaf4ef8c5224dfa94d4
+origin_main_oid            = 646921141a4caecc8d943aaf4ef8c5224dfa94d4
 ```
 
 Implementation and tests were produced through a single commit
-(`d76d1e7b...`); documentation was committed separately
-(`ce9803af...`) to record this close report.
+(`d76d1e7b...`); documentation was committed in two steps
+(`ce9803af...` then `6469211...`) — the correction commit re-records
+this close report with corrected identities and a documented
+mandatory-gate failure classification.
 
 ## Corpus summary
 
