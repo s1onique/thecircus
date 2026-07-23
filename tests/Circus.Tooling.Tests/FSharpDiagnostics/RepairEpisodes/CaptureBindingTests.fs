@@ -1467,8 +1467,9 @@ let tests =
                         ExpectedTreeOid = None }
                   let r = bindCapture root request
                   match r with
-                  | Result.Error (ArtifactManifestMissing _) -> ()
-                  | _ -> failwithf "expected ArtifactManifestMissing"
+                  | Result.Error (ArtifactManifestReadFailed (_, _, detail)) ->
+                      Expect.isTrue (detail.Contains "BOM") "BOM detail"
+                  | _ -> failwithf "expected ArtifactManifestReadFailed"
               finally
                   cleanup root
           }
@@ -1747,4 +1748,242 @@ let tests =
                   | _ -> failwithf "expected SchemaVersionMismatch"
               finally
                   cleanup root
-          } ]
+          }
+          // ---- Source-root alias tests ----
+          // These tests prove the strict capture-manifest reader can
+          // parse a non-empty source_root_aliases array, and rejects
+          // malformed alias entries.
+
+          test "source-root alias: one valid alias round-trips exactly" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":\""
+                      + captureId
+                      + "\",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null"
+                      + ",\"source_root_aliases\":[{\"absolute_root\":\"/abs\",\"canonical_root\":\"/can\"}]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Ok manifest ->
+                      Expect.equal (List.length manifest.SourceRootAliases) 1 "one alias"
+                      Expect.equal (List.head manifest.SourceRootAliases).AbsoluteRoot "/abs" "absolute_root"
+                      Expect.equal (List.head manifest.SourceRootAliases).CanonicalRoot "/can" "canonical_root"
+                  | Result.Error f -> failwithf "expected Ok, got %A" f
+              finally
+                  cleanup root
+          }
+
+          test "source-root aliases: multiple aliases preserve order" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":\""
+                      + captureId
+                      + "\",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null"
+                      + ",\"source_root_aliases\":["
+                      + "{\"absolute_root\":\"/abs-1\",\"canonical_root\":\"/can-1\"},"
+                      + "{\"absolute_root\":\"/abs-2\",\"canonical_root\":\"/can-2\"},"
+                      + "{\"absolute_root\":\"/abs-3\",\"canonical_root\":\"/can-3\"}"
+                      + "]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Ok manifest ->
+                      Expect.equal (List.length manifest.SourceRootAliases) 3 "three aliases"
+                      Expect.equal
+                          (List.map (fun a -> a.AbsoluteRoot) manifest.SourceRootAliases)
+                          [ "/abs-1"; "/abs-2"; "/abs-3" ]
+                          "absolute_root order"
+                  | Result.Error f -> failwithf "expected Ok, got %A" f
+              finally
+                  cleanup root
+          }
+
+          test "source-root alias: unknown alias field rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":\""
+                      + captureId
+                      + "\",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null"
+                      + ",\"source_root_aliases\":[{\"absolute_root\":\"/abs\",\"canonical_root\":\"/can\",\"oops\":42}]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.UnknownField (_, _, field)) ->
+                      Expect.equal field "oops" "unknown field"
+                  | _ -> failwithf "expected UnknownField"
+              finally
+                  cleanup root
+          }
+
+          test "source-root alias: duplicate alias field rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":\""
+                      + captureId
+                      + "\",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null"
+                      + ",\"source_root_aliases\":[{\"absolute_root\":\"/abs\",\"canonical_root\":\"/can\",\"absolute_root\":\"/abs2\"}]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.DuplicateField (_, _, field)) ->
+                      Expect.equal field "absolute_root" "duplicate field"
+                  | _ -> failwithf "expected DuplicateField"
+              finally
+                  cleanup root
+          }
+
+          test "source-root alias: escaped-equivalent duplicate alias field rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":\""
+                      + captureId
+                      + "\",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null"
+                      + ",\"source_root_aliases\":[{\"absolute_root\":\"/abs\",\"canonical_root\":\"/can\",\"\\u0061bsolute_root\":\"/abs2\"}]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.DuplicateField _) -> ()
+                  | _ -> failwithf "expected DuplicateField"
+              finally
+                  cleanup root
+          }
+
+          test "source-root alias: missing absolute_root rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":\""
+                      + captureId
+                      + "\",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null"
+                      + ",\"source_root_aliases\":[{\"canonical_root\":\"/can\"}]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.MissingField (_, _, field)) ->
+                      Expect.equal field "absolute_root" "missing field"
+                  | _ -> failwithf "expected MissingField"
+              finally
+                  cleanup root
+          }
+
+          test "source-root alias: missing canonical_root rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":\""
+                      + captureId
+                      + "\",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null"
+                      + ",\"source_root_aliases\":[{\"absolute_root\":\"/abs\"}]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.MissingField (_, _, field)) ->
+                      Expect.equal field "canonical_root" "missing field"
+                  | _ -> failwithf "expected MissingField"
+              finally
+                  cleanup root
+          }
+]

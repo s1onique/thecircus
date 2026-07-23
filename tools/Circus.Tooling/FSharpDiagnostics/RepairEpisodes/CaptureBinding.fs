@@ -150,17 +150,25 @@ let private captureCanonicalDir (captureId: string) : string =
 // from being tricked into reading attacker-controlled content that lives
 // outside the declared capture.
 
+// ``isReparsePoint`` is fail-closed: an inability to inspect the file
+// attributes is propagated as ``PathInspectionFailed`` so the binding
+// refuses to read a file whose reparse-point status is unknown.  Treating
+// inspection failure as "definitely not a reparse point" would let a
+// filesystem-level error silently pass through as a normal file.
+exception private PathInspectionFailed of string
+
 let private isReparsePoint (path: string) : bool =
     try
         let attrs = File.GetAttributes(path)
         (attrs &&& FileAttributes.ReparsePoint) <> FileAttributes.None
     with
-    | :? IOException -> false
-    | :? UnauthorizedAccessException -> false
+    | :? IOException as ex -> raise (PathInspectionFailed ex.Message)
+    | :? UnauthorizedAccessException as ex -> raise (PathInspectionFailed ex.Message)
 
 /// Walk from the file's parent directory up to and including the capture
 /// directory, returning ``Some`` with the first directory that is a
 /// reparse point, or ``None`` if every directory is a normal directory.
+/// Inspection failures bubble up as ``PathInspectionFailed``.
 let private findReparsePointBetween
     (fileParent: string)
     (captureAbsDir: string)
@@ -555,9 +563,6 @@ let private captureManifestStartsWithBom (bytes: byte[]) : bool =
 let private captureManifestContainsNul (bytes: byte[]) : bool =
     Array.exists (fun b -> b = 0uy) bytes
 
-let private captureManifestContainsZwnbsp (bytes: byte[]) : bool =
-    Array.exists (fun b -> b = 0xEFuy && b = 0xBBuy && b = 0xBFuy) bytes
-
 let private checkCaptureManifestDuplicates
     (path: string)
     (lineNumber: int)
@@ -572,7 +577,8 @@ let private checkCaptureManifestDuplicates
     | Some n -> captureManifestFail (DuplicateField (path, lineNumber, n))
     | None -> ()
 
-let private checkCaptureManifestUnknown
+let private checkObjectAgainst
+    (knownFields: Set<string>)
     (path: string)
     (lineNumber: int)
     (root: JsonElement)
@@ -580,11 +586,17 @@ let private checkCaptureManifestUnknown
     let firstUnknown =
         root.EnumerateObject()
         |> Seq.tryPick (fun p ->
-            if Set.contains p.Name captureManifestKnownFields then None
+            if Set.contains p.Name knownFields then None
             else Some p.Name)
     match firstUnknown with
     | Some n -> captureManifestFail (UnknownField (path, lineNumber, n))
     | None -> ()
+
+/// Known field set for a single ``SourceRootAlias`` object.  Distinct
+/// from the top-level capture-manifest field set; an alias must contain
+/// only ``absolute_root`` and ``canonical_root``.
+let private sourceRootAliasKnownFields : Set<string> =
+    set [ "absolute_root"; "canonical_root" ]
 
 let private captureManifestRequiredString
     (path: string)
@@ -708,7 +720,7 @@ let private captureManifestRequiredAliasList
             if item.ValueKind <> JsonValueKind.Object then
                 captureManifestFail (WrongJsonKind (path, lineNumber, field))
             checkCaptureManifestDuplicates path lineNumber item
-            checkCaptureManifestUnknown path lineNumber item
+            checkObjectAgainst sourceRootAliasKnownFields path lineNumber item
             let absoluteRoot =
                 captureManifestRequiredString path lineNumber "absolute_root" item
             let canonicalRoot =
@@ -733,7 +745,7 @@ let private parseCaptureManifest
     if root.ValueKind <> JsonValueKind.Object then
         captureManifestFail (RootNotObject (path, lineNumber))
     checkCaptureManifestDuplicates path lineNumber root
-    checkCaptureManifestUnknown path lineNumber root
+    checkObjectAgainst captureManifestKnownFields path lineNumber root
 
     let schemaVersion = captureManifestRequiredString path lineNumber "schema_version" root
     if schemaVersion <> CaptureManifestSchemaVersion then
@@ -859,63 +871,54 @@ let private bindRawArtifact
             if not (File.Exists fullPath) then
                 Result.Error (RawArtifactMissing canonical)
             else
-                // Reject symbolic links and junctions at the file and at any
-                // intermediate directory between the file and the capture
-                // directory.
-                let captureAbsDir =
-                    Path.GetFullPath(Path.Combine(repoRoot, captureCanonicalDir captureId))
-                let fileParent = Path.GetDirectoryName fullPath
-                let stopAbsDir = captureAbsDir
-                let mutable current = fileParent
-                let mutable reparseFound : string option = None
-                let mutable finished = false
-                while not finished && reparseFound.IsNone do
-                    if isReparsePoint current then
-                        reparseFound <- Some current
-                    else
-                        let normalized = Path.GetFullPath current
-                        if String.Equals(normalized, stopAbsDir, StringComparison.OrdinalIgnoreCase) then
-                            finished <- true
+                try
+                    // Reject symbolic links and junctions at the file and at
+                    // any intermediate directory between the file and the
+                    // capture directory.  An inability to inspect a
+                    // directory's reparse-point status is propagated as
+                    // ``PathInspectionFailed`` and surfaces as
+                    // ``RawArtifactReadFailed`` so the binding cannot be
+                    // silently tricked into reading a redirected file.
+                    let captureAbsDir =
+                        Path.GetFullPath(Path.Combine(repoRoot, captureCanonicalDir captureId))
+                    let fileParent = Path.GetDirectoryName fullPath
+                    match findReparsePointBetween fileParent captureAbsDir with
+                    | Some _ -> Result.Error (RawArtifactPathInvalid canonical)
+                    | None ->
+                        if isReparsePoint fullPath then
+                            Result.Error (RawArtifactPathInvalid canonical)
                         else
-                            let parent = Path.GetDirectoryName current
-                            if parent = current then
-                                finished <- true
-                            else
-                                current <- parent
-                match reparseFound with
-                | Some _ -> Result.Error (RawArtifactPathInvalid canonical)
-                | None ->
-                    if isReparsePoint fullPath then
-                        Result.Error (RawArtifactPathInvalid canonical)
-                    else
-                        match hashAndLength fullPath with
-                        | Result.Error e -> Result.Error e
-                        | Result.Ok (actualLength, actualHash) ->
-                            let matches =
-                                manifest
-                                |> List.filter (fun e -> e.CanonicalPath = canonical)
-                            match matches with
-                            | [] -> Result.Error (ArtifactManifestEntryMissing canonical)
-                            | _ :: _ :: _ ->
-                                Result.Error (ArtifactManifestEntryDuplicate canonical)
-                            | [ entry ] ->
-                                if entry.CaptureId <> Some captureId then
-                                    Result.Error (ArtifactManifestCaptureMismatch canonical)
-                                elif entry.ArtifactClass <> rawArtifactCanonicalClass then
-                                    Result.Error (ArtifactManifestClassMismatch canonical)
-                                elif entry.Status <> presentCanonicalStatus then
-                                    Result.Error (ArtifactManifestStatusMismatch canonical)
-                                elif entry.ByteLength <> actualLength then
-                                    Result.Error
-                                        (RawArtifactLengthMismatch (canonical, entry.ByteLength, actualLength))
-                                elif not (String.Equals(entry.Sha256, actualHash, StringComparison.Ordinal)) then
-                                    Result.Error
-                                        (RawArtifactHashMismatch (canonical, entry.Sha256, actualHash))
-                                else
-                                    Result.Ok
-                                        { CanonicalPath = canonical
-                                          ByteLength = actualLength
-                                          Sha256 = actualHash }
+                            match hashAndLength fullPath with
+                            | Result.Error e -> Result.Error e
+                            | Result.Ok (actualLength, actualHash) ->
+                                let matches =
+                                    manifest
+                                    |> List.filter (fun e -> e.CanonicalPath = canonical)
+                                match matches with
+                                | [] -> Result.Error (ArtifactManifestEntryMissing canonical)
+                                | _ :: _ :: _ ->
+                                    Result.Error (ArtifactManifestEntryDuplicate canonical)
+                                | [ entry ] ->
+                                    if entry.CaptureId <> Some captureId then
+                                        Result.Error (ArtifactManifestCaptureMismatch canonical)
+                                    elif entry.ArtifactClass <> rawArtifactCanonicalClass then
+                                        Result.Error (ArtifactManifestClassMismatch canonical)
+                                    elif entry.Status <> presentCanonicalStatus then
+                                        Result.Error (ArtifactManifestStatusMismatch canonical)
+                                    elif entry.ByteLength <> actualLength then
+                                        Result.Error
+                                            (RawArtifactLengthMismatch (canonical, entry.ByteLength, actualLength))
+                                    elif not (String.Equals(entry.Sha256, actualHash, StringComparison.Ordinal)) then
+                                        Result.Error
+                                            (RawArtifactHashMismatch (canonical, entry.Sha256, actualHash))
+                                    else
+                                        Result.Ok
+                                            { CanonicalPath = canonical
+                                              ByteLength = actualLength
+                                              Sha256 = actualHash }
+                with
+                | PathInspectionFailed msg ->
+                    Result.Error (RawArtifactReadFailed (canonical, "reparse-point inspection failed: " + msg))
 
 // =============================================================================
 // Capture binding entry point
@@ -998,7 +1001,7 @@ let bindCapture
                                 | Result.Error (ArtifactManifestReadFailure.InvalidByteSequence (_, detail)) ->
                                     Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, 0, "invalid UTF-8: " + detail))
                                 | Result.Error (ArtifactManifestReadFailure.BomPresent _) ->
-                                    Result.Error (ArtifactManifestMissing artifactsManifestCanonicalPath)
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, 0, "UTF-8 BOM is not canonical"))
                                 | Result.Error (ArtifactManifestReadFailure.NulBytePresent _) ->
                                     Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, 0, "NUL byte is not canonical"))
                                 | Result.Error (ArtifactManifestReadFailure.InvalidJson (_, line, detail)) ->
