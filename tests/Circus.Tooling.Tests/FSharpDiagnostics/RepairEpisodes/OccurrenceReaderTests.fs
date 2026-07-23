@@ -608,4 +608,229 @@ let tests =
                   | Result.Error f -> failwithf "expected Ok, got %A" f
               finally
                   cleanup dir
+          }
+
+          test "escaped duplicate top-level field returns DuplicateField" {
+              let dir = newTempDir ()
+              try
+                  // \u0073 is the lower-case letter s; both names decode to
+                  // "schema_version" but the raw spellings differ.
+                  let line =
+                      "{\"schema_version\":\"diagnostic-occurrence-v1\""
+                      + ",\"\\u0073chema_version\":\"diagnostic-occurrence-v1\""
+                      + ",\"extractor_version\":\"v1\",\"capture_id\":\"cap\""
+                      + ",\"source_kind\":\"binlog\",\"event_ordinal\":1"
+                      + ",\"severity\":\"warning\",\"subcategory\":null,\"code\":null"
+                      + ",\"message_raw\":\"m\",\"message_normalized\":\"m\""
+                      + ",\"location_kind\":\"source\",\"source_path\":null,\"project_path\":null"
+                      + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
+                      + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
+                      + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+                  let path = writeText dir "dup-esc.jsonl" (line + "\n")
+                  let r = readOccurrences path
+                  match r with
+                  | Result.Ok _ -> failwithf "expected Error"
+                  | Result.Error (DuplicateField (_, _, field)) ->
+                      Expect.equal field "schema_version" "schema_version"
+                  | Result.Error f -> failwithf "expected DuplicateField, got %A" f
+              finally
+                  cleanup dir
+          }
+
+          test "escaped duplicate span field returns DuplicateField" {
+              let dir = newTempDir ()
+              try
+                  let line =
+                      "{\"schema_version\":\"diagnostic-occurrence-v1\""
+                      + ",\"extractor_version\":\"v1\",\"capture_id\":\"cap\""
+                      + ",\"source_kind\":\"binlog\",\"event_ordinal\":1"
+                      + ",\"severity\":\"warning\",\"subcategory\":null,\"code\":null"
+                      + ",\"message_raw\":\"m\",\"message_normalized\":\"m\""
+                      + ",\"location_kind\":\"source\",\"source_path\":null,\"project_path\":null"
+                      + ",\"span\":{\"start_line\":10,\"\\u0073tart_line\":11,\"start_column\":5,\"end_line\":12,\"end_column\":15}"
+                      + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
+                      + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+                  let path = writeText dir "dup-esc-span.jsonl" (line + "\n")
+                  let r = readOccurrences path
+                  match r with
+                  | Result.Ok _ -> failwithf "expected Error"
+                  | Result.Error (DuplicateField (_, _, field)) ->
+                      Expect.equal field "span.start_line" "span.start_line"
+                  | Result.Error f -> failwithf "expected DuplicateField, got %A" f
+              finally
+                  cleanup dir
+          }
+
+          test "escaped duplicate build_context field returns DuplicateField" {
+              let dir = newTempDir ()
+              try
+                  let line =
+                      "{\"schema_version\":\"diagnostic-occurrence-v1\""
+                      + ",\"extractor_version\":\"v1\",\"capture_id\":\"cap\""
+                      + ",\"source_kind\":\"binlog\",\"event_ordinal\":1"
+                      + ",\"severity\":\"warning\",\"subcategory\":null,\"code\":null"
+                      + ",\"message_raw\":\"m\",\"message_normalized\":\"m\""
+                      + ",\"location_kind\":\"source\",\"source_path\":null,\"project_path\":null"
+                      + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
+                      + ",\"sender_name\":null,\"event_timestamp\":null"
+                      + ",\"build_context\":{\"\\u006eode_id\":1,\"node_id\":2}"
+                      + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+                  let path = writeText dir "dup-esc-bc.jsonl" (line + "\n")
+                  let r = readOccurrences path
+                  match r with
+                  | Result.Ok _ -> failwithf "expected Error"
+                  | Result.Error (DuplicateField (_, _, field)) ->
+                      Expect.equal field "build_context.node_id" "build_context.node_id"
+                  | Result.Error f -> failwithf "expected DuplicateField, got %A" f
+              finally
+                  cleanup dir
+          }
+
+          test "omission of subcategory returns MissingField" {
+              let dir = newTempDir ()
+              try
+                  let line =
+                      "{\"schema_version\":\"diagnostic-occurrence-v1\""
+                      + ",\"extractor_version\":\"v1\",\"capture_id\":\"cap\""
+                      + ",\"source_kind\":\"binlog\",\"event_ordinal\":1"
+                      + ",\"severity\":\"warning\",\"code\":null"
+                      + ",\"message_raw\":\"m\",\"message_normalized\":\"m\""
+                      + ",\"location_kind\":\"source\",\"source_path\":null,\"project_path\":null"
+                      + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
+                      + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
+                      + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+                  let path = writeText dir "miss-subcat.jsonl" (line + "\n")
+                  let r = readOccurrences path
+                  match r with
+                  | Result.Ok _ -> failwithf "expected Error"
+                  | Result.Error (MissingField (_, _, field)) ->
+                      Expect.equal field "subcategory" "subcategory"
+                  | Result.Error f -> failwithf "expected MissingField, got %A" f
+              finally
+                  cleanup dir
+          }
+
+          test "omission of source_path returns MissingField" {
+              let dir = newTempDir ()
+              try
+                  let line =
+                      "{\"schema_version\":\"diagnostic-occurrence-v1\""
+                      + ",\"extractor_version\":\"v1\",\"capture_id\":\"cap\""
+                      + ",\"source_kind\":\"binlog\",\"event_ordinal\":1"
+                      + ",\"severity\":\"warning\",\"subcategory\":null,\"code\":null"
+                      + ",\"message_raw\":\"m\",\"message_normalized\":\"m\""
+                      + ",\"location_kind\":\"source\",\"project_path\":null"
+                      + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
+                      + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
+                      + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+                  let path = writeText dir "miss-srcpath.jsonl" (line + "\n")
+                  let r = readOccurrences path
+                  match r with
+                  | Result.Ok _ -> failwithf "expected Error"
+                  | Result.Error (MissingField (_, _, field)) ->
+                      Expect.equal field "source_path" "source_path"
+                  | Result.Error f -> failwithf "expected MissingField, got %A" f
+              finally
+                  cleanup dir
+          }
+
+          test "omission of span.start_line returns MissingField" {
+              let dir = newTempDir ()
+              try
+                  let line =
+                      "{\"schema_version\":\"diagnostic-occurrence-v1\""
+                      + ",\"extractor_version\":\"v1\",\"capture_id\":\"cap\""
+                      + ",\"source_kind\":\"binlog\",\"event_ordinal\":1"
+                      + ",\"severity\":\"warning\",\"subcategory\":null,\"code\":null"
+                      + ",\"message_raw\":\"m\",\"message_normalized\":\"m\""
+                      + ",\"location_kind\":\"source\",\"source_path\":null,\"project_path\":null"
+                      + ",\"span\":{\"start_column\":null,\"end_line\":null,\"end_column\":null}"
+                      + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
+                      + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+                  let path = writeText dir "miss-span.jsonl" (line + "\n")
+                  let r = readOccurrences path
+                  match r with
+                  | Result.Ok _ -> failwithf "expected Error"
+                  | Result.Error (MissingField (_, _, field)) ->
+                      Expect.equal field "start_line" "start_line"
+                  | Result.Error f -> failwithf "expected MissingField, got %A" f
+              finally
+                  cleanup dir
+          }
+
+          test "omission of build_context.node_id returns MissingField" {
+              let dir = newTempDir ()
+              try
+                  let line =
+                      "{\"schema_version\":\"diagnostic-occurrence-v1\""
+                      + ",\"extractor_version\":\"v1\",\"capture_id\":\"cap\""
+                      + ",\"source_kind\":\"binlog\",\"event_ordinal\":1"
+                      + ",\"severity\":\"warning\",\"subcategory\":null,\"code\":null"
+                      + ",\"message_raw\":\"m\",\"message_normalized\":\"m\""
+                      + ",\"location_kind\":\"source\",\"source_path\":null,\"project_path\":null"
+                      + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
+                      + ",\"sender_name\":null,\"event_timestamp\":null"
+                      + ",\"build_context\":{\"project_context_id\":1}"
+                      + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+                  let path = writeText dir "miss-bcnode.jsonl" (line + "\n")
+                  let r = readOccurrences path
+                  match r with
+                  | Result.Ok _ -> failwithf "expected Error"
+                  | Result.Error (MissingField (_, _, field)) ->
+                      Expect.equal field "node_id" "node_id"
+                  | Result.Error f -> failwithf "expected MissingField, got %A" f
+              finally
+                  cleanup dir
+          }
+
+          test "omission of legacy_source_line_start returns MissingField" {
+              let dir = newTempDir ()
+              try
+                  let line =
+                      "{\"schema_version\":\"diagnostic-occurrence-v1\""
+                      + ",\"extractor_version\":\"v1\",\"capture_id\":\"cap\""
+                      + ",\"source_kind\":\"binlog\",\"event_ordinal\":1"
+                      + ",\"severity\":\"warning\",\"subcategory\":null,\"code\":null"
+                      + ",\"message_raw\":\"m\",\"message_normalized\":\"m\""
+                      + ",\"location_kind\":\"source\",\"source_path\":null,\"project_path\":null"
+                      + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
+                      + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
+                      + ",\"legacy_source_line_end\":null}"
+                  let path = writeText dir "miss-legstart.jsonl" (line + "\n")
+                  let r = readOccurrences path
+                  match r with
+                  | Result.Ok _ -> failwithf "expected Error"
+                  | Result.Error (MissingField (_, _, field)) ->
+                      Expect.equal field "legacy_source_line_start" "legacy_source_line_start"
+                  | Result.Error f -> failwithf "expected MissingField, got %A" f
+              finally
+                  cleanup dir
+          }
+
+          test "UTF-8 BOM returns NonCanonicalEncoding" {
+              let dir = newTempDir ()
+              try
+                  // UTF-8 BOM followed by a valid occurrence line.
+                  let jsonBytes = utf8NoBom.GetBytes (validJsonLine () + "\n")
+                  let bytes = Array.append [| 0xEFuy; 0xBBuy; 0xBFuy |] jsonBytes
+                  let path = writeBytes dir "bom.jsonl" bytes
+                  let r = readOccurrences path
+                  match r with
+                  | Result.Ok _ -> failwithf "expected Error"
+                  | Result.Error (NonCanonicalEncoding _) -> ()
+                  | Result.Error f -> failwithf "expected NonCanonicalEncoding, got %A" f
+              finally
+                  cleanup dir
+          }
+
+          test "directory path returns FileMissing" {
+              let dir = newTempDir ()
+              try
+                  let r = readOccurrences dir
+                  match r with
+                  | Result.Ok _ -> failwithf "expected Error"
+                  | Result.Error (FileMissing _) -> ()
+                  | Result.Error f -> failwithf "expected FileMissing, got %A" f
+              finally
+                  cleanup dir
           } ]

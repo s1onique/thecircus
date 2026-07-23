@@ -7,17 +7,19 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.OccurrenceReader
 // Reads foundation occurrence JSONL streams.  The contract is exact:
 //
 //   * UTF-8, NUL bytes forbidden, decoder throws on invalid bytes.
+//   * UTF-8 BOM is rejected with a dedicated non-canonical-encoding error.
 //   * Line endings normalised to LF (CRLF and lone CR both accepted).
 //   * Each nonblank line is a single JSON object.
-//   * Duplicate property names are rejected (line-level and nested).
+//   * Duplicate property names are detected via the parsed JsonDocument
+//     so escape-sequence equivalents (e.g. ``"\\u0073chema_version"`` and
+//     ``"schema_version"``) are rejected.
 //   * Unknown property names are rejected.
-//   * Required properties must be present and non-null.
+//   * Required non-null properties must be present and non-null.
 //   * Nullable-but-required properties must be present; absent and
 //     explicit ``null`` are distinguished.
 //   * ``event_ordinal`` is parsed as a non-fractional ``int64``.
 //   * ``span`` is a nested object whose coordinates are ``int option``.
 //   * Severity, source kind, and location kind accept only canonical tokens.
-//   * All optional metadata is preserved as ``option`` values.
 //   * A malformed nonblank line aborts the entire file (no partial list).
 //
 // The public boundary is ``Result<list, OccurrenceReadFailure>``.  A single
@@ -32,6 +34,8 @@ open Circus.Tooling.FSharpDiagnostics.Domain
 
 type OccurrenceReadFailure =
     | FileMissing of canonicalPath: string
+    | FileReadFailed of canonicalPath: string * detail: string
+    | NonCanonicalEncoding of canonicalPath: string
     | InvalidUtf8 of canonicalPath: string
     | InvalidJson of canonicalPath: string * lineNumber: int * detail: string
     | RootNotObject of canonicalPath: string * lineNumber: int
@@ -44,6 +48,19 @@ type OccurrenceReadFailure =
     | SchemaVersionMismatch of canonicalPath: string * lineNumber: int * actual: string
 
 exception private ParserAbort of OccurrenceReadFailure
+
+// =============================================================================
+// File-level guard bytes
+// =============================================================================
+
+let private startsWithBom (bytes: byte[]) : bool =
+    bytes.Length >= 3
+    && bytes.[0] = 0xEFuy
+    && bytes.[1] = 0xBBuy
+    && bytes.[2] = 0xBFuy
+
+let private containsNul (bytes: byte[]) : bool =
+    Array.exists (fun b -> b = 0uy) bytes
 
 // =============================================================================
 // Strict UTF-8 decoding
@@ -76,62 +93,6 @@ let private normaliseLineEndings (s: string) : string =
             sb.Append c |> ignore
         i <- i + 1
     sb.ToString()
-
-// =============================================================================
-// Property-name collection and duplicate detection (line text scan)
-// =============================================================================
-
-let private collectPropertyNames (line: string) (targetDepth: int) : string list =
-    let names = ResizeArray<string>()
-    let sb = StringBuilder()
-    let mutable i = 0
-    let mutable inString = false
-    let mutable escaped = false
-    let mutable depth = 0
-    while i < line.Length do
-        let c = line.[i]
-        if inString then
-            if escaped then
-                escaped <- false
-                sb.Append c |> ignore
-                if c = 'u' && i + 4 < line.Length then
-                    sb.Append (line.Substring(i + 1, 4)) |> ignore
-                    i <- i + 4
-            elif c = '\\' then
-                escaped <- true
-            elif c = '"' then
-                inString <- false
-                let name = sb.ToString()
-                sb.Clear() |> ignore
-                let mutable j = i + 1
-                while j < line.Length && Char.IsWhiteSpace line.[j] do
-                    j <- j + 1
-                if depth = targetDepth && j < line.Length && line.[j] = ':' then
-                    names.Add name
-            else
-                sb.Append c |> ignore
-        else
-            if c = '"' then
-                inString <- true
-                sb.Clear() |> ignore
-            elif c = '{' || c = '[' then
-                depth <- depth + 1
-            elif c = '}' || c = ']' then
-                depth <- depth - 1
-        i <- i + 1
-    names |> Seq.toList
-
-let private findDuplicatePropertyName (line: string) (targetDepth: int) : string option =
-    let names = collectPropertyNames line targetDepth
-    let seen = System.Collections.Generic.HashSet<string>(StringComparer.Ordinal)
-    let mutable dup : string option = None
-    for n in names do
-        match dup with
-        | Some _ -> ()
-        | None ->
-            if not (seen.Add n) then
-                dup <- Some n
-    dup
 
 // =============================================================================
 // Known field sets (ordinal, case-sensitive)
@@ -185,6 +146,21 @@ let private knownBuildContextNames : Set<string> =
 let private failWith (failure: OccurrenceReadFailure) : 'a =
     raise (ParserAbort failure)
 
+let private checkDuplicates
+    (canonicalPath: string)
+    (lineNumber: int)
+    (fieldPrefix: string)
+    (root: JsonElement)
+    : unit =
+    let seen = System.Collections.Generic.HashSet<string>(StringComparer.Ordinal)
+    let mutable dup : string option = None
+    for prop in root.EnumerateObject() do
+        if dup.IsNone && not (seen.Add prop.Name) then
+            dup <- Some prop.Name
+    match dup with
+    | Some n -> failWith (DuplicateField (canonicalPath, lineNumber, fieldPrefix + n))
+    | None -> ()
+
 let private tryGetProperty (root: JsonElement) (name: string) : JsonElement option =
     let mutable result = Unchecked.defaultof<JsonElement>
     if root.TryGetProperty(name, &result) then
@@ -207,6 +183,7 @@ let private checkUnknownFields
     | Some n -> failWith (UnknownField (canonicalPath, lineNumber, n))
     | None -> ()
 
+/// Required non-null string.  Absent or explicit null raise WrongJsonKind/MissingField.
 let private requiredStringField
     (canonicalPath: string)
     (lineNumber: int)
@@ -224,21 +201,24 @@ let private requiredStringField
     else
         el.GetString()
 
-let private optionalStringField
+/// Nullable-but-required string.  Absent → MissingField, null → None,
+/// wrong kind → WrongJsonKind, string → Some value.
+let private requiredNullableStringField
     (canonicalPath: string)
     (lineNumber: int)
     (field: string)
     (root: JsonElement)
     : string option =
-    match tryGetProperty root field with
-    | None -> None
-    | Some el ->
-        if el.ValueKind = JsonValueKind.Null then
-            None
-        elif el.ValueKind <> JsonValueKind.String then
-            failWith (WrongJsonKind (canonicalPath, lineNumber, field))
-        else
-            Some (el.GetString())
+    let el =
+        match tryGetProperty root field with
+        | Some v -> v
+        | None -> failWith (MissingField (canonicalPath, lineNumber, field))
+    if el.ValueKind = JsonValueKind.Null then
+        None
+    elif el.ValueKind <> JsonValueKind.String then
+        failWith (WrongJsonKind (canonicalPath, lineNumber, field))
+    else
+        Some (el.GetString())
 
 let private requiredInt64Field
     (canonicalPath: string)
@@ -260,27 +240,30 @@ let private requiredInt64Field
     with _ ->
         failWith (IntegerOutOfRange (canonicalPath, lineNumber, field))
 
-let private optionalIntField
+/// Nullable-but-required int.  Absent → MissingField, null → None,
+/// wrong kind → WrongJsonKind, integer → Some value, fractional/out-of-range → IntegerOutOfRange.
+let private requiredNullableIntField
     (canonicalPath: string)
     (lineNumber: int)
     (field: string)
     (root: JsonElement)
     : int option =
-    match tryGetProperty root field with
-    | None -> None
-    | Some el ->
-        if el.ValueKind = JsonValueKind.Null then
-            None
-        elif el.ValueKind <> JsonValueKind.Number then
-            failWith (WrongJsonKind (canonicalPath, lineNumber, field))
-        else
-            let raw = el.GetRawText()
-            if raw.Contains "." || raw.Contains "e" || raw.Contains "E" then
-                failWith (IntegerOutOfRange (canonicalPath, lineNumber, field))
-            try
-                Some (Int32.Parse(raw, Globalization.CultureInfo.InvariantCulture))
-            with _ ->
-                failWith (IntegerOutOfRange (canonicalPath, lineNumber, field))
+    let el =
+        match tryGetProperty root field with
+        | Some v -> v
+        | None -> failWith (MissingField (canonicalPath, lineNumber, field))
+    if el.ValueKind = JsonValueKind.Null then
+        None
+    elif el.ValueKind <> JsonValueKind.Number then
+        failWith (WrongJsonKind (canonicalPath, lineNumber, field))
+    else
+        let raw = el.GetRawText()
+        if raw.Contains "." || raw.Contains "e" || raw.Contains "E" then
+            failWith (IntegerOutOfRange (canonicalPath, lineNumber, field))
+        try
+            Some (Int32.Parse(raw, Globalization.CultureInfo.InvariantCulture))
+        with _ ->
+            failWith (IntegerOutOfRange (canonicalPath, lineNumber, field))
 
 let private requiredEnumField
     (canonicalPath: string)
@@ -321,15 +304,12 @@ let private parseSpan
     elif el.ValueKind <> JsonValueKind.Object then
         failWith (WrongJsonKind (canonicalPath, lineNumber, "span"))
     else
-        let rawText = el.GetRawText()
-        match findDuplicatePropertyName rawText 1 with
-        | Some dup -> failWith (DuplicateField (canonicalPath, lineNumber, "span." + dup))
-        | None -> ()
+        checkDuplicates canonicalPath lineNumber "span." el
         checkUnknownFields canonicalPath lineNumber knownSpanNames el
-        let startLine = optionalIntField canonicalPath lineNumber "start_line" el
-        let startColumn = optionalIntField canonicalPath lineNumber "start_column" el
-        let endLine = optionalIntField canonicalPath lineNumber "end_line" el
-        let endColumn = optionalIntField canonicalPath lineNumber "end_column" el
+        let startLine = requiredNullableIntField canonicalPath lineNumber "start_line" el
+        let startColumn = requiredNullableIntField canonicalPath lineNumber "start_column" el
+        let endLine = requiredNullableIntField canonicalPath lineNumber "end_line" el
+        let endColumn = requiredNullableIntField canonicalPath lineNumber "end_column" el
         { StartLine = startLine
           StartColumn = startColumn
           EndLine = endLine
@@ -349,17 +329,14 @@ let private parseBuildContext
     elif el.ValueKind <> JsonValueKind.Object then
         failWith (WrongJsonKind (canonicalPath, lineNumber, "build_context"))
     else
-        let rawText = el.GetRawText()
-        match findDuplicatePropertyName rawText 1 with
-        | Some dup -> failWith (DuplicateField (canonicalPath, lineNumber, "build_context." + dup))
-        | None -> ()
+        checkDuplicates canonicalPath lineNumber "build_context." el
         checkUnknownFields canonicalPath lineNumber knownBuildContextNames el
-        let nodeId = optionalIntField canonicalPath lineNumber "node_id" el
-        let projectContextId = optionalIntField canonicalPath lineNumber "project_context_id" el
-        let targetId = optionalIntField canonicalPath lineNumber "target_id" el
-        let taskId = optionalIntField canonicalPath lineNumber "task_id" el
-        let evaluationId = optionalIntField canonicalPath lineNumber "evaluation_id" el
-        let submissionId = optionalIntField canonicalPath lineNumber "submission_id" el
+        let nodeId = requiredNullableIntField canonicalPath lineNumber "node_id" el
+        let projectContextId = requiredNullableIntField canonicalPath lineNumber "project_context_id" el
+        let targetId = requiredNullableIntField canonicalPath lineNumber "target_id" el
+        let taskId = requiredNullableIntField canonicalPath lineNumber "task_id" el
+        let evaluationId = requiredNullableIntField canonicalPath lineNumber "evaluation_id" el
+        let submissionId = requiredNullableIntField canonicalPath lineNumber "submission_id" el
         Some
             { NodeId = nodeId
               ProjectContextId = projectContextId
@@ -377,10 +354,6 @@ let private parseLine
     (lineNumber: int)
     (line: string)
     : DiagnosticOccurrence =
-    match findDuplicatePropertyName line 1 with
-    | Some dup -> failWith (DuplicateField (canonicalPath, lineNumber, dup))
-    | None -> ()
-
     let doc =
         try
             JsonDocument.Parse(line)
@@ -392,6 +365,7 @@ let private parseLine
     let root = doc.RootElement
     if root.ValueKind <> JsonValueKind.Object then
         failWith (RootNotObject (canonicalPath, lineNumber))
+    checkDuplicates canonicalPath lineNumber "" root
     checkUnknownFields canonicalPath lineNumber knownTopLevelNames root
 
     let schemaVersion = requiredStringField canonicalPath lineNumber "schema_version" root
@@ -403,19 +377,19 @@ let private parseLine
     let sourceKind = requiredEnumField canonicalPath lineNumber "source_kind" root tryParseSourceKind
     let eventOrdinal = requiredInt64Field canonicalPath lineNumber "event_ordinal" root
     let severity = requiredEnumField canonicalPath lineNumber "severity" root tryParseSeverity
-    let subcategory = optionalStringField canonicalPath lineNumber "subcategory" root
-    let code = optionalStringField canonicalPath lineNumber "code" root
+    let subcategory = requiredNullableStringField canonicalPath lineNumber "subcategory" root
+    let code = requiredNullableStringField canonicalPath lineNumber "code" root
     let messageRaw = requiredStringField canonicalPath lineNumber "message_raw" root
     let messageNormalized = requiredStringField canonicalPath lineNumber "message_normalized" root
     let locationKind = requiredEnumField canonicalPath lineNumber "location_kind" root tryParseLocationKind
-    let sourcePath = optionalStringField canonicalPath lineNumber "source_path" root
-    let projectPath = optionalStringField canonicalPath lineNumber "project_path" root
+    let sourcePath = requiredNullableStringField canonicalPath lineNumber "source_path" root
+    let projectPath = requiredNullableStringField canonicalPath lineNumber "project_path" root
     let span = parseSpan canonicalPath lineNumber root
-    let senderName = optionalStringField canonicalPath lineNumber "sender_name" root
-    let eventTimestamp = optionalStringField canonicalPath lineNumber "event_timestamp" root
+    let senderName = requiredNullableStringField canonicalPath lineNumber "sender_name" root
+    let eventTimestamp = requiredNullableStringField canonicalPath lineNumber "event_timestamp" root
     let buildContext = parseBuildContext canonicalPath lineNumber root
-    let legacyLineStart = optionalIntField canonicalPath lineNumber "legacy_source_line_start" root
-    let legacyLineEnd = optionalIntField canonicalPath lineNumber "legacy_source_line_end" root
+    let legacyLineStart = requiredNullableIntField canonicalPath lineNumber "legacy_source_line_start" root
+    let legacyLineEnd = requiredNullableIntField canonicalPath lineNumber "legacy_source_line_end" root
 
     { SchemaVersion = schemaVersion
       ExtractorVersion = extractorVersion
@@ -441,39 +415,52 @@ let private parseLine
 // File reader (public boundary)
 // =============================================================================
 
+let private readBytes (canonicalPath: string) : Result<byte[], OccurrenceReadFailure> =
+    try
+        Result.Ok (File.ReadAllBytes canonicalPath)
+    with
+    | :? IOException as ex ->
+        Result.Error (FileReadFailed (canonicalPath, ex.Message))
+    | :? UnauthorizedAccessException as ex ->
+        Result.Error (FileReadFailed (canonicalPath, ex.Message))
+
 let readOccurrences (canonicalPath: string) : Result<DiagnosticOccurrence list, OccurrenceReadFailure> =
     if not (File.Exists canonicalPath) then
         Result.Error (FileMissing canonicalPath)
     else
-        try
-            let bytes = File.ReadAllBytes canonicalPath
-            if Array.exists (fun b -> b = 0uy) bytes then
+        match readBytes canonicalPath with
+        | Result.Error e -> Result.Error e
+        | Result.Ok bytes ->
+            if containsNul bytes then
                 Result.Error (InvalidUtf8 canonicalPath)
+            elif startsWithBom bytes then
+                Result.Error (NonCanonicalEncoding canonicalPath)
             else
-                let text = decodeBytes canonicalPath bytes
-                let normalised = normaliseLineEndings text
-                let lines =
-                    normalised.Split([| '\n' |], StringSplitOptions.None)
-                let mutable acc : DiagnosticOccurrence list = []
-                let mutable lineNumber = 0
-                let mutable failure : OccurrenceReadFailure =
-                    FileMissing canonicalPath
-                let mutable aborted = false
-                for line in lines do
-                    lineNumber <- lineNumber + 1
-                    if not aborted then
-                        if not (String.IsNullOrWhiteSpace line) then
-                            try
-                                let occ =
-                                    parseLine canonicalPath lineNumber line
-                                acc <- occ :: acc
-                            with
-                            | ParserAbort f ->
-                                aborted <- true
-                                failure <- f
-                if aborted then
-                    Result.Error failure
-                else
-                    Result.Ok (acc |> List.rev)
-        with
-        | ParserAbort f -> Result.Error f
+                try
+                    let text = decodeBytes canonicalPath bytes
+                    let normalised = normaliseLineEndings text
+                    let lines =
+                        normalised.Split([| '\n' |], StringSplitOptions.None)
+                    let mutable acc : DiagnosticOccurrence list = []
+                    let mutable lineNumber = 0
+                    let mutable failure : OccurrenceReadFailure =
+                        FileMissing canonicalPath
+                    let mutable aborted = false
+                    for line in lines do
+                        lineNumber <- lineNumber + 1
+                        if not aborted then
+                            if not (String.IsNullOrWhiteSpace line) then
+                                try
+                                    let occ =
+                                        parseLine canonicalPath lineNumber line
+                                    acc <- occ :: acc
+                                with
+                                | ParserAbort f ->
+                                    aborted <- true
+                                    failure <- f
+                    if aborted then
+                        Result.Error failure
+                    else
+                        Result.Ok (acc |> List.rev)
+                with
+                | ParserAbort f -> Result.Error f
