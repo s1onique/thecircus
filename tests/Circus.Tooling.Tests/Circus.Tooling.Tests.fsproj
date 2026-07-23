@@ -51,6 +51,7 @@
     <Compile Include="FSharpDiagnostics/RepairEpisodes/GitIdentityTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/TransitionTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/DeclarationTests.fs" />
+    <Compile Include="FSharpDiagnostics/RepairEpisodes/OccurrenceReaderTests.fs" />
 
     <Compile Include="Program.fs" />
   </ItemGroup>

@@ -68,6 +68,7 @@
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Episodes.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Transitions.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Serialization.fs" />
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\OccurrenceReader.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Engine.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Cli.fs" />
     <Compile Include="FSharpDiagnostics\Cli.fs" />
