@@ -8,38 +8,31 @@ open System.Threading.Tasks
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 
 // -----------------------------------------------------------------------------
-// Test fixture helpers
+// Raw-byte test fixtures
 // -----------------------------------------------------------------------------
 
-/// Creates a simple fixture that writes bytes to stdout
-let private createStdoutFixture (bytes: byte array) : string =
-    let path = Path.Combine(Path.GetTempPath(), $"fixture-stdout-{Guid.NewGuid():N}.fsx")
-    let content =
-        sprintf
-            "stdout.Write(System.Text.Encoding.UTF8.GetString([|%s|]))\nstdout.Flush()\n"
-            (String.concat "uy;" (Array.map string bytes) + "uy")
+/// Creates a fixture that writes raw bytes to stdout using binary stream
+let private createRawStdoutFixture (bytes: byte array) : string =
+    let path = Path.Combine(Path.GetTempPath(), $"fixture-raw-stdout-{Guid.NewGuid():N}.fsx")
+    let byteLiterals = String.concat "uy;" (Array.map string bytes)
+    let content = sprintf "let bytes = [|%s|]\nlet stream = Console.OpenStandardOutput()\nstream.Write(bytes, 0, bytes.Length)\nstream.Flush()\n" (byteLiterals + "uy")
     File.WriteAllText(path, content)
     path
 
-/// Creates a simple fixture that writes bytes to stderr
-let private createStderrFixture (bytes: byte array) : string =
-    let path = Path.Combine(Path.GetTempPath(), $"fixture-stderr-{Guid.NewGuid():N}.fsx")
-    let content =
-        sprintf
-            "stderr.Write(System.Text.Encoding.UTF8.GetString([|%s|]))\nstderr.Flush()\n"
-            (String.concat "uy;" (Array.map string bytes) + "uy")
+/// Creates a fixture that writes raw bytes to stderr using binary stream
+let private createRawStderrFixture (bytes: byte array) : string =
+    let path = Path.Combine(Path.GetTempPath(), $"fixture-raw-stderr-{Guid.NewGuid():N}.fsx")
+    let byteLiterals = String.concat "uy;" (Array.map string bytes)
+    let content = sprintf "let bytes = [|%s|]\nlet stream = Console.OpenStandardError()\nstream.Write(bytes, 0, bytes.Length)\nstream.Flush()\n" (byteLiterals + "uy")
     File.WriteAllText(path, content)
     path
 
-/// Creates a fixture that writes bytes to both stdout and stderr
-let private createBothFixture (stdoutBytes: byte array) (stderrBytes: byte array) : string =
-    let path = Path.Combine(Path.GetTempPath(), $"fixture-both-{Guid.NewGuid():N}.fsx")
-    let stdoutStr = String.concat "uy;" (Array.map string stdoutBytes) + "uy"
-    let stderrStr = String.concat "uy;" (Array.map string stderrBytes) + "uy"
-    let content =
-        sprintf
-            "stdout.Write(System.Text.Encoding.UTF8.GetString([|%s|]))\nstdout.Flush()\nstderr.Write(System.Text.Encoding.UTF8.GetString([|%s|]))\nstderr.Flush()\n"
-            stdoutStr stderrStr
+/// Creates a fixture that writes raw bytes to both stdout and stderr
+let private createRawBothFixture (stdoutBytes: byte array) (stderrBytes: byte array) : string =
+    let path = Path.Combine(Path.GetTempPath(), $"fixture-raw-both-{Guid.NewGuid():N}.fsx")
+    let stdoutLiterals = String.concat "uy;" (Array.map string stdoutBytes) + "uy"
+    let stderrLiterals = String.concat "uy;" (Array.map string stderrBytes) + "uy"
+    let content = sprintf "let stdoutBytes = [|%s|]\nlet stderrBytes = [|%s|]\nlet stdoutStream = Console.OpenStandardOutput()\nstdoutStream.Write(stdoutBytes, 0, stdoutBytes.Length)\nstdoutStream.Flush()\nlet stderrStream = Console.OpenStandardError()\nstderrStream.Write(stderrBytes, 0, stderrBytes.Length)\nstderrStream.Flush()\n" stdoutLiterals stderrLiterals
     File.WriteAllText(path, content)
     path
 
@@ -53,12 +46,9 @@ let private createSleepFixture (ms: int) : string =
 /// Creates a fixture that exits with a specific code
 let private createExitFixture (code: int) (stdoutBytes: byte array) (stderrBytes: byte array) : string =
     let path = Path.Combine(Path.GetTempPath(), $"fixture-exit-{Guid.NewGuid():N}.fsx")
-    let stdoutStr = String.concat "uy;" (Array.map string stdoutBytes) + "uy"
-    let stderrStr = String.concat "uy;" (Array.map string stderrBytes) + "uy"
-    let content =
-        sprintf
-            "stdout.Write(System.Text.Encoding.UTF8.GetString([|%s|]))\nstdout.Flush()\nstderr.Write(System.Text.Encoding.UTF8.GetString([|%s|]))\nstderr.Flush()\nexit %d\n"
-            stdoutStr stderrStr code
+    let stdoutLiterals = String.concat "uy;" (Array.map string stdoutBytes) + "uy"
+    let stderrLiterals = String.concat "uy;" (Array.map string stderrBytes) + "uy"
+    let content = sprintf "let stdoutBytes = [|%s|]\nlet stderrBytes = [|%s|]\nlet stdoutStream = Console.OpenStandardOutput()\nstdoutStream.Write(stdoutBytes, 0, stdoutBytes.Length)\nstdoutStream.Flush()\nlet stderrStream = Console.OpenStandardError()\nstderrStream.Write(stderrBytes, 0, stderrBytes.Length)\nstderrStream.Flush()\nexit %d\n" stdoutLiterals stderrLiterals code
     File.WriteAllText(path, content)
     path
 
@@ -81,6 +71,10 @@ let private createWorkingDirFixture () : string =
     File.WriteAllText(path, content)
     path
 
+// -----------------------------------------------------------------------------
+// Test helpers
+// -----------------------------------------------------------------------------
+
 /// Helper to run bounded process
 let private runBounded
     (executable: string)
@@ -102,15 +96,15 @@ let private runBounded
             StderrLimitBytes = stderrLimit
         }
     }
-    BoundedProcess.run request CancellationToken.None
+    run request CancellationToken.None
 
 /// Helper to make expected stdout bytes
 let private makeStdoutBytes (count: int) : byte array =
-    Array.init count (fun i -> byte (97 + (i % 26)))
+    Array.init count (fun i -> byte (97 + (i % 26)))  // 'a' to 'z'
 
 /// Helper to make expected stderr bytes
 let private makeStderrBytes (count: int) : byte array =
-    Array.init count (fun i -> byte (65 + (i % 26)))
+    Array.init count (fun i -> byte (65 + (i % 26)))  // 'A' to 'Z'
 
 // -----------------------------------------------------------------------------
 // Tests
@@ -123,7 +117,7 @@ let tests =
         [
           // 1. Empty stdout process succeeds
           testTask "empty stdout process returns Ok with empty arrays" {
-              let fixture = createStdoutFixture [||]
+              let fixture = createRawStdoutFixture [||]
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
                   match result with
@@ -139,7 +133,7 @@ let tests =
           // 2. Non-empty stdout is captured
           testTask "non-empty stdout is captured correctly" {
               let expected = makeStdoutBytes 10
-              let fixture = createStdoutFixture expected
+              let fixture = createRawStdoutFixture expected
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
                   match result with
@@ -155,7 +149,7 @@ let tests =
           // 3. Non-empty stderr is captured
           testTask "non-empty stderr is captured correctly" {
               let expected = makeStderrBytes 10
-              let fixture = createStderrFixture expected
+              let fixture = createRawStderrFixture expected
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
                   match result with
@@ -217,7 +211,7 @@ let tests =
           // 7. Exact stdout limit succeeds
           testTask "exact stdout limit succeeds" {
               let expected = makeStdoutBytes 50
-              let fixture = createStdoutFixture expected
+              let fixture = createRawStdoutFixture expected
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 50 1024
                   match result with
@@ -232,12 +226,12 @@ let tests =
           // 8. Stdout over limit fails
           testTask "stdout over limit fails with StdoutLimitExceeded" {
               let bytes = makeStdoutBytes 51
-              let fixture = createStdoutFixture bytes
+              let fixture = createRawStdoutFixture bytes
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 50 1024
                   match result with
-                  | Error(StdoutLimitExceeded 50) -> ()
-                  | Error e -> failwithf "expected StdoutLimitExceeded, got: %A" e
+                  | Error(StdoutLimitExceeded limit) when limit = 50 -> ()
+                  | Error e -> failwithf "expected StdoutLimitExceeded(50), got: %A" e
                   | Ok s -> failwithf "expected failure, got Ok: %A" s
               finally
                   if File.Exists fixture then File.Delete fixture
@@ -246,7 +240,7 @@ let tests =
           // 9. Exact stderr limit succeeds
           testTask "exact stderr limit succeeds" {
               let expected = makeStderrBytes 50
-              let fixture = createStderrFixture expected
+              let fixture = createRawStderrFixture expected
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 50
                   match result with
@@ -261,12 +255,12 @@ let tests =
           // 10. Stderr over limit fails
           testTask "stderr over limit fails with StderrLimitExceeded" {
               let bytes = makeStderrBytes 51
-              let fixture = createStderrFixture bytes
+              let fixture = createRawStderrFixture bytes
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 50
                   match result with
-                  | Error(StderrLimitExceeded 50) -> ()
-                  | Error e -> failwithf "expected StderrLimitExceeded, got: %A" e
+                  | Error(StderrLimitExceeded limit) when limit = 50 -> ()
+                  | Error e -> failwithf "expected StderrLimitExceeded(50), got: %A" e
                   | Ok s -> failwithf "expected failure, got Ok: %A" s
               finally
                   if File.Exists fixture then File.Delete fixture
@@ -274,7 +268,7 @@ let tests =
 
           // 11. Zero stdout limit with zero bytes succeeds
           testTask "zero stdout limit with zero bytes succeeds" {
-              let fixture = createStdoutFixture [||]
+              let fixture = createRawStdoutFixture [||]
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 0 1024
                   match result with
@@ -288,13 +282,13 @@ let tests =
 
           // 12. Zero stdout limit with one byte fails
           testTask "zero stdout limit with one byte fails" {
-              let bytes = [| 65uy |]
-              let fixture = createStdoutFixture bytes
+              let bytes = [| 0xFFuy |]  // Raw binary byte, not valid UTF-8
+              let fixture = createRawStdoutFixture bytes
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 0 1024
                   match result with
-                  | Error(StdoutLimitExceeded 0) -> ()
-                  | Error e -> failwithf "expected StdoutLimitExceeded, got: %A" e
+                  | Error(StdoutLimitExceeded limit) when limit = 0 -> ()
+                  | Error e -> failwithf "expected StdoutLimitExceeded(0), got: %A" e
                   | Ok s -> failwithf "expected failure, got Ok: %A" s
               finally
                   if File.Exists fixture then File.Delete fixture
@@ -304,7 +298,7 @@ let tests =
           testTask "concurrent stdout and stderr are both captured" {
               let stdout = makeStdoutBytes 100
               let stderr = makeStderrBytes 100
-              let fixture = createBothFixture stdout stderr
+              let fixture = createRawBothFixture stdout stderr
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 10.0) 1024 1024
                   match result with
@@ -325,7 +319,7 @@ let tests =
               try
                   let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
                   match result with
-                  | Error(NonZeroExit(42, actualStdout, actualStderr)) ->
+                  | Error(NonZeroExit(code, actualStdout, actualStderr)) when code = 42 ->
                       Expect.equal actualStdout stdout "stdout preserved"
                       Expect.equal actualStderr stderr "stderr preserved"
                   | Error e -> failwithf "expected NonZeroExit(42, ...), got: %A" e
@@ -348,7 +342,7 @@ let tests =
                   if File.Exists fixture then File.Delete fixture
           }
 
-          // 16. Pre-cancelled token returns Cancelled
+          // 16. Pre-cancelled token returns Cancelled without starting process
           testTask "pre-cancelled token returns Cancelled" {
               let cts = new CancellationTokenSource()
               cts.Cancel()
@@ -365,7 +359,7 @@ let tests =
                   }
               }
               try
-                  let! result = BoundedProcess.run req cts.Token
+                  let! result = run req cts.Token
                   cts.Dispose()
                   match result with
                   | Error Cancelled -> ()
