@@ -52,6 +52,7 @@
     <Compile Include="FSharpDiagnostics/RepairEpisodes/TransitionTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/DeclarationTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/OccurrenceReaderTests.fs" />
+    <Compile Include="FSharpDiagnostics/RepairEpisodes/CaptureBindingTests.fs" />
 
     <Compile Include="Program.fs" />
   </ItemGroup>
