@@ -48,6 +48,9 @@
     <Compile Include="FSharpDiagnostics/AtomicPublishTests.fs" />
     <Compile Include="FSharpDiagnostics/BinlogExtractorTests.fs" />
     <Compile Include="FSharpDiagnostics/ManifestIntegrityTests.fs" />
+    <Compile Include="FSharpDiagnostics/RepairEpisodes/GitIdentityTests.fs" />
+    <Compile Include="FSharpDiagnostics/RepairEpisodes/TransitionTests.fs" />
+    <Compile Include="FSharpDiagnostics/RepairEpisodes/DeclarationTests.fs" />
 
     <Compile Include="Program.fs" />
   </ItemGroup>

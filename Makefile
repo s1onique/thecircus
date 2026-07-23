@@ -328,6 +328,14 @@ gate-fsharp-diagnostics: build-source-policy
 test-fsharp-diagnostics: build-source-policy
 	$(DOTNET) run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release --no-build --no-restore -- --summary --filter-test-list "FSharpDiagnostics"
 
+.PHONY: test-fsharp-repair-episodes
+test-fsharp-repair-episodes: build-source-policy
+	$(DOTNET) run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release --no-build --no-restore -- --summary --filter-test-list "FSharpDiagnostics.RepairEpisodes"
+
+.PHONY: gate-fsharp-repair-episodes
+gate-fsharp-repair-episodes: build-source-policy test-fsharp-repair-episodes
+	$(CIRCUS_FSHARP_DIAGNOSTICS) fsharp-diagnostics repair-episodes verify
+
 # No-force-push verification (ACT-CIRCUS-NO-FORCE-PUSH-DOCTRINE-GATE01)
 # =============================================================================
 

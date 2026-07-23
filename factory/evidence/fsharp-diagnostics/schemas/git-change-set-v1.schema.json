@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circus.local/schemas/fsharp-diagnostics/git-change-set-v1.schema.json",
+  "title": "F# Git change set (v1)",
+  "description": "Deterministic Git tree-to-tree change inventory and its deterministic identity. Rename detection is deliberately disabled; rename candidates appear canonically as delete+add.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "change_set_id",
+    "change_set_version",
+    "before_tree_oid",
+    "after_tree_oid",
+    "object_format",
+    "entries"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "git-change-set-v1" },
+    "change_set_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "change_set_version": { "type": "string", "const": "git-change-set-v1" },
+    "before_tree_oid": { "type": "string" },
+    "after_tree_oid": { "type": "string" },
+    "object_format": { "type": "string", "enum": ["sha1", "sha256"] },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "before_mode",
+          "after_mode",
+          "change_kind",
+          "canonical_path"
+        ],
+        "properties": {
+          "before_mode": { "type": "string" },
+          "after_mode": { "type": "string" },
+          "before_blob_oid": { "type": ["string", "null"] },
+          "after_blob_oid": { "type": ["string", "null"] },
+          "change_kind": {
+            "type": "string",
+            "enum": ["added", "modified", "deleted", "type_changed"]
+          },
+          "canonical_path": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -62,6 +62,14 @@
     <Compile Include="FSharpDiagnostics\BinlogExtractor.fs" />
     <Compile Include="FSharpDiagnostics\AtomicPublish.fs" />
     <Compile Include="FSharpDiagnostics\Verifier.fs" />
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\Domain.fs" />
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\Paths.fs" />
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\Git.fs" />
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\Episodes.fs" />
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\Transitions.fs" />
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\Serialization.fs" />
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\Engine.fs" />
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\Cli.fs" />
     <Compile Include="FSharpDiagnostics\Cli.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

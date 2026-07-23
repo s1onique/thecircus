@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circus.local/schemas/fsharp-diagnostics/diagnostic-transition-v1.schema.json",
+  "title": "F# diagnostic transition (v1)",
+  "description": "One transition record binding a single exact fingerprint across a repair episode.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "episode_id",
+    "exact_fingerprint",
+    "transition_kind",
+    "before_occurrence_count",
+    "after_occurrence_count",
+    "severity",
+    "message_normalized",
+    "span",
+    "compatibility",
+    "source_link",
+    "assessment"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "diagnostic-transition-v1" },
+    "episode_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "exact_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "transition_kind": {
+      "type": "string",
+      "enum": [
+        "persisted_same_count",
+        "persisted_count_decreased",
+        "persisted_count_increased",
+        "eliminated_after",
+        "introduced_after"
+      ]
+    },
+    "before_occurrence_count": { "type": "integer", "minimum": 0 },
+    "after_occurrence_count": { "type": "integer", "minimum": 0 },
+    "severity": { "type": "string", "enum": ["warning", "error"] },
+    "code": { "type": ["string", "null"] },
+    "message_normalized": { "type": "string" },
+    "source_path": { "type": ["string", "null"] },
+    "project_path": { "type": ["string", "null"] },
+    "span": {
+      "type": "object",
+      "required": ["start_line", "start_column", "end_line", "end_column"],
+      "properties": {
+        "start_line": { "type": ["integer", "null"] },
+        "start_column": { "type": ["integer", "null"] },
+        "end_line": { "type": ["integer", "null"] },
+        "end_column": { "type": ["integer", "null"] }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["compatible", "incompatible", "unknown"] },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "missing_fields": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "source_link": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "source_file_modified",
+            "source_file_added",
+            "source_file_deleted",
+            "project_file_modified",
+            "source_and_project_modified",
+            "declared_relevant_path_changed",
+            "no_direct_path_change",
+            "missing_diagnostic_path",
+            "ambiguous_path_evidence"
+          ]
+        },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "assessment": {
+      "type": "string",
+      "enum": [
+        "exact_persistence",
+        "observed_resolution_candidate",
+        "observed_regression_candidate",
+        "multiplicity_improvement_candidate",
+        "multiplicity_regression_candidate",
+        "eliminated_by_source_removal",
+        "introduced_with_source_addition",
+        "unassessable",
+        "ambiguous"
+      ]
+    }
+  }
+}

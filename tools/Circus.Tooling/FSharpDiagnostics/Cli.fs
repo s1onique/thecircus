@@ -27,6 +27,12 @@ type Command =
     | ExtractLegacyTextCmd of captureId: string
     | RegenerateCmd
     | VerifyCmd of outputJson: bool
+    | RepairEpisodesRedirect
+    | RepairEpisodesInventory
+    | RepairEpisodesRegenerate
+    | RepairEpisodesVerify
+    | RepairEpisodesShow of episodeId: string
+    | RepairEpisodesHelp
     | HelpCmd
 
 let helpText () : string =
@@ -66,9 +72,15 @@ let parse (argv: string list) : Result<Command, string> =
         match parseBoolFlag "verify" rest with
         | Ok b -> Ok(VerifyCmd b)
         | Result.Error e -> Result.Error e
+    | [ "repair-episodes" ] -> Ok RepairEpisodesHelp
+    | [ "repair-episodes"; "help" ] -> Ok RepairEpisodesHelp
+    | [ "repair-episodes"; "inventory" ] -> Ok RepairEpisodesInventory
+    | [ "repair-episodes"; "regenerate" ] -> Ok RepairEpisodesRegenerate
+    | [ "repair-episodes"; "verify" ] -> Ok RepairEpisodesVerify
+    | [ "repair-episodes"; "show"; id ] -> Ok(RepairEpisodesShow id)
     | _ ->
         Result.Error
-            "usage: circus-tooling fsharp-diagnostics {inventory|extract-binlog|extract-legacy-text|regenerate|verify|help}"
+            "usage: circus-tooling fsharp-diagnostics {inventory|extract-binlog|extract-legacy-text|regenerate|verify|repair-episodes {inventory|regenerate|verify|show <id>}|help}"
 
 /// Render inventory JSON.
 let private renderInventoryJson (repoRoot: string) : string =
@@ -350,6 +362,17 @@ let run (argv: string list) : int =
         | Result.Error msg ->
             stderr.WriteLine(sprintf "error: %s" msg)
             ExitCode.operationalError
+    | Ok RepairEpisodesRedirect
+    | Ok RepairEpisodesInventory ->
+        Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Cli.run [ "inventory" ]
+    | Ok RepairEpisodesRegenerate ->
+        Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Cli.run [ "regenerate" ]
+    | Ok RepairEpisodesVerify ->
+        Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Cli.run [ "verify" ]
+    | Ok(RepairEpisodesShow id) ->
+        Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Cli.run [ "show"; id ]
+    | Ok RepairEpisodesHelp ->
+        Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Cli.run [ "help" ]
     | Result.Error msg ->
         stderr.WriteLine(sprintf "error: %s" msg)
         stderr.WriteLine(helpText())

@@ -1,0 +1,13 @@
+{
+  "schema_version": "repair-episode-declaration-v1",
+  "episode_key": "sample-exact-elimination",
+  "before_capture_id": "fsb-before",
+  "after_capture_id": "fsb-after",
+  "before_commit_oid": "0000000000000000000000000000000000000001",
+  "after_commit_oid": "0000000000000000000000000000000000000002",
+  "expected_before_tree_oid": null,
+  "expected_after_tree_oid": null,
+  "verification_evidence_ids": ["sample-evidence"],
+  "declared_relevant_paths": ["src/Foo.fs"],
+  "notes": "Controlled fixture. Resolved OIDs are placeholders; tests inject real OIDs at runtime."
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circus.local/schemas/fsharp-diagnostics/repair-episode-declaration-v1.schema.json",
+  "title": "F# repair episode declaration (v1)",
+  "description": "Explicit declaration that binds a before capture, an after capture, two Git commit OIDs, and the expected verification evidence. Episodes are inputs only; the tool never scans adjacent Git history to invent episodes.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "episode_key",
+    "before_capture_id",
+    "after_capture_id",
+    "before_commit_oid",
+    "after_commit_oid",
+    "verification_evidence_ids",
+    "declared_relevant_paths"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "repair-episode-declaration-v1" },
+    "episode_key": { "type": "string", "minLength": 1 },
+    "before_capture_id": { "type": "string", "minLength": 1 },
+    "after_capture_id": { "type": "string", "minLength": 1 },
+    "before_commit_oid": { "type": "string", "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$" },
+    "after_commit_oid": { "type": "string", "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$" },
+    "expected_before_tree_oid": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$"
+    },
+    "expected_after_tree_oid": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$"
+    },
+    "verification_evidence_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "declared_relevant_paths": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[^/].*" }
+    },
+    "notes": { "type": ["string", "null"] }
+  }
+}

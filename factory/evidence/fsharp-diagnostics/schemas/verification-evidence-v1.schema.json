@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circus.local/schemas/fsharp-diagnostics/verification-evidence-v1.schema.json",
+  "title": "F# verification evidence (v1)",
+  "description": "Verification evidence record binding a command and its outcome to the after tree of an episode.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "evidence_id",
+    "episode_id",
+    "kind",
+    "command",
+    "working_directory",
+    "tested_commit_oid",
+    "tested_tree_oid",
+    "exit_code",
+    "status"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "verification-evidence-v1" },
+    "evidence_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "episode_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "kind": {
+      "type": "string",
+      "enum": ["build", "focused_test", "focused_gate", "canonical_gate"]
+    },
+    "command": { "type": "string" },
+    "working_directory": { "type": "string" },
+    "tested_commit_oid": { "type": "string" },
+    "tested_tree_oid": { "type": "string" },
+    "exit_code": { "type": "integer" },
+    "stdout_sha256": { "type": ["string", "null"] },
+    "stderr_sha256": { "type": ["string", "null"] },
+    "combined_log_path": { "type": ["string", "null"] },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "infrastructure_error", "missing_logs"]
+    }
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circus.local/schemas/fsharp-diagnostics/repair-episode-v1.schema.json",
+  "title": "F# repair episode (v1)",
+  "description": "Computed repair episode record. EpisodeId is a deterministic SHA-256 over a canonical encoding of the binding inputs.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "episode_id",
+    "episode_key",
+    "before_capture_id",
+    "after_capture_id",
+    "before_commit_oid",
+    "before_tree_oid",
+    "after_commit_oid",
+    "after_tree_oid",
+    "commit_range",
+    "change_set_id",
+    "command_contract_before",
+    "command_contract_after",
+    "compatibility",
+    "transition_counts",
+    "verification_level",
+    "verification_evidence_ids",
+    "qualification"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "repair-episode-v1" },
+    "episode_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "episode_key": { "type": "string" },
+    "before_capture_id": { "type": "string" },
+    "after_capture_id": { "type": "string" },
+    "before_commit_oid": { "type": "string" },
+    "before_tree_oid": { "type": "string" },
+    "after_commit_oid": { "type": "string" },
+    "after_tree_oid": { "type": "string" },
+    "commit_range": { "type": "array", "items": { "type": "string" } },
+    "change_set_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "command_contract_before": { "type": "string" },
+    "command_contract_after": { "type": "string" },
+    "compatibility": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["compatible", "incompatible", "unknown"] },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "missing_fields": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "transition_counts": {
+      "type": "object",
+      "required": [
+        "persisted_same_count",
+        "persisted_count_decreased",
+        "persisted_count_increased",
+        "eliminated_after",
+        "introduced_after",
+        "resolution_candidates",
+        "regression_candidates",
+        "unassessable"
+      ],
+      "properties": {
+        "persisted_same_count": { "type": "integer", "minimum": 0 },
+        "persisted_count_decreased": { "type": "integer", "minimum": 0 },
+        "persisted_count_increased": { "type": "integer", "minimum": 0 },
+        "eliminated_after": { "type": "integer", "minimum": 0 },
+        "introduced_after": { "type": "integer", "minimum": 0 },
+        "resolution_candidates": { "type": "integer", "minimum": 0 },
+        "regression_candidates": { "type": "integer", "minimum": 0 },
+        "unassessable": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "verification_level": {
+      "type": "string",
+      "enum": [
+        "transition_observed",
+        "source_linked",
+        "build_verified",
+        "focused_test_verified",
+        "focused_gate_verified"
+      ]
+    },
+    "verification_evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "qualification": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["qualified", "qualified_with_limitations", "ambiguous", "rejected"]
+        },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
