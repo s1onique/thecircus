@@ -22,6 +22,11 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.CaptureBinding
 // The public boundary is ``Result<BoundCapture, CaptureBindingFailure>``.
 // The failure union is closed: every rejection mode has a dedicated case so
 // downstream callers can branch on the exact cause without parsing strings.
+//
+// Canonical paths emitted in the result and in every identity-bearing failure
+// are repository-relative (forward slashes, no leading slash).  Two
+// ``BoundCapture`` records produced against equivalent capture directories
+// that lie under different repository roots are equal.
 
 open System
 open System.Collections.Generic
@@ -135,6 +140,51 @@ let private captureCanonicalDir (captureId: string) : string =
     canonicalise (rawSubdir + "/" + captureId)
 
 // =============================================================================
+// Symlink / junction rejection
+// =============================================================================
+//
+// ``FileAttributes.ReparsePoint`` is set on both symbolic links and NTFS
+// junctions.  The capture-binding slice refuses to read a raw file when the
+// final file or any intermediate directory between the capture directory and
+// the file resolves through a reparse point.  This protects the binding
+// from being tricked into reading attacker-controlled content that lives
+// outside the declared capture.
+
+let private isReparsePoint (path: string) : bool =
+    try
+        let attrs = File.GetAttributes(path)
+        (attrs &&& FileAttributes.ReparsePoint) <> FileAttributes.None
+    with
+    | :? IOException -> false
+    | :? UnauthorizedAccessException -> false
+
+/// Walk from the file's parent directory up to and including the capture
+/// directory, returning ``Some`` with the first directory that is a
+/// reparse point, or ``None`` if every directory is a normal directory.
+let private findReparsePointBetween
+    (fileParent: string)
+    (captureAbsDir: string)
+    : string option =
+    let stop = Path.GetFullPath captureAbsDir
+    let mutable current = fileParent
+    let mutable found : string option = None
+    let mutable finished = false
+    while not finished && found.IsNone do
+        if isReparsePoint current then
+            found <- Some current
+        else
+            let normalized = Path.GetFullPath current
+            if String.Equals(normalized, stop, StringComparison.OrdinalIgnoreCase) then
+                finished <- true
+            else
+                let parent = Path.GetDirectoryName current
+                if parent = current then
+                    finished <- true  // walked all the way to filesystem root
+                else
+                    current <- parent
+    found
+
+// =============================================================================
 // Strict artifact manifest reader
 // =============================================================================
 //
@@ -145,31 +195,41 @@ let private captureCanonicalDir (captureId: string) : string =
 //   * it does not detect duplicate property names;
 //   * it does not preserve one-based line numbers in errors;
 //   * it silently skips records when ``field`` returns ``None``;
-//   * it does not distinguish absent and null for required fields.
+//   * it does not distinguish absent and null for required fields;
+//   * it does not validate ``schema_version``;
+//   * it does not reject BOM or NUL bytes.
 //
 // This private reader implements the strict contract required by the
 // binding: malformed nonblank records abort the entire file, the one-based
 // line number is preserved, duplicate and unknown properties are rejected,
-// and absent and null are distinguished for every required field.
+// absent and null are distinguished for every required field, BOM and NUL
+// bytes are rejected, and the schema version is validated.
+//
+// The decoder is ``UTF8Encoding(false, true)``: no BOM emission and throw
+// on invalid byte sequences.  Combined with the explicit BOM rejection via
+// the leading-three-byte check, this means any non-canonical byte stream
+// is rejected.
 
-// ``ArtifactManifestReadFailure`` is internal to this module. The type is
-// declared without an explicit accessibility modifier so the private
-// exception used to short-circuit the parser can carry it as a payload
-// without violating F# accessibility rules. The type is not re-exported:
-// every bound value that produces it is private and the only public
-// surface is ``Result<ArtifactManifestEntry list, ArtifactManifestReadFailure>``.
+// ``ArtifactManifestReadFailure`` is internal so the private exception that
+// carries it does not violate F# accessibility rules.  The public result
+// surface is ``Result<ArtifactManifestEntry list, ArtifactManifestReadFailure>``,
+// which is itself private; callers that bridge the binding's failure
+// surface convert these cases into public ``CaptureBindingFailure`` cases.
 type internal ArtifactManifestReadFailure =
     | FileMissing of canonicalPath: string
     | FileReadFailed of canonicalPath: string * detail: string
+    | InvalidByteSequence of canonicalPath: string * detail: string
+    | BomPresent of canonicalPath: string
+    | NulBytePresent of canonicalPath: string
     | InvalidJson of canonicalPath: string * lineNumber: int * detail: string
     | RootNotObject of canonicalPath: string * lineNumber: int
     | MissingField of canonicalPath: string * lineNumber: int * field: string
     | DuplicateField of canonicalPath: string * lineNumber: int * field: string
     | UnknownField of canonicalPath: string * lineNumber: int * field: string
     | WrongJsonKind of canonicalPath: string * lineNumber: int * field: string
+    | SchemaVersionMismatch of canonicalPath: string * lineNumber: int * actual: string
 
 exception private ArtifactManifestParseAbort of ArtifactManifestReadFailure
-do ()
 
 let private artifactManifestFail (failure: ArtifactManifestReadFailure) : 'a =
     raise (ArtifactManifestParseAbort failure)
@@ -190,6 +250,18 @@ let private artifactManifestKnownFields : Set<string> =
         "superseded_by"
         "metadata_gaps"
     ]
+
+let private artifactManifestDecoder : UTF8Encoding =
+    UTF8Encoding(false, true)
+
+let private artifactManifestStartsWithBom (bytes: byte[]) : bool =
+    bytes.Length >= 3
+    && bytes.[0] = 0xEFuy
+    && bytes.[1] = 0xBBuy
+    && bytes.[2] = 0xBFuy
+
+let private artifactManifestContainsNul (bytes: byte[]) : bool =
+    Array.exists (fun b -> b = 0uy) bytes
 
 let private tryGetProperty (root: JsonElement) (name: string) : JsonElement option =
     let mutable result = Unchecked.defaultof<JsonElement>
@@ -323,6 +395,8 @@ let private parseArtifactManifestLine
     checkArtifactManifestUnknown path lineNumber root
 
     let schemaVersion = artifactManifestRequiredString path lineNumber "schema_version" root
+    if schemaVersion <> ArtifactManifestSchemaVersion then
+        artifactManifestFail (SchemaVersionMismatch (path, lineNumber, schemaVersion))
     let canonicalPath = artifactManifestRequiredString path lineNumber "canonical_path" root
     let originalPath = artifactManifestRequiredString path lineNumber "original_path" root
     let artifactClass = artifactManifestRequiredString path lineNumber "artifact_class" root
@@ -365,69 +439,391 @@ let private readArtifactManifestStrict
         match bytesResult with
         | Result.Error e -> Result.Error e
         | Result.Ok bytes ->
-            let text =
-                try
-                    Result.Ok (Encoding.UTF8.GetString bytes)
-                with
-                | :? DecoderFallbackException as ex ->
-                    Result.Error (FileReadFailed (path, ex.Message))
-            match text with
-            | Result.Error e -> Result.Error e
-            | Result.Ok text ->
-                let normalised = StringBuilder(text.Length)
-                let mutable i = 0
-                while i < text.Length do
-                    let c = text.[i]
-                    if c = '\r' then
-                        normalised.Append '\n' |> ignore
-                        if i + 1 < text.Length && text.[i + 1] = '\n' then
-                            i <- i + 1
+            if artifactManifestStartsWithBom bytes then
+                Result.Error (BomPresent path)
+            elif artifactManifestContainsNul bytes then
+                Result.Error (NulBytePresent path)
+            else
+                let text =
+                    try
+                        Result.Ok (artifactManifestDecoder.GetString bytes)
+                    with
+                    | :? DecoderFallbackException as ex ->
+                        Result.Error (InvalidByteSequence (path, ex.Message))
+                match text with
+                | Result.Error e -> Result.Error e
+                | Result.Ok text ->
+                    let normalised = StringBuilder(text.Length)
+                    let mutable i = 0
+                    while i < text.Length do
+                        let c = text.[i]
+                        if c = '\r' then
+                            normalised.Append '\n' |> ignore
+                            if i + 1 < text.Length && text.[i + 1] = '\n' then
+                                i <- i + 1
+                        else
+                            normalised.Append c |> ignore
+                        i <- i + 1
+                    let lines = normalised.ToString().Split([| '\n' |], StringSplitOptions.None)
+                    let mutable acc : ArtifactManifestEntry list = []
+                    let mutable lineNumber = 0
+                    let mutable failure : ArtifactManifestReadFailure = FileMissing path
+                    let mutable aborted = false
+                    for line in lines do
+                        lineNumber <- lineNumber + 1
+                        if not aborted then
+                            if not (String.IsNullOrWhiteSpace line) then
+                                try
+                                    let entry = parseArtifactManifestLine path lineNumber line
+                                    acc <- entry :: acc
+                                with
+                                | ArtifactManifestParseAbort f ->
+                                    aborted <- true
+                                    failure <- f
+                    if aborted then
+                        Result.Error failure
                     else
-                        normalised.Append c |> ignore
-                    i <- i + 1
-                let lines = normalised.ToString().Split([| '\n' |], StringSplitOptions.None)
-                let mutable acc : ArtifactManifestEntry list = []
-                let mutable lineNumber = 0
-                let mutable failure : ArtifactManifestReadFailure = FileMissing path
-                let mutable aborted = false
-                for line in lines do
-                    lineNumber <- lineNumber + 1
-                    if not aborted then
-                        if not (String.IsNullOrWhiteSpace line) then
-                            try
-                                let entry = parseArtifactManifestLine path lineNumber line
-                                acc <- entry :: acc
-                            with
-                            | ArtifactManifestParseAbort f ->
-                                aborted <- true
-                                failure <- f
-                if aborted then
-                    Result.Error failure
-                else
-                    Result.Ok (acc |> List.rev)
+                        Result.Ok (acc |> List.rev)
 
 // =============================================================================
-// Strict capture manifest read
+// Strict capture manifest reader
 // =============================================================================
 //
-// The foundation ``Manifest.readCaptureManifest`` raises on failure without
-// preserving the original cause.  This wrapper traps the failure types we
-// need to surface as ``CaptureManifestReadFailed`` and treats missing files
-// as the dedicated ``CaptureManifestMissing`` failure.
+// The foundation ``Manifest.readCaptureManifest`` reader is not strict:
+// it does not reject unknown fields, does not detect duplicate property
+// names, does not preserve one-based line numbers, silently substitutes
+// empty strings for missing fields, does not validate ``schema_version``,
+// and does not reject BOM or NUL bytes.  This private strict reader
+// implements the contract required by the binding.
+//
+// ``readCaptureManifest`` is the strict entry point used by every code
+// path inside this module.  Tests in ``CaptureBindingTests`` exercise both
+// the reader directly and through ``bindCapture`` to prove strictness.
+
+type internal CaptureManifestReadFailure =
+    | FileMissing of canonicalPath: string
+    | FileReadFailed of canonicalPath: string * detail: string
+    | InvalidByteSequence of canonicalPath: string * detail: string
+    | BomPresent of canonicalPath: string
+    | NulBytePresent of canonicalPath: string
+    | InvalidJson of canonicalPath: string * lineNumber: int * detail: string
+    | RootNotObject of canonicalPath: string * lineNumber: int
+    | MissingField of canonicalPath: string * lineNumber: int * field: string
+    | DuplicateField of canonicalPath: string * lineNumber: int * field: string
+    | UnknownField of canonicalPath: string * lineNumber: int * field: string
+    | WrongJsonKind of canonicalPath: string * lineNumber: int * field: string
+    | SchemaVersionMismatch of canonicalPath: string * lineNumber: int * actual: string
+
+exception private CaptureManifestParseAbort of CaptureManifestReadFailure
+
+let private captureManifestFail (failure: CaptureManifestReadFailure) : 'a =
+    raise (CaptureManifestParseAbort failure)
+
+let private captureManifestKnownFields : Set<string> =
+    set [
+        "schema_version"
+        "capture_id"
+        "capture_kind"
+        "raw_artifacts"
+        "command"
+        "working_directory"
+        "repository_commit_oid"
+        "repository_tree_oid"
+        "working_tree_state"
+        "source_root_aliases"
+        "dotnet_sdk_version"
+        "msbuild_version"
+        "fsharp_compiler_version"
+        "operating_system"
+        "architecture"
+        "culture"
+        "started_at"
+        "completed_at"
+        "exit_code"
+        "metadata_gaps"
+    ]
+
+let private captureManifestDecoder : UTF8Encoding =
+    UTF8Encoding(false, true)
+
+let private captureManifestStartsWithBom (bytes: byte[]) : bool =
+    bytes.Length >= 3
+    && bytes.[0] = 0xEFuy
+    && bytes.[1] = 0xBBuy
+    && bytes.[2] = 0xBFuy
+
+let private captureManifestContainsNul (bytes: byte[]) : bool =
+    Array.exists (fun b -> b = 0uy) bytes
+
+let private captureManifestContainsZwnbsp (bytes: byte[]) : bool =
+    Array.exists (fun b -> b = 0xEFuy && b = 0xBBuy && b = 0xBFuy) bytes
+
+let private checkCaptureManifestDuplicates
+    (path: string)
+    (lineNumber: int)
+    (root: JsonElement)
+    : unit =
+    let seen = HashSet<string>(StringComparer.Ordinal)
+    let mutable dup : string option = None
+    for prop in root.EnumerateObject() do
+        if dup.IsNone && not (seen.Add prop.Name) then
+            dup <- Some prop.Name
+    match dup with
+    | Some n -> captureManifestFail (DuplicateField (path, lineNumber, n))
+    | None -> ()
+
+let private checkCaptureManifestUnknown
+    (path: string)
+    (lineNumber: int)
+    (root: JsonElement)
+    : unit =
+    let firstUnknown =
+        root.EnumerateObject()
+        |> Seq.tryPick (fun p ->
+            if Set.contains p.Name captureManifestKnownFields then None
+            else Some p.Name)
+    match firstUnknown with
+    | Some n -> captureManifestFail (UnknownField (path, lineNumber, n))
+    | None -> ()
+
+let private captureManifestRequiredString
+    (path: string)
+    (lineNumber: int)
+    (field: string)
+    (root: JsonElement)
+    : string =
+    let el =
+        match tryGetProperty root field with
+        | Some v -> v
+        | None -> captureManifestFail (MissingField (path, lineNumber, field))
+    if el.ValueKind = JsonValueKind.Null then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    elif el.ValueKind <> JsonValueKind.String then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    else
+        el.GetString()
+
+let private captureManifestRequiredNullableString
+    (path: string)
+    (lineNumber: int)
+    (field: string)
+    (root: JsonElement)
+    : string option =
+    let el =
+        match tryGetProperty root field with
+        | Some v -> v
+        | None -> captureManifestFail (MissingField (path, lineNumber, field))
+    if el.ValueKind = JsonValueKind.Null then
+        None
+    elif el.ValueKind <> JsonValueKind.String then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    else
+        Some (el.GetString())
+
+let private captureManifestRequiredInt
+    (path: string)
+    (lineNumber: int)
+    (field: string)
+    (root: JsonElement)
+    : int =
+    let el =
+        match tryGetProperty root field with
+        | Some v -> v
+        | None -> captureManifestFail (MissingField (path, lineNumber, field))
+    if el.ValueKind = JsonValueKind.Null then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    elif el.ValueKind <> JsonValueKind.Number then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    let raw = el.GetRawText()
+    if raw.Contains "." || raw.Contains "e" || raw.Contains "E" then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    try
+        Int32.Parse(raw, CultureInfo.InvariantCulture)
+    with _ ->
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+
+let private captureManifestRequiredNullableInt
+    (path: string)
+    (lineNumber: int)
+    (field: string)
+    (root: JsonElement)
+    : int option =
+    let el =
+        match tryGetProperty root field with
+        | Some v -> v
+        | None -> captureManifestFail (MissingField (path, lineNumber, field))
+    if el.ValueKind = JsonValueKind.Null then
+        None
+    elif el.ValueKind <> JsonValueKind.Number then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    else
+        let raw = el.GetRawText()
+        if raw.Contains "." || raw.Contains "e" || raw.Contains "E" then
+            captureManifestFail (WrongJsonKind (path, lineNumber, field))
+        try
+            Some (Int32.Parse(raw, CultureInfo.InvariantCulture))
+        with _ ->
+            captureManifestFail (WrongJsonKind (path, lineNumber, field))
+
+let private captureManifestRequiredStringList
+    (path: string)
+    (lineNumber: int)
+    (field: string)
+    (root: JsonElement)
+    : string list =
+    let el =
+        match tryGetProperty root field with
+        | Some v -> v
+        | None -> captureManifestFail (MissingField (path, lineNumber, field))
+    if el.ValueKind = JsonValueKind.Null then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    elif el.ValueKind <> JsonValueKind.Array then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    else
+        let mutable acc : string list = []
+        for item in el.EnumerateArray() do
+            if item.ValueKind <> JsonValueKind.String then
+                captureManifestFail (WrongJsonKind (path, lineNumber, field))
+            else
+                acc <- (item.GetString()) :: acc
+        List.rev acc
+
+let private captureManifestRequiredAliasList
+    (path: string)
+    (lineNumber: int)
+    (field: string)
+    (root: JsonElement)
+    : SourceRootAlias list =
+    let el =
+        match tryGetProperty root field with
+        | Some v -> v
+        | None -> captureManifestFail (MissingField (path, lineNumber, field))
+    if el.ValueKind = JsonValueKind.Null then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    elif el.ValueKind <> JsonValueKind.Array then
+        captureManifestFail (WrongJsonKind (path, lineNumber, field))
+    else
+        let mutable acc : SourceRootAlias list = []
+        for item in el.EnumerateArray() do
+            if item.ValueKind <> JsonValueKind.Object then
+                captureManifestFail (WrongJsonKind (path, lineNumber, field))
+            checkCaptureManifestDuplicates path lineNumber item
+            checkCaptureManifestUnknown path lineNumber item
+            let absoluteRoot =
+                captureManifestRequiredString path lineNumber "absolute_root" item
+            let canonicalRoot =
+                captureManifestRequiredString path lineNumber "canonical_root" item
+            acc <- { AbsoluteRoot = absoluteRoot; CanonicalRoot = canonicalRoot } :: acc
+        List.rev acc
+
+let private parseCaptureManifest
+    (path: string)
+    (lineNumber: int)
+    (text: string)
+    : CaptureManifest =
+    let doc =
+        try
+            JsonDocument.Parse(text)
+        with
+        | :? JsonException as ex ->
+            captureManifestFail (InvalidJson (path, lineNumber, ex.Message))
+
+    use doc = doc
+    let root = doc.RootElement
+    if root.ValueKind <> JsonValueKind.Object then
+        captureManifestFail (RootNotObject (path, lineNumber))
+    checkCaptureManifestDuplicates path lineNumber root
+    checkCaptureManifestUnknown path lineNumber root
+
+    let schemaVersion = captureManifestRequiredString path lineNumber "schema_version" root
+    if schemaVersion <> CaptureManifestSchemaVersion then
+        captureManifestFail (SchemaVersionMismatch (path, lineNumber, schemaVersion))
+    let captureId = captureManifestRequiredString path lineNumber "capture_id" root
+    let captureKind = captureManifestRequiredString path lineNumber "capture_kind" root
+    let rawArtifacts = captureManifestRequiredStringList path lineNumber "raw_artifacts" root
+    let command = captureManifestRequiredNullableString path lineNumber "command" root
+    let workingDirectory = captureManifestRequiredNullableString path lineNumber "working_directory" root
+    let repositoryCommitOid = captureManifestRequiredNullableString path lineNumber "repository_commit_oid" root
+    let repositoryTreeOid = captureManifestRequiredNullableString path lineNumber "repository_tree_oid" root
+    let workingTreeState = captureManifestRequiredNullableString path lineNumber "working_tree_state" root
+    let sourceRootAliases = captureManifestRequiredAliasList path lineNumber "source_root_aliases" root
+    let dotnetSdkVersion = captureManifestRequiredNullableString path lineNumber "dotnet_sdk_version" root
+    let msbuildVersion = captureManifestRequiredNullableString path lineNumber "msbuild_version" root
+    let fsharpCompilerVersion = captureManifestRequiredNullableString path lineNumber "fsharp_compiler_version" root
+    let operatingSystem = captureManifestRequiredNullableString path lineNumber "operating_system" root
+    let architecture = captureManifestRequiredNullableString path lineNumber "architecture" root
+    let culture = captureManifestRequiredNullableString path lineNumber "culture" root
+    let startedAt = captureManifestRequiredNullableString path lineNumber "started_at" root
+    let completedAt = captureManifestRequiredNullableString path lineNumber "completed_at" root
+    let exitCode = captureManifestRequiredNullableInt path lineNumber "exit_code" root
+    let metadataGaps = captureManifestRequiredStringList path lineNumber "metadata_gaps" root
+
+    { SchemaVersion = schemaVersion
+      CaptureId = captureId
+      CaptureKind = captureKind
+      RawArtifacts = rawArtifacts
+      Command = command
+      WorkingDirectory = workingDirectory
+      RepositoryCommitOid = repositoryCommitOid
+      RepositoryTreeOid = repositoryTreeOid
+      WorkingTreeState = workingTreeState
+      SourceRootAliases = sourceRootAliases
+      DotnetSdkVersion = dotnetSdkVersion
+      MsbuildVersion = msbuildVersion
+      FsharpCompilerVersion = fsharpCompilerVersion
+      OperatingSystem = operatingSystem
+      Architecture = architecture
+      Culture = culture
+      StartedAt = startedAt
+      CompletedAt = completedAt
+      ExitCode = exitCode
+      MetadataGaps = metadataGaps }
 
 let private readCaptureManifestStrict
     (path: string)
-    : Result<CaptureManifest, CaptureBindingFailure> =
+    : Result<CaptureManifest, CaptureManifestReadFailure> =
     if not (File.Exists path) then
-        Result.Error (CaptureManifestMissing path)
+        Result.Error (FileMissing path)
     else
-        try
-            Result.Ok (Circus.Tooling.FSharpDiagnostics.Manifest.readCaptureManifest path)
-        with
-        | ex -> Result.Error (CaptureManifestReadFailed (path, ex.Message))
+        let bytesResult =
+            try
+                Result.Ok (File.ReadAllBytes path)
+            with
+            | :? IOException as ex -> Result.Error (FileReadFailed (path, ex.Message))
+            | :? UnauthorizedAccessException as ex -> Result.Error (FileReadFailed (path, ex.Message))
+        match bytesResult with
+        | Result.Error e -> Result.Error e
+        | Result.Ok bytes ->
+            if captureManifestStartsWithBom bytes then
+                Result.Error (BomPresent path)
+            elif captureManifestContainsNul bytes then
+                Result.Error (NulBytePresent path)
+            else
+                let text =
+                    try
+                        Result.Ok (captureManifestDecoder.GetString bytes)
+                    with
+                    | :? DecoderFallbackException as ex ->
+                        Result.Error (InvalidByteSequence (path, ex.Message))
+                match text with
+                | Result.Error e -> Result.Error e
+                | Result.Ok text ->
+                    try
+                        Result.Ok (parseCaptureManifest path 1 text)
+                    with
+                    | CaptureManifestParseAbort f -> Result.Error f
+
+/// Strict capture-manifest reader.  Exposed for tests and for callers that
+/// need the typed result directly.  The public ``bindCapture`` entry point
+/// wraps this reader with the binding's failure union.  Marked ``internal``
+/// to satisfy the F# accessibility rules around ``CaptureManifestReadFailure``.
+let internal readCaptureManifest
+    (path: string)
+    : Result<CaptureManifest, CaptureManifestReadFailure> =
+    readCaptureManifestStrict path
 
 // =============================================================================
-// Raw artifact binding
+// Raw artifact file reading
 // =============================================================================
 
 let private hashAndLength (path: string) : Result<int64 * string, CaptureBindingFailure> =
@@ -439,16 +835,6 @@ let private hashAndLength (path: string) : Result<int64 * string, CaptureBinding
         for b in hash do
             sb.Append(b.ToString("x2", CultureInfo.InvariantCulture)) |> ignore
         Result.Ok (length, sb.ToString())
-    with
-    | :? IOException as ex -> Result.Error (RawArtifactReadFailed (path, ex.Message))
-    | :? UnauthorizedAccessException as ex ->
-        Result.Error (RawArtifactReadFailed (path, ex.Message))
-
-let private readFileAttributes
-    (path: string)
-    : Result<FileAttributes, CaptureBindingFailure> =
-    try
-        Result.Ok (File.GetAttributes(path))
     with
     | :? IOException as ex -> Result.Error (RawArtifactReadFailed (path, ex.Message))
     | :? UnauthorizedAccessException as ex ->
@@ -471,13 +857,36 @@ let private bindRawArtifact
         else
             let fullPath = repoRelative repoRoot canonical
             if not (File.Exists fullPath) then
-                Result.Error (RawArtifactMissing fullPath)
+                Result.Error (RawArtifactMissing canonical)
             else
-                match readFileAttributes fullPath with
-                | Result.Error e -> Result.Error e
-                | Result.Ok attrs ->
-                    if (attrs &&& FileAttributes.Directory) <> FileAttributes.None then
-                        Result.Error (RawArtifactPathInvalid rawPath)
+                // Reject symbolic links and junctions at the file and at any
+                // intermediate directory between the file and the capture
+                // directory.
+                let captureAbsDir =
+                    Path.GetFullPath(Path.Combine(repoRoot, captureCanonicalDir captureId))
+                let fileParent = Path.GetDirectoryName fullPath
+                let stopAbsDir = captureAbsDir
+                let mutable current = fileParent
+                let mutable reparseFound : string option = None
+                let mutable finished = false
+                while not finished && reparseFound.IsNone do
+                    if isReparsePoint current then
+                        reparseFound <- Some current
+                    else
+                        let normalized = Path.GetFullPath current
+                        if String.Equals(normalized, stopAbsDir, StringComparison.OrdinalIgnoreCase) then
+                            finished <- true
+                        else
+                            let parent = Path.GetDirectoryName current
+                            if parent = current then
+                                finished <- true
+                            else
+                                current <- parent
+                match reparseFound with
+                | Some _ -> Result.Error (RawArtifactPathInvalid canonical)
+                | None ->
+                    if isReparsePoint fullPath then
+                        Result.Error (RawArtifactPathInvalid canonical)
                     else
                         match hashAndLength fullPath with
                         | Result.Error e -> Result.Error e
@@ -486,25 +895,25 @@ let private bindRawArtifact
                                 manifest
                                 |> List.filter (fun e -> e.CanonicalPath = canonical)
                             match matches with
-                            | [] -> Result.Error (ArtifactManifestEntryMissing fullPath)
+                            | [] -> Result.Error (ArtifactManifestEntryMissing canonical)
                             | _ :: _ :: _ ->
-                                Result.Error (ArtifactManifestEntryDuplicate fullPath)
+                                Result.Error (ArtifactManifestEntryDuplicate canonical)
                             | [ entry ] ->
                                 if entry.CaptureId <> Some captureId then
-                                    Result.Error (ArtifactManifestCaptureMismatch fullPath)
+                                    Result.Error (ArtifactManifestCaptureMismatch canonical)
                                 elif entry.ArtifactClass <> rawArtifactCanonicalClass then
-                                    Result.Error (ArtifactManifestClassMismatch fullPath)
+                                    Result.Error (ArtifactManifestClassMismatch canonical)
                                 elif entry.Status <> presentCanonicalStatus then
-                                    Result.Error (ArtifactManifestStatusMismatch fullPath)
+                                    Result.Error (ArtifactManifestStatusMismatch canonical)
                                 elif entry.ByteLength <> actualLength then
                                     Result.Error
-                                        (RawArtifactLengthMismatch (fullPath, entry.ByteLength, actualLength))
+                                        (RawArtifactLengthMismatch (canonical, entry.ByteLength, actualLength))
                                 elif not (String.Equals(entry.Sha256, actualHash, StringComparison.Ordinal)) then
                                     Result.Error
-                                        (RawArtifactHashMismatch (fullPath, entry.Sha256, actualHash))
+                                        (RawArtifactHashMismatch (canonical, entry.Sha256, actualHash))
                                 else
                                     Result.Ok
-                                        { CanonicalPath = fullPath
+                                        { CanonicalPath = canonical
                                           ByteLength = actualLength
                                           Sha256 = actualHash }
 
@@ -522,10 +931,34 @@ let bindCapture
     else
         let captureRelDir = captureCanonicalDir request.CaptureId
         let captureManifestPath = repoRelative repoRoot (captureRelDir + "/capture.json")
+        let captureManifestCanonical = captureRelDir + "/capture.json"
 
         // 2. Locate the canonical capture manifest.
         match readCaptureManifestStrict captureManifestPath with
-        | Result.Error e -> Result.Error e
+        | Result.Error (FileMissing _) ->
+            Result.Error (CaptureManifestMissing captureManifestCanonical)
+        | Result.Error (FileReadFailed (_, detail)) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, detail))
+        | Result.Error (InvalidByteSequence (_, detail)) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, "invalid UTF-8: " + detail))
+        | Result.Error (BomPresent _) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, "UTF-8 BOM is not canonical"))
+        | Result.Error (NulBytePresent _) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, "NUL byte is not canonical"))
+        | Result.Error (InvalidJson (_, line, detail)) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, sprintf "line %d: %s" line detail))
+        | Result.Error (RootNotObject (_, line)) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, sprintf "line %d: root is not an object" line))
+        | Result.Error (MissingField (_, line, field)) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, sprintf "line %d: missing field '%s'" line field))
+        | Result.Error (DuplicateField (_, line, field)) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, sprintf "line %d: duplicate field '%s'" line field))
+        | Result.Error (UnknownField (_, line, field)) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, sprintf "line %d: unknown field '%s'" line field))
+        | Result.Error (WrongJsonKind (_, line, field)) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, sprintf "line %d: wrong JSON kind for '%s'" line field))
+        | Result.Error (SchemaVersionMismatch (_, line, actual)) ->
+            Result.Error (CaptureManifestReadFailed (captureManifestCanonical, sprintf "line %d: schema_version mismatch '%s'" line actual))
         | Result.Ok manifest ->
             // 3. The manifest's capture_id must equal the requested capture_id.
             if manifest.CaptureId <> request.CaptureId then
@@ -558,22 +991,30 @@ let bindCapture
                                 let artifactManifestPath =
                                     repoRelative repoRoot artifactsManifestCanonicalPath
                                 match readArtifactManifestStrict artifactManifestPath with
-                                | Result.Error (FileMissing p) ->
-                                    Result.Error (ArtifactManifestMissing p)
-                                | Result.Error (FileReadFailed (p, detail)) ->
-                                    Result.Error (ArtifactManifestReadFailed (p, 0, detail))
-                                | Result.Error (InvalidJson (p, line, detail)) ->
-                                    Result.Error (ArtifactManifestReadFailed (p, line, detail))
-                                | Result.Error (RootNotObject (p, line)) ->
-                                    Result.Error (ArtifactManifestReadFailed (p, line, "root is not an object"))
-                                | Result.Error (MissingField (p, line, field)) ->
-                                    Result.Error (ArtifactManifestReadFailed (p, line, "missing field: " + field))
-                                | Result.Error (DuplicateField (p, line, field)) ->
-                                    Result.Error (ArtifactManifestReadFailed (p, line, "duplicate field: " + field))
-                                | Result.Error (UnknownField (p, line, field)) ->
-                                    Result.Error (ArtifactManifestReadFailed (p, line, "unknown field: " + field))
-                                | Result.Error (WrongJsonKind (p, line, field)) ->
-                                    Result.Error (ArtifactManifestReadFailed (p, line, "wrong json kind: " + field))
+                                | Result.Error (ArtifactManifestReadFailure.FileMissing _) ->
+                                    Result.Error (ArtifactManifestMissing artifactsManifestCanonicalPath)
+                                | Result.Error (ArtifactManifestReadFailure.FileReadFailed (_, detail)) ->
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, 0, detail))
+                                | Result.Error (ArtifactManifestReadFailure.InvalidByteSequence (_, detail)) ->
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, 0, "invalid UTF-8: " + detail))
+                                | Result.Error (ArtifactManifestReadFailure.BomPresent _) ->
+                                    Result.Error (ArtifactManifestMissing artifactsManifestCanonicalPath)
+                                | Result.Error (ArtifactManifestReadFailure.NulBytePresent _) ->
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, 0, "NUL byte is not canonical"))
+                                | Result.Error (ArtifactManifestReadFailure.InvalidJson (_, line, detail)) ->
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, line, detail))
+                                | Result.Error (ArtifactManifestReadFailure.RootNotObject (_, line)) ->
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, line, "root is not an object"))
+                                | Result.Error (ArtifactManifestReadFailure.MissingField (_, line, field)) ->
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, line, "missing field: " + field))
+                                | Result.Error (ArtifactManifestReadFailure.DuplicateField (_, line, field)) ->
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, line, "duplicate field: " + field))
+                                | Result.Error (ArtifactManifestReadFailure.UnknownField (_, line, field)) ->
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, line, "unknown field: " + field))
+                                | Result.Error (ArtifactManifestReadFailure.WrongJsonKind (_, line, field)) ->
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, line, "wrong json kind: " + field))
+                                | Result.Error (ArtifactManifestReadFailure.SchemaVersionMismatch (_, line, actual)) ->
+                                    Result.Error (ArtifactManifestReadFailed (artifactsManifestCanonicalPath, line, "schema_version mismatch: " + actual))
                                 | Result.Ok artifactEntries ->
                                     // 9. Bind every declared raw artifact.
                                     let seen = HashSet<string>(StringComparer.Ordinal)

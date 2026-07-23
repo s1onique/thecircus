@@ -1,5 +1,16 @@
 module Circus.Tooling.Tests.FSharpDiagnostics.RepairEpisodes.CaptureBindingTests
 
+// =============================================================================
+// Strict capture-binding tests
+// =============================================================================
+//
+// Tests cover the public ``bindCapture`` entry point and the internal
+// strict ``readCaptureManifest`` reader.  Foundations for the test
+// scaffolding are shared with the existing FSharpDiagnostics tests:
+//   * actual on-disk SHA-256 computed via ``SHA256.HashData``,
+//   * UTF-8 written without BOM,
+//   * real temporary files and directories.
+
 open Expecto
 open System
 open System.IO
@@ -51,6 +62,9 @@ let private canonicalCorpus (root: string) =
 let private ensureDir (path: string) =
     Directory.CreateDirectory path |> ignore
 
+/// Write a complete capture manifest that includes every required field the
+/// strict reader expects.  Fields that are semantically optional are
+/// emitted as explicit JSON ``null`` so absent-vs-null remains testable.
 let private writeMinimalCaptureManifest
     (captureDir: string)
     (captureId: string)
@@ -71,12 +85,25 @@ let private writeMinimalCaptureManifest
         + ",\"raw_artifacts\":["
         + raw
         + "]"
+        + ",\"command\":null"
+        + ",\"working_directory\":null"
         + ",\"repository_commit_oid\":\""
         + commitOid
         + "\""
         + ",\"repository_tree_oid\":\""
         + treeOid
         + "\""
+        + ",\"working_tree_state\":null"
+        + ",\"source_root_aliases\":[]"
+        + ",\"dotnet_sdk_version\":null"
+        + ",\"msbuild_version\":null"
+        + ",\"fsharp_compiler_version\":null"
+        + ",\"operating_system\":null"
+        + ",\"architecture\":null"
+        + ",\"culture\":null"
+        + ",\"started_at\":null"
+        + ",\"completed_at\":null"
+        + ",\"exit_code\":null"
         + ",\"metadata_gaps\":[]}"
     writeAllText (Path.Combine(captureDir, "capture.json")) text
 
@@ -122,7 +149,8 @@ let private writeOccurrences
     : unit =
     let normalized = Path.Combine(canonicalCorpus root, normalizedCorpusRelativeSubdir)
     ensureDir normalized
-    let text = String.concat "\n" lines + "\n"
+    let text =
+        if List.isEmpty lines then "" else String.concat "\n" lines + "\n"
     writeAllText (Path.Combine(normalized, occurrencesFile)) text
 
 let private emptyOccurrences (root: string) =
@@ -133,14 +161,6 @@ let private sha256OfBytes (bytes: byte[]) : string =
     for b in (SHA256.HashData(bytes)) do
         sb.Append(b.ToString("x2", System.Globalization.CultureInfo.InvariantCulture)) |> ignore
     sb.ToString()
-
-let private writeRawArtifact
-    (captureDir: string)
-    (name: string)
-    (bytes: byte[])
-    = let fullPath = Path.Combine(captureDir, name)
-      writeBytes fullPath bytes
-      fullPath
 
 let private validCommitOid = "1111111111111111111111111111111111111111"
 let private validTreeOid = "2222222222222222222222222222222222222222"
@@ -344,7 +364,6 @@ let tests =
               let root = newTempDir ()
               try
                   emptyOccurrences root
-                  // No capture directory created.
                   let request : CaptureBindingRequest =
                       { CaptureId = captureId
                         ResolvedCommitOid = validCommitOid
@@ -405,10 +424,16 @@ let tests =
                       + captureId
                       + "\",\"capture_kind\":\"binlog\""
                       + ",\"raw_artifacts\":[\"art.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
                       + ",\"repository_commit_oid\":null"
                       + ",\"repository_tree_oid\":\""
                       + validTreeOid
                       + "\""
+                      + ",\"working_tree_state\":null,\"source_root_aliases\":[]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
                       + ",\"metadata_gaps\":[]}"
                   writeAllText (Path.Combine(captureDir, "capture.json")) text
                   writeArtifactManifest
@@ -483,10 +508,16 @@ let tests =
                       + captureId
                       + "\",\"capture_kind\":\"binlog\""
                       + ",\"raw_artifacts\":[\"art.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
                       + ",\"repository_commit_oid\":\""
                       + validCommitOid
                       + "\""
                       + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null,\"source_root_aliases\":[]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
                       + ",\"metadata_gaps\":[]}"
                   writeAllText (Path.Combine(captureDir, "capture.json")) text
                   writeArtifactManifest
@@ -720,7 +751,6 @@ let tests =
                       validCommitOid
                       validTreeOid
                       [ "art.binlog" ]
-                  // No artifact manifest entry for this file.
                   writeArtifactManifest root []
                   emptyOccurrences root
                   let request : CaptureBindingRequest =
@@ -890,7 +920,6 @@ let tests =
                       validCommitOid
                       validTreeOid
                       [ "art.binlog" ]
-                  // Manifest records 5 bytes but file has 3.
                   writeArtifactManifest
                       root
                       [ (canonical, "raw", 5L, sha256OfBytes bytes, captureId, "present") ]
@@ -902,7 +931,8 @@ let tests =
                         ExpectedTreeOid = None }
                   let r = bindCapture root request
                   match r with
-                  | Result.Error (RawArtifactLengthMismatch (_, expected, actual)) ->
+                  | Result.Error (RawArtifactLengthMismatch (canonical', expected, actual)) ->
+                      Expect.equal canonical' canonical "canonical"
                       Expect.equal expected 5L "expected"
                       Expect.equal actual 3L "actual"
                   | _ -> failwithf "expected RawArtifactLengthMismatch"
@@ -939,7 +969,8 @@ let tests =
                         ExpectedTreeOid = None }
                   let r = bindCapture root request
                   match r with
-                  | Result.Error (RawArtifactHashMismatch (_, expected, actual)) ->
+                  | Result.Error (RawArtifactHashMismatch (canonical', expected, actual)) ->
+                      Expect.equal canonical' canonical "canonical"
                       Expect.equal expected bogus "expected"
                       Expect.equal actual (sha256OfBytes bytes) "actual"
                   | _ -> failwithf "expected RawArtifactHashMismatch"
@@ -964,7 +995,6 @@ let tests =
                       validCommitOid
                       validTreeOid
                       [ "art.binlog" ]
-                  // Two lines: one valid record, then a malformed JSON record.
                   let goodLine =
                       "{\"schema_version\":\""
                       + ArtifactManifestSchemaVersion
@@ -994,7 +1024,7 @@ let tests =
                         ExpectedTreeOid = None }
                   let r = bindCapture root request
                   match r with
-                  | Result.Error (ArtifactManifestReadFailed (_, line, _)) ->
+                  | Result.Error (ArtifactManifestReadFailed (_canonical, line, _)) ->
                       Expect.equal line 2 "line number"
                   | _ -> failwithf "expected ArtifactManifestReadFailed"
               finally
@@ -1153,16 +1183,10 @@ let tests =
                   match r with
                   | Result.Ok bound ->
                       Expect.equal (List.length bound.RawArtifacts) 3 "three raw artifacts"
-                      // Compare lexicographic order on the trailing canonical
-                      // path.  Use EndsWith to remain path-separator agnostic.
-                      let labels =
-                          bound.RawArtifacts
-                          |> List.map (fun a ->
-                              if a.CanonicalPath.EndsWith("/a.binlog") then "a"
-                              elif a.CanonicalPath.EndsWith("/m.binlog") then "m"
-                              elif a.CanonicalPath.EndsWith("/z.binlog") then "z"
-                              else failwithf "unexpected path: %s" a.CanonicalPath)
-                      Expect.equal labels [ "a"; "m"; "z" ] "sorted by canonical path"
+                      Expect.equal
+                          (List.map (fun a -> Path.GetFileName a.CanonicalPath) bound.RawArtifacts)
+                          [ "a.binlog"; "m.binlog"; "z.binlog" ]
+                          "sorted by canonical path"
                   | Result.Error f -> failwithf "expected Ok, got %A" f
               finally
                   cleanup root
@@ -1205,6 +1229,522 @@ let tests =
                           bound.Occurrences |> List.map (fun o -> o.EventOrdinal)
                       Expect.equal ordinals [ 1L; 2L; 3L ] "ordinals in order"
                   | Result.Error f -> failwithf "expected Ok, got %A" f
+              finally
+                  cleanup root
+          }
+
+          // 29. Returned canonical path is repository-relative.
+          test "returned canonical path is repository-relative" {
+              let root, _ = makeValidCapture captureId [ ("build.binlog", [| 0x01uy |]) ]
+              try
+                  let request : CaptureBindingRequest =
+                      { CaptureId = captureId
+                        ResolvedCommitOid = validCommitOid
+                        ResolvedTreeOid = validTreeOid
+                        ExpectedTreeOid = None }
+                  let r = bindCapture root request
+                  match r with
+                  | Result.Ok bound ->
+                      let canonical = (List.head bound.RawArtifacts).CanonicalPath
+                      Expect.isTrue (canonical.StartsWith "factory/evidence/fsharp-diagnostics") "starts with canonical root"
+                      Expect.isFalse (canonical.StartsWith root) "not prefixed with repoRoot"
+                  | Result.Error f -> failwithf "expected Ok, got %A" f
+              finally
+                  cleanup root
+          }
+
+          // 30. Returned record does not contain repoRoot.
+          test "returned record does not contain repoRoot" {
+              let root, _ = makeValidCapture captureId [ ("build.binlog", [| 0x01uy |]) ]
+              try
+                  let request : CaptureBindingRequest =
+                      { CaptureId = captureId
+                        ResolvedCommitOid = validCommitOid
+                        ResolvedTreeOid = validTreeOid
+                        ExpectedTreeOid = None }
+                  let r = bindCapture root request
+                  match r with
+                  | Result.Ok bound ->
+                      for raw in bound.RawArtifacts do
+                          Expect.isFalse (raw.CanonicalPath.Contains root) "no repoRoot prefix"
+                  | Result.Error f -> failwithf "expected Ok, got %A" f
+              finally
+                  cleanup root
+          }
+
+          // 31. Equivalent roots produce identical BoundRawArtifact records.
+          test "equivalent roots produce identical BoundRawArtifact records" {
+              let buildValid () =
+                  let r = newTempDir ()
+                  let c = captureDirRoot r captureId
+                  ensureDir c
+                  let bytes = [| 0xCAuy; 0xFEuy; 0xBAuy; 0xBEuy |]
+                  writeBytes (Path.Combine(c, "build.binlog")) bytes
+                  let canonical =
+                      canonicalRootRelative + "/corpus/raw/" + captureId + "/build.binlog"
+                  writeMinimalCaptureManifest
+                      c
+                      captureId
+                      validCommitOid
+                      validTreeOid
+                      [ "build.binlog" ]
+                  writeArtifactManifest
+                      r
+                      [ (canonical, "raw", 4L, sha256OfBytes bytes, captureId, "present") ]
+                  emptyOccurrences r
+                  r
+              let root1 = buildValid ()
+              let root2 = buildValid ()
+              try
+                  let req : CaptureBindingRequest =
+                      { CaptureId = captureId
+                        ResolvedCommitOid = validCommitOid
+                        ResolvedTreeOid = validTreeOid
+                        ExpectedTreeOid = None }
+                  let r1 = bindCapture root1 req
+                  let r2 = bindCapture root2 req
+                  match r1, r2 with
+                  | Result.Ok b1, Result.Ok b2 ->
+                      Expect.equal b1.RawArtifacts b2.RawArtifacts "raw artifacts equal"
+                  | _ -> failwithf "expected both Ok"
+              finally
+                  cleanup root1
+                  cleanup root2
+          }
+
+          // 32. Raw-file symlink rejected.
+          test "raw-file symlink rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let srcPath = Path.Combine(captureDir, "real.binlog")
+                  let linkPath = Path.Combine(captureDir, "link.binlog")
+                  let bytes = [| 0x01uy; 0x02uy |]
+                  writeBytes srcPath bytes
+                  File.CreateSymbolicLink(linkPath, srcPath) |> ignore
+                  let canonical =
+                      canonicalRootRelative + "/corpus/raw/" + captureId + "/link.binlog"
+                  writeMinimalCaptureManifest
+                      captureDir
+                      captureId
+                      validCommitOid
+                      validTreeOid
+                      [ "link.binlog" ]
+                  writeArtifactManifest
+                      root
+                      [ (canonical, "raw", 2L, sha256OfBytes bytes, captureId, "present") ]
+                  emptyOccurrences root
+                  let request : CaptureBindingRequest =
+                      { CaptureId = captureId
+                        ResolvedCommitOid = validCommitOid
+                        ResolvedTreeOid = validTreeOid
+                        ExpectedTreeOid = None }
+                  let r = bindCapture root request
+                  match r with
+                  | Result.Error (RawArtifactPathInvalid _) -> ()
+                  | _ -> failwithf "expected RawArtifactPathInvalid"
+              finally
+                  cleanup root
+          }
+
+          // 33. Intermediate-directory symlink rejected.
+          test "intermediate-directory symlink rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let realSub = Path.Combine(root, "realsub")
+                  ensureDir realSub
+                  let linkSub = Path.Combine(captureDir, "linksub")
+                  File.CreateSymbolicLink(linkSub, realSub) |> ignore
+                  let bytes = [| 0x01uy |]
+                  let linkFile = Path.Combine(linkSub, "art.binlog")
+                  writeBytes linkFile bytes
+                  let canonical =
+                      canonicalRootRelative + "/corpus/raw/" + captureId + "/linksub/art.binlog"
+                  writeMinimalCaptureManifest
+                      captureDir
+                      captureId
+                      validCommitOid
+                      validTreeOid
+                      [ "linksub/art.binlog" ]
+                  writeArtifactManifest
+                      root
+                      [ (canonical, "raw", 1L, sha256OfBytes bytes, captureId, "present") ]
+                  emptyOccurrences root
+                  let request : CaptureBindingRequest =
+                      { CaptureId = captureId
+                        ResolvedCommitOid = validCommitOid
+                        ResolvedTreeOid = validTreeOid
+                        ExpectedTreeOid = None }
+                  let r = bindCapture root request
+                  match r with
+                  | Result.Error (RawArtifactPathInvalid _) -> ()
+                  | _ -> failwithf "expected RawArtifactPathInvalid"
+              finally
+                  cleanup root
+          }
+
+          // 34. Invalid artifact-manifest UTF-8 rejected.
+          test "invalid artifact-manifest UTF-8 rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let bytes = [| 0x01uy |]
+                  writeBytes (Path.Combine(captureDir, "art.binlog")) bytes
+                  writeMinimalCaptureManifest
+                      captureDir
+                      captureId
+                      validCommitOid
+                      validTreeOid
+                      [ "art.binlog" ]
+                  let normalizedDir = Path.Combine(canonicalCorpus root, normalizedCorpusRelativeSubdir)
+                  ensureDir normalizedDir
+                  let bad = Path.Combine(normalizedDir, artifactsManifestFile)
+                  // 0xFF 0xFE 0xFD are not valid UTF-8 leading bytes.
+                  writeBytes bad [| 0xFFuy; 0xFEuy; 0xFDuy |]
+                  emptyOccurrences root
+                  let request : CaptureBindingRequest =
+                      { CaptureId = captureId
+                        ResolvedCommitOid = validCommitOid
+                        ResolvedTreeOid = validTreeOid
+                        ExpectedTreeOid = None }
+                  let r = bindCapture root request
+                  match r with
+                  | Result.Error (ArtifactManifestReadFailed _) -> ()
+                  | _ -> failwithf "expected ArtifactManifestReadFailed"
+              finally
+                  cleanup root
+          }
+
+          // 35. Artifact-manifest BOM rejected.
+          test "artifact-manifest BOM rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let bytes = [| 0x01uy |]
+                  writeBytes (Path.Combine(captureDir, "art.binlog")) bytes
+                  writeMinimalCaptureManifest
+                      captureDir
+                      captureId
+                      validCommitOid
+                      validTreeOid
+                      [ "art.binlog" ]
+                  let canonical =
+                      canonicalRootRelative + "/corpus/raw/" + captureId + "/art.binlog"
+                  let line =
+                      "{\"schema_version\":\""
+                      + ArtifactManifestSchemaVersion
+                      + "\",\"canonical_path\":"
+                      + escapeJsonString canonical
+                      + ",\"original_path\":"
+                      + escapeJsonString canonical
+                      + ",\"artifact_class\":\"raw\""
+                      + ",\"authority\":\"canonical_corpus\""
+                      + ",\"status\":\"present\""
+                      + ",\"media_type\":\"application/octet-stream\""
+                      + ",\"byte_length\":1"
+                      + ",\"sha256\":"
+                      + escapeJsonString (sha256OfBytes bytes)
+                      + ",\"capture_id\":"
+                      + escapeJsonString captureId
+                      + ",\"supersedes\":null,\"superseded_by\":null,\"metadata_gaps\":[]}"
+                  let text = utf8NoBom.GetBytes(line)
+                  let bom : byte[] = [| 0xEFuy; 0xBBuy; 0xBFuy |]
+                  let combined =
+                      Array.append (Array.append bom text) [| 0x0Auy |]
+                  let normalizedDir = Path.Combine(canonicalCorpus root, normalizedCorpusRelativeSubdir)
+                  ensureDir normalizedDir
+                  writeBytes (Path.Combine(normalizedDir, artifactsManifestFile)) combined
+                  emptyOccurrences root
+                  let request : CaptureBindingRequest =
+                      { CaptureId = captureId
+                        ResolvedCommitOid = validCommitOid
+                        ResolvedTreeOid = validTreeOid
+                        ExpectedTreeOid = None }
+                  let r = bindCapture root request
+                  match r with
+                  | Result.Error (ArtifactManifestMissing _) -> ()
+                  | _ -> failwithf "expected ArtifactManifestMissing"
+              finally
+                  cleanup root
+          }
+
+          // 36. Artifact-manifest NUL rejected.
+          test "artifact-manifest NUL rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let bytes = [| 0x01uy |]
+                  writeBytes (Path.Combine(captureDir, "art.binlog")) bytes
+                  writeMinimalCaptureManifest
+                      captureDir
+                      captureId
+                      validCommitOid
+                      validTreeOid
+                      [ "art.binlog" ]
+                  let canonical =
+                      canonicalRootRelative + "/corpus/raw/" + captureId + "/art.binlog"
+                  let line =
+                      "{\"schema_version\":\""
+                      + ArtifactManifestSchemaVersion
+                      + "\",\"canonical_path\":"
+                      + escapeJsonString canonical
+                      + ",\"original_path\":"
+                      + escapeJsonString canonical
+                      + ",\"artifact_class\":\"raw\""
+                      + ",\"authority\":\"canonical_corpus\""
+                      + ",\"status\":\"present\""
+                      + ",\"media_type\":\"application/octet-stream\""
+                      + ",\"byte_length\":1"
+                      + ",\"sha256\":"
+                      + escapeJsonString (sha256OfBytes bytes)
+                      + ",\"capture_id\":"
+                      + escapeJsonString captureId
+                      + ",\"supersedes\":null,\"superseded_by\":null,\"metadata_gaps\":[]}"
+                  let bytes2 = Array.append (utf8NoBom.GetBytes(line)) [| 0x00uy |]
+                  let normalizedDir = Path.Combine(canonicalCorpus root, normalizedCorpusRelativeSubdir)
+                  ensureDir normalizedDir
+                  writeBytes (Path.Combine(normalizedDir, artifactsManifestFile)) bytes2
+                  emptyOccurrences root
+                  let request : CaptureBindingRequest =
+                      { CaptureId = captureId
+                        ResolvedCommitOid = validCommitOid
+                        ResolvedTreeOid = validTreeOid
+                        ExpectedTreeOid = None }
+                  let r = bindCapture root request
+                  match r with
+                  | Result.Error (ArtifactManifestReadFailed _) -> ()
+                  | _ -> failwithf "expected ArtifactManifestReadFailed"
+              finally
+                  cleanup root
+          }
+
+          // 37. Artifact-manifest schema mismatch rejected.
+          test "artifact-manifest schema mismatch rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let bytes = [| 0x01uy |]
+                  writeBytes (Path.Combine(captureDir, "art.binlog")) bytes
+                  writeMinimalCaptureManifest
+                      captureDir
+                      captureId
+                      validCommitOid
+                      validTreeOid
+                      [ "art.binlog" ]
+                  let canonical =
+                      canonicalRootRelative + "/corpus/raw/" + captureId + "/art.binlog"
+                  let line =
+                      "{\"schema_version\":\"wrong-version\""
+                      + ",\"canonical_path\":"
+                      + escapeJsonString canonical
+                      + ",\"original_path\":"
+                      + escapeJsonString canonical
+                      + ",\"artifact_class\":\"raw\""
+                      + ",\"authority\":\"canonical_corpus\""
+                      + ",\"status\":\"present\""
+                      + ",\"media_type\":\"application/octet-stream\""
+                      + ",\"byte_length\":1"
+                      + ",\"sha256\":"
+                      + escapeJsonString (sha256OfBytes bytes)
+                      + ",\"capture_id\":"
+                      + escapeJsonString captureId
+                      + ",\"supersedes\":null,\"superseded_by\":null,\"metadata_gaps\":[]}"
+                  let normalizedDir = Path.Combine(canonicalCorpus root, normalizedCorpusRelativeSubdir)
+                  ensureDir normalizedDir
+                  writeAllText (Path.Combine(normalizedDir, artifactsManifestFile)) (line + "\n")
+                  emptyOccurrences root
+                  let request : CaptureBindingRequest =
+                      { CaptureId = captureId
+                        ResolvedCommitOid = validCommitOid
+                        ResolvedTreeOid = validTreeOid
+                        ExpectedTreeOid = None }
+                  let r = bindCapture root request
+                  match r with
+                  | Result.Error (ArtifactManifestReadFailed (_canonical, lineNo, _)) ->
+                      Expect.equal lineNo 1 "line number"
+                  | _ -> failwithf "expected ArtifactManifestReadFailed"
+              finally
+                  cleanup root
+          }
+
+          // ---- Capture-manifest strictness tests ----
+          // These tests exercise the strict ``readCaptureManifest`` reader
+          // directly.  They prove the reader rejects malformed input that
+          // the foundation ``Manifest.readCaptureManifest`` reader would
+          // silently accept.
+
+          test "capture-manifest strictness: duplicate property rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":\""
+                      + captureId
+                      + "\",\"capture_id\":\"other\""
+                      + ",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null,\"source_root_aliases\":[]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.DuplicateField (_, _, field)) ->
+                      Expect.equal field "capture_id" "duplicate field name"
+                  | _ -> failwithf "expected DuplicateField"
+              finally
+                  cleanup root
+          }
+
+          test "capture-manifest strictness: escaped-equivalent duplicate property rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":\""
+                      + captureId
+                      + "\",\"\\u0063apture_id\":\"other\""
+                      + ",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null,\"source_root_aliases\":[]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.DuplicateField (_, _, _)) -> ()
+                  | _ -> failwithf "expected DuplicateField"
+              finally
+                  cleanup root
+          }
+
+          test "capture-manifest strictness: unknown property rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":\""
+                      + captureId
+                      + "\",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null,\"source_root_aliases\":[]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]"
+                      + ",\"extra_field\":\"oops\"}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.UnknownField (_p, _l, field)) ->
+                      Expect.equal field "extra_field" "unknown field name"
+                  | _ -> failwithf "expected UnknownField"
+              finally
+                  cleanup root
+          }
+
+          test "capture-manifest strictness: wrong JSON kind rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\""
+                      + CaptureManifestSchemaVersion
+                      + "\",\"capture_id\":42"
+                      + ",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null,\"source_root_aliases\":[]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.WrongJsonKind (_p, _l, field)) ->
+                      Expect.equal field "capture_id" "wrong-kind field"
+                  | _ -> failwithf "expected WrongJsonKind"
+              finally
+                  cleanup root
+          }
+
+          test "capture-manifest strictness: invalid UTF-8 rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  writeBytes (Path.Combine(captureDir, "capture.json")) [| 0xFFuy; 0xFEuy; 0xFDuy |]
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.InvalidByteSequence _) -> ()
+                  | _ -> failwithf "expected InvalidByteSequence"
+              finally
+                  cleanup root
+          }
+
+          test "capture-manifest strictness: wrong schema version rejected" {
+              let root = newTempDir ()
+              try
+                  let captureDir = captureDirRoot root captureId
+                  ensureDir captureDir
+                  let text =
+                      "{\"schema_version\":\"wrong-version\""
+                      + ",\"capture_id\":\""
+                      + captureId
+                      + "\",\"capture_kind\":\"binlog\""
+                      + ",\"raw_artifacts\":[\"x.binlog\"]"
+                      + ",\"command\":null,\"working_directory\":null"
+                      + ",\"repository_commit_oid\":null"
+                      + ",\"repository_tree_oid\":null"
+                      + ",\"working_tree_state\":null,\"source_root_aliases\":[]"
+                      + ",\"dotnet_sdk_version\":null,\"msbuild_version\":null"
+                      + ",\"fsharp_compiler_version\":null"
+                      + ",\"operating_system\":null,\"architecture\":null,\"culture\":null"
+                      + ",\"started_at\":null,\"completed_at\":null,\"exit_code\":null"
+                      + ",\"metadata_gaps\":[]}"
+                  writeAllText (Path.Combine(captureDir, "capture.json")) text
+                  let r = readCaptureManifest (Path.Combine(captureDir, "capture.json"))
+                  match r with
+                  | Result.Error (CaptureManifestReadFailure.SchemaVersionMismatch (_p, _l, actual)) ->
+                      Expect.equal actual "wrong-version" "schema version"
+                  | _ -> failwithf "expected SchemaVersionMismatch"
               finally
                   cleanup root
           } ]
