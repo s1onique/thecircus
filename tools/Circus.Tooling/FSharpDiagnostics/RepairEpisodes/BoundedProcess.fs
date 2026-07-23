@@ -22,14 +22,14 @@ open System.Threading.Tasks
 // -----------------------------------------------------------------------------
 
 /// Resource limits for a bounded process execution.
-type BoundedProcessLimits = {
+type public BoundedProcessLimits = {
     Timeout: TimeSpan
     StdoutLimitBytes: int
     StderrLimitBytes: int
 }
 
 /// A request to run a process with bounded resources.
-type BoundedProcessRequest = {
+type public BoundedProcessRequest = {
     Executable: string
     WorkingDirectory: string
     Arguments: string list
@@ -38,52 +38,24 @@ type BoundedProcessRequest = {
 }
 
 /// Successful process completion with captured output.
-type BoundedProcessSuccess = {
+type public BoundedProcessSuccess = {
     ExitCode: int
     Stdout: byte array
     Stderr: byte array
 }
 
 /// Failure modes for bounded process execution.
-type BoundedProcessFailure =
+type public BoundedProcessFailure =
     | InvalidRequest of detail: string
     | LaunchFailed of executable: string * detail: string
     | TimedOut of timeout: TimeSpan
     | Cancelled
     | StdoutLimitExceeded of limitBytes: int
     | StderrLimitExceeded of limitBytes: int
-    | NonZeroExit of
-        exitCode: int *
-        stdout: byte array *
-        stderr: byte array
-    | WaitFailed of detail: string
+    | NonZeroExit of exitCode: int * stdout: byte array * stderr: byte array
+    | StdoutReaderFailed of detail: string
+    | StderrReaderFailed of detail: string
     | KillFailed of detail: string
-
-// -----------------------------------------------------------------------------
-// Internal types
-// -----------------------------------------------------------------------------
-
-/// Reader task result with bytes and fault state.
-type ReaderTaskResult = {
-    Bytes: byte array
-    IsOverflow: bool
-    IsCancelled: bool
-    IsFaulted: bool
-    FaultException: exn option
-}
-
-/// Terminal condition for process lifecycle.
-type TerminalCondition =
-    | ProcessExited
-    | Timeout
-    | CallerCancelled
-    | StdoutOverflow
-    | StderrOverflow
-    | StdoutCancelled
-    | StderrCancelled
-    | StdoutFaulted of exn
-    | StderrFaulted of exn
-    | WaitFaulted of exn
 
 // -----------------------------------------------------------------------------
 // Request validation
@@ -114,11 +86,18 @@ let private validateRequest (request: BoundedProcessRequest) : BoundedProcessFai
 // Bounded byte reader
 // -----------------------------------------------------------------------------
 
+/// Result of a bounded read operation.
+type ReadResult =
+    | Completed of bytes: byte array
+    | Overflow of bytes: byte array
+    | ReadCancelled
+    | ReadFailed of detail: string
+
 let private readBounded
     (stream: Stream)
     (limitBytes: int)
     (cancellationToken: CancellationToken)
-    : Task<ReaderTaskResult> =
+    : Task<ReadResult> =
     task {
         let bufferSize = min 4096 (max 1 (limitBytes + 1))
         let buffer = Array.zeroCreate<byte> bufferSize
@@ -145,16 +124,18 @@ let private readBounded
                             isOverflow <- true
 
             if cancellationToken.IsCancellationRequested then
-                return { Bytes = collected.ToArray(); IsOverflow = false; IsCancelled = true; IsFaulted = false; FaultException = None }
+                return ReadCancelled
             elif isOverflow then
-                return { Bytes = collected.ToArray(); IsOverflow = true; IsCancelled = false; IsFaulted = false; FaultException = None }
+                return Overflow(collected.ToArray())
             else
-                return { Bytes = collected.ToArray(); IsOverflow = false; IsCancelled = false; IsFaulted = false; FaultException = None }
+                return Completed(collected.ToArray())
         with
         | :? OperationCanceledException ->
-            return { Bytes = collected.ToArray(); IsOverflow = false; IsCancelled = true; IsFaulted = false; FaultException = None }
+            return ReadCancelled
+        | :? IOException as ex ->
+            return ReadFailed ex.Message
         | ex ->
-            return { Bytes = collected.ToArray(); IsOverflow = false; IsCancelled = false; IsFaulted = true; FaultException = Some ex }
+            return ReadFailed ex.Message
     }
 
 // -----------------------------------------------------------------------------
@@ -171,120 +152,139 @@ let private tryKill (proc: Process) : BoundedProcessFailure option =
     | :? InvalidOperationException as ex -> Some(KillFailed ex.Message)
 
 // -----------------------------------------------------------------------------
-// Helper: wait for task with timeout
+// Helper: unwrap Option (None -> fallback, Some x -> x)
 // -----------------------------------------------------------------------------
 
-let private awaitTask (t: Task) (timeoutMs: int) =
-    try t.Wait(timeoutMs) with _ -> false
-
-// -----------------------------------------------------------------------------
-// Helper: poll until a task completes (synchronous, no nested tasks)
-// -----------------------------------------------------------------------------
-
-let private pollForCompletion
-    (waitTask: Task)
-    (stdoutTask: Task<ReaderTaskResult>)
-    (stderrTask: Task<ReaderTaskResult>)
-    (timeoutCts: CancellationTokenSource)
-    (linkedCts: CancellationTokenSource)
-    (pollIntervalMs: int)
-    : TerminalCondition =
-    let mutable isComplete = false
-    let mutable result = Timeout
-
-    while not isComplete do
-        if linkedCts.IsCancellationRequested then
-            result <- CallerCancelled
-            isComplete <- true
-        elif timeoutCts.IsCancellationRequested then
-            result <- Timeout
-            isComplete <- true
-        elif stdoutTask.IsFaulted && not (isNull stdoutTask.Exception) then
-            result <- StdoutFaulted(stdoutTask.Exception.InnerException)
-            isComplete <- true
-        elif stdoutTask.IsCompleted && stdoutTask.Result.IsFaulted then
-            result <- StdoutFaulted(stdoutTask.Result.FaultException.Value)
-            isComplete <- true
-        elif stdoutTask.IsCompleted && stdoutTask.Result.IsCancelled then
-            result <- StdoutCancelled
-            isComplete <- true
-        elif stdoutTask.IsCompleted && stdoutTask.Result.IsOverflow then
-            result <- StdoutOverflow
-            isComplete <- true
-        elif stderrTask.IsFaulted && not (isNull stderrTask.Exception) then
-            result <- StderrFaulted(stderrTask.Exception.InnerException)
-            isComplete <- true
-        elif stderrTask.IsCompleted && stderrTask.Result.IsFaulted then
-            result <- StderrFaulted(stderrTask.Result.FaultException.Value)
-            isComplete <- true
-        elif stderrTask.IsCompleted && stderrTask.Result.IsCancelled then
-            result <- StderrCancelled
-            isComplete <- true
-        elif stderrTask.IsCompleted && stderrTask.Result.IsOverflow then
-            result <- StderrOverflow
-            isComplete <- true
-        elif waitTask.IsFaulted && not (isNull waitTask.Exception) then
-            result <- WaitFaulted(waitTask.Exception.InnerException)
-            isComplete <- true
-        elif waitTask.IsCompleted then
-            result <- ProcessExited
-            isComplete <- true
-        else
-            Thread.Sleep(pollIntervalMs)
-
-    result
-
-// -----------------------------------------------------------------------------
-// Helper: convert terminal condition to failure
-// -----------------------------------------------------------------------------
-
-let private terminalToFailure
-    (terminal: TerminalCondition)
-    (timeout: TimeSpan)
-    (stdoutLimit: int)
-    (stderrLimit: int)
-    : BoundedProcessFailure =
-    match terminal with
-    | Timeout -> TimedOut timeout
-    | CallerCancelled -> Cancelled
-    | StdoutOverflow -> StdoutLimitExceeded stdoutLimit
-    | StderrOverflow -> StderrLimitExceeded stderrLimit
-    | StdoutCancelled | StderrCancelled -> Cancelled
-    | StdoutFaulted exn | StderrFaulted exn | WaitFaulted exn -> WaitFailed exn.Message
-    | ProcessExited -> failwith "ProcessExited is not a failure"
-
-// -----------------------------------------------------------------------------
-// Helper: check if terminal condition requires kill
-// -----------------------------------------------------------------------------
-
-let private needsKill (terminal: TerminalCondition) =
-    match terminal with
-    | Timeout | StdoutOverflow | StderrOverflow | StdoutCancelled | StderrCancelled
-    | StdoutFaulted _ | StderrFaulted _ | WaitFaulted _ -> true
-    | CallerCancelled | ProcessExited -> false
-
-// -----------------------------------------------------------------------------
-// Helper: unwrap Option (None -> false, Some x -> true)
-// -----------------------------------------------------------------------------
-
-let private ( |? ) (opt: 'a option) (defaultValue: 'a) : 'a =
+let private ( |?> ) (opt: BoundedProcessFailure option) (fallback: BoundedProcessFailure) : BoundedProcessFailure =
     match opt with
     | Some v -> v
-    | None -> defaultValue
+    | None -> fallback
 
 // -----------------------------------------------------------------------------
-// Process runner (internal async helper)
+// Helper: start process and return launch result
 // -----------------------------------------------------------------------------
 
-let private runAsync
+let private startProcess
+    (startInfo: ProcessStartInfo)
+    : Result<Process, BoundedProcessFailure> =
+    try
+        let proc = new Process()
+        proc.StartInfo <- startInfo
+        if proc.Start() then Ok(proc)
+        else Error(LaunchFailed(startInfo.FileName, "Start returned false"))
+    with
+    | :? System.ComponentModel.Win32Exception as ex -> Error(LaunchFailed(startInfo.FileName, ex.Message))
+    | :? System.InvalidOperationException as ex -> Error(LaunchFailed(startInfo.FileName, ex.Message))
+    | :? System.IO.FileNotFoundException as ex -> Error(LaunchFailed(startInfo.FileName, ex.Message))
+    | :? System.IO.DirectoryNotFoundException as ex -> Error(LaunchFailed(startInfo.FileName, ex.Message))
+
+// -----------------------------------------------------------------------------
+// Private execution helper
+// -----------------------------------------------------------------------------
+
+let private runWithProcess
+    (request: BoundedProcessRequest)
+    (proc: Process)
+    (cancellationToken: CancellationToken)
+    : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
+    task {
+        proc.StandardInput.Close()
+
+        // Link cancellation token with timeout
+        use timeoutCts = new CancellationTokenSource(request.Limits.Timeout)
+        use linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token)
+
+        // Start reader tasks
+        let stdoutTask = readBounded proc.StandardOutput.BaseStream request.Limits.StdoutLimitBytes linkedCts.Token
+        let stderrTask = readBounded proc.StandardError.BaseStream request.Limits.StderrLimitBytes linkedCts.Token
+        let waitTask = proc.WaitForExitAsync(linkedCts.Token)
+
+        // Race all tasks using Task.WhenAny
+        let! _completedTask =
+            Task.WhenAny(
+                Task.WhenAll(stdoutTask, stderrTask) :> Task,
+                waitTask
+            )
+
+        // Determine terminal condition BEFORE awaiting
+        let terminalFailure =
+            if timeoutCts.IsCancellationRequested then
+                Some(TimedOut request.Limits.Timeout)
+            elif linkedCts.IsCancellationRequested then
+                Some BoundedProcessFailure.Cancelled
+            else
+                None
+
+        // If we have a terminal failure, kill and return
+        match terminalFailure with
+        | Some failure ->
+            let killResult = tryKill proc
+            do! Task.Delay(100, CancellationToken.None)
+            return Error(killResult |?> failure)
+        | None ->
+            // Await all tasks
+            let! stdoutResult = stdoutTask
+            let! stderrResult = stderrTask
+            let exitCode = proc.ExitCode
+
+            // Analyze results
+            let stdoutFailure =
+                match stdoutResult with
+                | Overflow _ -> Some(StdoutLimitExceeded request.Limits.StdoutLimitBytes)
+                | ReadFailed d -> Some(StdoutReaderFailed d)
+                | ReadCancelled -> Some BoundedProcessFailure.Cancelled
+                | Completed _ -> None
+
+            let stderrFailure =
+                match stderrResult with
+                | Overflow _ -> Some(StderrLimitExceeded request.Limits.StderrLimitBytes)
+                | ReadFailed d -> Some(StderrReaderFailed d)
+                | ReadCancelled -> Some BoundedProcessFailure.Cancelled
+                | Completed _ -> None
+
+            // Return result
+            match stdoutFailure with
+            | Some f -> return Error f
+            | None ->
+                match stderrFailure with
+                | Some f -> return Error f
+                | None ->
+                    let stdoutBytes =
+                        match stdoutResult with
+                        | Completed b -> b
+                        | Overflow b -> b
+                        | _ -> [||]
+                    let stderrBytes =
+                        match stderrResult with
+                        | Completed b -> b
+                        | Overflow b -> b
+                        | _ -> [||]
+                    if exitCode = 0 then
+                        return Ok { ExitCode = exitCode; Stdout = stdoutBytes; Stderr = stderrBytes }
+                    else
+                        return Error(NonZeroExit(exitCode, stdoutBytes, stderrBytes))
+    }
+
+// -----------------------------------------------------------------------------
+// Process runner (public API - genuine async task)
+// -----------------------------------------------------------------------------
+
+let run
     (request: BoundedProcessRequest)
     (cancellationToken: CancellationToken)
     : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
-    // Step 1: validate
-    match validateRequest request with
-    | Some e -> Task.FromResult(Error e)
-    | None ->
-        // Step 2: setup process
+    task {
+        // Check validation
+        let validationResult = validateRequest request
+
+        // Check cancellation
+        let cancelledResult =
+            if cancellationToken.IsCancellationRequested then
+                Some BoundedProcessFailure.Cancelled
+            else
+                None
+
+        // Setup process start info
         let startInfo = ProcessStartInfo()
         startInfo.FileName <- request.Executable
         startInfo.WorkingDirectory <- request.WorkingDirectory
@@ -300,97 +300,19 @@ let private runAsync
         for key, value in request.Environment do
             startInfo.Environment.[key] <- value
 
-        let proc = new Process()
-        proc.StartInfo <- startInfo
+        // Start process
+        let launchResult = startProcess startInfo
 
-        // Step 3: start process
-        try
-            if not (proc.Start()) then
-                proc.Dispose()
-                Task.FromResult(Error(LaunchFailed(request.Executable, "Start returned false")))
-            else
-                // Step 4: start background tasks
-                proc.StandardInput.Close()
-                use timeoutCts = new CancellationTokenSource(request.Limits.Timeout)
-                use linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
-
-                let stdoutTask = readBounded proc.StandardOutput.BaseStream request.Limits.StdoutLimitBytes linkedCts.Token
-                let stderrTask = readBounded proc.StandardError.BaseStream request.Limits.StderrLimitBytes linkedCts.Token
-                let waitTask = proc.WaitForExitAsync()
-
-                // Step 5: poll for completion
-                let terminal = pollForCompletion waitTask stdoutTask stderrTask timeoutCts linkedCts 10
-
-                // Step 6: handle kill if needed
-                if needsKill terminal then
-                    let killResult = tryKill proc
-                    awaitTask waitTask 5000 |> ignore
-                    awaitTask stdoutTask 5000 |> ignore
-                    awaitTask stderrTask 5000 |> ignore
-                    proc.Dispose()
-                    let failure = killResult |? terminalToFailure terminal request.Limits.Timeout request.Limits.StdoutLimitBytes request.Limits.StderrLimitBytes
-                    Task.FromResult(Error failure)
-                else
-                    // Step 7: wait for all tasks
-                    if not proc.HasExited then
-                        awaitTask waitTask 5000 |> ignore
-                    awaitTask stdoutTask 5000 |> ignore
-                    awaitTask stderrTask 5000 |> ignore
-
-                    // Step 8: collect results
-                    let exitCode = if proc.HasExited then proc.ExitCode else 0
-
-                    let stdoutResult =
-                        if stdoutTask.IsCompleted then stdoutTask.Result
-                        elif stdoutTask.IsFaulted then
-                            { Bytes = [||]; IsOverflow = false; IsCancelled = false; IsFaulted = true;
-                              FaultException = if isNull stdoutTask.Exception then None else Some stdoutTask.Exception.InnerException }
-                        else
-                            { Bytes = [||]; IsOverflow = false; IsCancelled = false; IsFaulted = false; FaultException = None }
-
-                    let stderrResult =
-                        if stderrTask.IsCompleted then stderrTask.Result
-                        elif stderrTask.IsFaulted then
-                            { Bytes = [||]; IsOverflow = false; IsCancelled = false; IsFaulted = true;
-                              FaultException = if isNull stderrTask.Exception then None else Some stderrTask.Exception.InnerException }
-                        else
-                            { Bytes = [||]; IsOverflow = false; IsCancelled = false; IsFaulted = false; FaultException = None }
-
-                    let stdoutBytes = if stdoutResult.IsCancelled || stdoutResult.IsFaulted then [||] else stdoutResult.Bytes
-                    let stderrBytes = if stderrResult.IsCancelled || stderrResult.IsFaulted then [||] else stderrResult.Bytes
-
-                    // Step 9: cleanup
-                    try
-                        if not proc.HasExited then
-                            proc.Kill() |> ignore
-                        proc.Dispose()
-                    with _ -> ()
-
-                    // Step 10: return result
-                    if exitCode = 0 then
-                        Task.FromResult(Ok { ExitCode = exitCode; Stdout = stdoutBytes; Stderr = stderrBytes })
-                    else
-                        Task.FromResult(Error(NonZeroExit(exitCode, stdoutBytes, stderrBytes)))
-        with
-        | :? System.ComponentModel.Win32Exception as ex ->
-            proc.Dispose()
-            Task.FromResult(Error(LaunchFailed(request.Executable, ex.Message)))
-        | :? System.InvalidOperationException as ex ->
-            proc.Dispose()
-            Task.FromResult(Error(LaunchFailed(request.Executable, ex.Message)))
-        | :? System.IO.FileNotFoundException as ex ->
-            proc.Dispose()
-            Task.FromResult(Error(LaunchFailed(request.Executable, ex.Message)))
-        | :? System.IO.DirectoryNotFoundException as ex ->
-            proc.Dispose()
-            Task.FromResult(Error(LaunchFailed(request.Executable, ex.Message)))
-
-// -----------------------------------------------------------------------------
-// Process runner (public API)
-// -----------------------------------------------------------------------------
-
-let run
-    (request: BoundedProcessRequest)
-    (cancellationToken: CancellationToken)
-    : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
-    runAsync request cancellationToken
+        // Compute final result
+        match validationResult with
+        | Some e -> return Error e
+        | None ->
+            match cancelledResult with
+            | Some e -> return Error e
+            | None ->
+                match launchResult with
+                | Error e -> return Error e
+                | Ok proc ->
+                    use _proc = proc
+                    return! runWithProcess request proc cancellationToken
+    }

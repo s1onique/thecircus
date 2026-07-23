@@ -84,10 +84,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The test assembly needs access to ``internal`` failure-injection
-         hooks exposed by ``ProcessRunner``.  The hooks are functions, not
-         flags, so cross-test pollution is contained by ``resetInjections``
-         in the test file. -->
     <InternalsVisibleTo Include="Circus.Tooling.Tests" />
   </ItemGroup>
 
