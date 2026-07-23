@@ -72,6 +72,7 @@
     <Compile Include="FSharpDiagnostics\RepairEpisodes\CaptureBinding.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Engine.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Cli.fs" />
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\BoundedProcess.fs" />
     <Compile Include="FSharpDiagnostics\Cli.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
