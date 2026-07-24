@@ -28,16 +28,30 @@ open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 let private smokeTestFixture (label: string) (path: string) : unit =
     let psi = ProcessStartInfo()
     psi.FileName <- "dotnet"
-    psi.Arguments <- sprintf "fsi --exec \"%s\"" path
+    // Pass --smoke so sleep fixtures exit immediately. The flag is
+    // irrelevant for non-sleep fixtures; they ignore unknown args.
+    psi.Arguments <- sprintf "fsi --exec \"%s\" --smoke" path
     psi.UseShellExecute <- false
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
     psi.CreateNoWindow <- true
     use p = Process.Start(psi)
+    // Drain redirected stdout concurrently.  Reading only stderr after
+    // WaitForExit is a documented deadlock pattern when the child writes
+    // to a redirected pipe faster than the OS buffers free.
+    let stdoutDrain =
+        Task.Run(fun () ->
+            try
+                while not p.StandardOutput.EndOfStream do
+                    p.StandardOutput.Read() |> ignore
+            with
+            | _ -> ())
     if not (p.WaitForExit(30000)) then
         try p.Kill() with | _ -> ()
+        try stdoutDrain.Wait(5000) |> ignore with | _ -> ()
         failwithf "smoke test timed out for %s (%s)" label path
     let err = p.StandardError.ReadToEnd()
+    try stdoutDrain.Wait(5000) |> ignore with | _ -> ()
     if err.Contains("error FS") then
         failwithf "smoke test detected F# compile error in %s (%s): %s" label path err
 
@@ -94,11 +108,13 @@ let private createRawBothFixture (stdoutBytes: byte array) (stderrBytes: byte ar
     path
 
 /// Creates a fixture that sleeps for specified milliseconds and writes
-/// "done" to stdout afterwards.
+/// "done" to stdout afterwards. When the `--smoke` flag is passed (the
+/// smoke test path), the script exits immediately without sleeping so the
+/// BoundedProcess test alone owns the timing budget.
 let private createSleepFixture (ms: int) : string =
     let path = Path.Combine(Path.GetTempPath(), $"fixture-sleep-{Guid.NewGuid():N}.fsx")
     let content =
-        sprintf "open System\nopen System.Threading\nlet stdout = Console.OpenStandardOutput()\nThread.Sleep(%d)\nlet payload = System.Text.Encoding.UTF8.GetBytes(\"done\")\nstdout.Write(payload, 0, payload.Length)\nstdout.Flush()\n" ms
+        sprintf "open System\nopen System.Threading\nlet stdout = Console.OpenStandardOutput()\nlet isSmoke = fsi.CommandLineArgs |> Array.exists (fun a -> a = \"--smoke\")\nif not isSmoke then Thread.Sleep(%d)\nlet payload = System.Text.Encoding.UTF8.GetBytes(\"done\")\nstdout.Write(payload, 0, payload.Length)\nstdout.Flush()\n" ms
     File.WriteAllText(path, content)
     path
 
@@ -170,6 +186,13 @@ let private createAndSmoke (label: string) (create: unit -> string) : string =
     let path = create()
     smokeTestFixture label path
     path
+
+/// Helper to create a fixture without smoke testing. Used for the
+/// pre-cancellation test, where the test's purpose is to prove that
+/// production does NOT launch the child, so smoke-running the fixture
+/// would be wasteful and confounded with the test's own timing.
+let private createNoSmoke (create: unit -> string) : string =
+    create()
 
 /// Helper to make expected stdout bytes
 let private makeStdoutBytes (count: int) : byte array =
@@ -419,7 +442,10 @@ let tests =
           testTask "pre-cancelled token returns Cancelled" {
               let cts = new CancellationTokenSource()
               cts.Cancel()
-              let fixture = createAndSmoke "createSleepFixture" (fun () -> createSleepFixture 10000) // 10 seconds
+              // Intentionally NOT smoke-tested: the test asserts that
+              // production does not launch the child, so smoke-running
+              // the fixture would defeat the purpose and waste 10 seconds.
+              let fixture = createNoSmoke (fun () -> createSleepFixture 10000)
               let req = {
                   Executable = "dotnet"
                   WorkingDirectory = Path.GetTempPath()
@@ -493,3 +519,8 @@ let tests =
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
         ]
+    // Intrinsic sequencing: the canonical gate is deterministic without
+    // requiring an operator `--sequenced` flag, because the fixtures
+    // spawn heavyweight `dotnet fsi --exec` children that contend when
+    // run in parallel.
+    |> (fun t -> Test.Sequenced (SequenceMethod.Synchronous, t))
