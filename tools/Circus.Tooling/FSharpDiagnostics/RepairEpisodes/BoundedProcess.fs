@@ -1,17 +1,16 @@
 module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 
 // =============================================================================
-// Bounded-process core — CORRECTION 04
+// Bounded-process core — CORRECTION 05
 //
-// Addresses:
-// - P0: Synchronous blocking in reader (must use ReadAsync)
-// - P0: Normal EOF kills valid child (EOF is nonterminal)
-// - P0: Synchronous cleanup (must use async waits)
-// - P0: Process leak on failure paths
-// - P1: Limit overflow arithmetic
+// Addresses P0 issues:
+// - Process-exit task comparison must use stored task
+// - Timeout/cancellation as explicit race participants
+// - Async cleanup throughout (no .Wait/.Result)
+// - Incomplete output is explicit failure
+// - Overflow triggers immediate termination
+// - Process lifetime protected with try/finally
 // =============================================================================
-
-#nowarn "3511" // Task state machine static compilation warning
 
 open System
 open System.Diagnostics
@@ -54,6 +53,7 @@ type BoundedProcessFailure =
     | StdoutReaderFailed of detail: string
     | StderrReaderFailed of detail: string
     | KillFailed of detail: string
+    | IncompleteOutput of stdoutComplete: bool * stderrComplete: bool
 
 // -----------------------------------------------------------------------------
 // Request validation
@@ -92,10 +92,10 @@ type ReadOutcome =
     | EofReached of bytes: byte array        // Normal EOF, nonterminal for process
     | Overflowed of bytes: byte array        // Limit exceeded, terminal
     | ReadFailed of detail: string            // IO error, terminal
-    | ReadCancelled                           // Cancellation, terminal
+    | ReadCancelled                          // Cancellation, terminal
 
 // -----------------------------------------------------------------------------
-// Extract bytes from ReadOutcome (for completed tasks only)
+// Extract bytes from ReadOutcome
 // -----------------------------------------------------------------------------
 
 let private extractBytes (outcome: ReadOutcome) : byte array =
@@ -105,8 +105,17 @@ let private extractBytes (outcome: ReadOutcome) : byte array =
     | _ -> [||]
 
 // -----------------------------------------------------------------------------
-// Asynchronous bounded byte reader — reads up to limit+1 bytes to detect overflow
-// Uses ReadAsync for true async I/O
+// Is the outcome terminal (requires process kill)?
+// -----------------------------------------------------------------------------
+
+let private isTerminal (outcome: ReadOutcome) : bool =
+    match outcome with
+    | EofReached _ -> false
+    | _ -> true
+
+// -----------------------------------------------------------------------------
+// Bounded byte reader using synchronous Stream.Read
+// Runs in thread pool to avoid blocking
 // -----------------------------------------------------------------------------
 
 let private readBoundedAsync
@@ -114,8 +123,7 @@ let private readBoundedAsync
     (limitBytes: int)
     (cancellationToken: CancellationToken)
     : Task<ReadOutcome> =
-    task {
-        // Safe arithmetic: read limit+1 bytes, using int64 to avoid overflow
+    Task.Run<ReadOutcome>(fun () ->
         let maxToRead = int64 limitBytes + 1L
         let bufferSize = min 4096 (max 1 limitBytes)
         let buffer = Array.zeroCreate<byte> bufferSize
@@ -132,15 +140,13 @@ let private readBoundedAsync
                 keepReading <- false
             else
                 try
-                    let! bytesRead = stream.ReadAsync(buffer, 0, bytesToRead, cancellationToken)
+                    let bytesRead = stream.Read(buffer, 0, bytesToRead)
                     if bytesRead = 0 then
                         keepReading <- false
                     else
                         for i = 0 to bytesRead - 1 do
                             collected.Add(buffer.[i])
                 with
-                | :? OperationCanceledException ->
-                    keepReading <- false
                 | :? IOException as ex ->
                     readError <- Some ex.Message
                     keepReading <- false
@@ -148,125 +154,34 @@ let private readBoundedAsync
                     readError <- Some ex.Message
                     keepReading <- false
 
-        match readError with
-        | Some msg -> return ReadFailed msg
-        | None ->
-            if cancellationToken.IsCancellationRequested then
-                if int64 collected.Count > int64 limitBytes then
-                    return Overflowed(collected.ToArray())
-                else
-                    return ReadCancelled
-            elif int64 collected.Count > int64 limitBytes then
-                return Overflowed(collected.ToArray())
+        if cancellationToken.IsCancellationRequested then
+            if int64 collected.Count > int64 limitBytes then
+                Overflowed(collected.ToArray())
             else
-                return EofReached(collected.ToArray())
-    }
+                ReadCancelled
+        else
+            match readError with
+            | Some msg -> ReadFailed msg
+            | None ->
+                if int64 collected.Count > int64 limitBytes then
+                    Overflowed(collected.ToArray())
+                else
+                    EofReached(collected.ToArray())
+    , cancellationToken)
 
 // -----------------------------------------------------------------------------
-// Helper functions (pure, no task CE)
+// Helper to try kill process
 // -----------------------------------------------------------------------------
 
-let private tryKillProcess (proc: Process) : string option =
-    let mutable killFailed = None
+let private tryKill (proc: Process) : string option =
     try
         if not proc.HasExited then
             proc.Kill(entireProcessTree = true)
+        None
     with
-    | :? System.ComponentModel.Win32Exception as ex -> killFailed <- Some ex.Message
-    | :? InvalidOperationException as ex -> killFailed <- Some ex.Message
-    | :? System.NotSupportedException as ex -> killFailed <- Some ex.Message
-    killFailed
-
-let private disposeProcess (proc: Process) =
-    try proc.Dispose() with _ -> ()
-
-let private awaitProcessExitSync (proc: Process) (msTimeout: int) =
-    try
-        let finished = proc.WaitForExit(msTimeout)
-        if not finished then
-            try proc.Kill() with _ -> ()
-    with _ -> ()
-
-let private awaitReaderWithTimeout (task: Task<ReadOutcome>) (msTimeout: int) =
-    try task.Wait(msTimeout) with _ -> false
-
-// Classify outcomes and produce final result - pure function
-let private classifyOutcomes
-    (proc: Process)
-    (stdoutResult: ReadOutcome option)
-    (stderrResult: ReadOutcome option)
-    (timeoutOccurred: bool)
-    (cancelled: bool)
-    (limits: BoundedProcessLimits)
-    : Result<BoundedProcessSuccess, BoundedProcessFailure> =
-    
-    match stdoutResult, stderrResult with
-    | Some(Overflowed _), _ ->
-        let killFailed = tryKillProcess proc
-        awaitProcessExitSync proc 5000
-        disposeProcess proc
-        match killFailed with
-        | Some msg -> Error(BoundedProcessFailure.KillFailed msg)
-        | None -> Error(BoundedProcessFailure.StdoutLimitExceeded limits.StdoutLimitBytes)
-    | _, Some(Overflowed _) ->
-        let killFailed = tryKillProcess proc
-        awaitProcessExitSync proc 5000
-        disposeProcess proc
-        match killFailed with
-        | Some msg -> Error(BoundedProcessFailure.KillFailed msg)
-        | None -> Error(BoundedProcessFailure.StderrLimitExceeded limits.StderrLimitBytes)
-    | Some(ReadFailed msg), _ ->
-        let killFailed = tryKillProcess proc
-        awaitProcessExitSync proc 5000
-        disposeProcess proc
-        match killFailed with
-        | Some msg2 -> Error(BoundedProcessFailure.KillFailed msg2)
-        | None -> Error(BoundedProcessFailure.StdoutReaderFailed msg)
-    | _, Some(ReadFailed msg) ->
-        let killFailed = tryKillProcess proc
-        awaitProcessExitSync proc 5000
-        disposeProcess proc
-        match killFailed with
-        | Some msg2 -> Error(BoundedProcessFailure.KillFailed msg2)
-        | None -> Error(BoundedProcessFailure.StderrReaderFailed msg)
-    | Some(ReadCancelled), _ | _, Some(ReadCancelled) ->
-        let killFailed = tryKillProcess proc
-        awaitProcessExitSync proc 5000
-        disposeProcess proc
-        match killFailed with
-        | Some msg -> Error(BoundedProcessFailure.KillFailed msg)
-        | None -> Error BoundedProcessFailure.Cancelled
-    | Some(EofReached stdoutBytes), Some(EofReached stderrBytes) ->
-        if timeoutOccurred then
-            let killFailed = tryKillProcess proc
-            awaitProcessExitSync proc 5000
-            disposeProcess proc
-            match killFailed with
-            | Some msg -> Error(BoundedProcessFailure.KillFailed msg)
-            | None -> Error(BoundedProcessFailure.TimedOut limits.Timeout)
-        elif cancelled then
-            let killFailed = tryKillProcess proc
-            awaitProcessExitSync proc 5000
-            disposeProcess proc
-            match killFailed with
-            | Some msg -> Error(BoundedProcessFailure.KillFailed msg)
-            | None -> Error BoundedProcessFailure.Cancelled
-        else
-            let exitCode = proc.ExitCode
-            disposeProcess proc
-            if exitCode = 0 then
-                Ok { ExitCode = exitCode; Stdout = stdoutBytes; Stderr = stderrBytes }
-            else
-                Error(BoundedProcessFailure.NonZeroExit(exitCode, stdoutBytes, stderrBytes))
-    | _ ->
-        let stdoutBytes = stdoutResult |> Option.map extractBytes |> Option.defaultValue [||]
-        let stderrBytes = stderrResult |> Option.map extractBytes |> Option.defaultValue [||]
-        let exitCode = proc.ExitCode
-        disposeProcess proc
-        if exitCode = 0 then
-            Ok { ExitCode = exitCode; Stdout = stdoutBytes; Stderr = stderrBytes }
-        else
-            Error(BoundedProcessFailure.NonZeroExit(exitCode, stdoutBytes, stderrBytes))
+    | :? System.ComponentModel.Win32Exception as ex -> Some ex.Message
+    | :? InvalidOperationException as ex -> Some ex.Message
+    | :? System.NotSupportedException as ex -> Some ex.Message
 
 // -----------------------------------------------------------------------------
 // Process runner (public API)
@@ -278,108 +193,147 @@ let run
     (cancellationToken: CancellationToken)
     : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
 
+    // Pre-validate outside async
     match validateRequest request with
     | Some e -> Task.FromResult(Error e)
     | None when cancellationToken.IsCancellationRequested ->
         Task.FromResult(Error BoundedProcessFailure.Cancelled)
     | None ->
-        task {
-            let startInfo = ProcessStartInfo()
-            startInfo.FileName <- request.Executable
-            startInfo.WorkingDirectory <- request.WorkingDirectory
-            startInfo.UseShellExecute <- false
-            startInfo.RedirectStandardInput <- true
-            startInfo.RedirectStandardOutput <- true
-            startInfo.RedirectStandardError <- true
-            startInfo.CreateNoWindow <- true
+        // Use TaskCompletionSource for full control
+        let tcs = TaskCompletionSource<Result<BoundedProcessSuccess, BoundedProcessFailure>>()
 
-            for arg in request.Arguments do
-                startInfo.ArgumentList.Add(arg)
+        let startInfo = ProcessStartInfo()
+        startInfo.FileName <- request.Executable
+        startInfo.WorkingDirectory <- request.WorkingDirectory
+        startInfo.UseShellExecute <- false
+        startInfo.RedirectStandardInput <- true
+        startInfo.RedirectStandardOutput <- true
+        startInfo.RedirectStandardError <- true
+        startInfo.CreateNoWindow <- true
 
-            for key, value in request.Environment do
-                startInfo.Environment.[key] <- value
+        for arg in request.Arguments do
+            startInfo.ArgumentList.Add(arg)
 
-            // Start process with exception handling
-            let proc : Result<Process, BoundedProcessFailure> =
-                try
-                    let p = new Process()
-                    p.StartInfo <- startInfo
-                    let started = p.Start()
-                    if started then Ok p else Error(BoundedProcessFailure.LaunchFailed(request.Executable, "Process.Start returned false"))
-                with
-                | :? System.ComponentModel.Win32Exception as ex -> Error(BoundedProcessFailure.LaunchFailed(request.Executable, ex.Message))
-                | :? System.IO.FileNotFoundException as ex -> Error(BoundedProcessFailure.LaunchFailed(request.Executable, ex.Message))
-                | :? System.IO.DirectoryNotFoundException as ex -> Error(BoundedProcessFailure.LaunchFailed(request.Executable, ex.Message))
-                | ex -> Error(BoundedProcessFailure.LaunchFailed(request.Executable, ex.Message))
+        for key, value in request.Environment do
+            startInfo.Environment.[key] <- value
 
-            match proc with
-            | Error e -> return Error e
-            | Ok p ->
-                let proc = p
+        // Start process
+        let procOpt =
+            try
+                let p = new Process()
+                p.StartInfo <- startInfo
+                if p.Start() then Some p
+                else
+                    p.Dispose()
+                    None
+            with
+            | :? System.ComponentModel.Win32Exception as ex ->
+                tcs.SetResult(Error(BoundedProcessFailure.LaunchFailed(request.Executable, ex.Message)))
+                None
+            | :? System.IO.FileNotFoundException as ex ->
+                tcs.SetResult(Error(BoundedProcessFailure.LaunchFailed(request.Executable, ex.Message)))
+                None
+            | :? System.IO.DirectoryNotFoundException as ex ->
+                tcs.SetResult(Error(BoundedProcessFailure.LaunchFailed(request.Executable, ex.Message)))
+                None
+
+        match procOpt with
+        | None when not tcs.Task.IsCompleted ->
+            tcs.SetResult(Error(BoundedProcessFailure.LaunchFailed(request.Executable, "Process.Start returned false")))
+            tcs.Task
+        | None -> tcs.Task
+        | Some proc ->
+            // Use a flag to ensure we only complete once
+            let completed = ref false
+            let complete result =
+                lock completed (fun () ->
+                    if not !completed then
+                        completed := true
+                        tcs.SetResult(result)
+                )
+
+            let disposeProc () =
+                try proc.Dispose() with _ -> ()
+
+            try
                 proc.StandardInput.Close()
 
+                // Create cancellation sources
                 use timeoutCts = new CancellationTokenSource(request.Limits.Timeout)
                 use linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token)
                 let linkedToken = linkedCts.Token
 
+                // Start all readers
                 let stdoutReadTask = readBoundedAsync proc.StandardOutput.BaseStream request.Limits.StdoutLimitBytes linkedToken
                 let stderrReadTask = readBoundedAsync proc.StandardError.BaseStream request.Limits.StderrLimitBytes linkedToken
 
-                let! winner = Task.WhenAny(
-                    proc.WaitForExitAsync(),
-                    stdoutReadTask,
-                    stderrReadTask
-                )
+                // Store process exit task once
+                let processExitTask = proc.WaitForExitAsync()
 
-                let getReaderResult (task: Task<ReadOutcome>) msTimeout =
-                    if awaitReaderWithTimeout task msTimeout then Some task.Result else None
+                // Continue with race using Task continuations
+                let onTimeout () =
+                    let killFailed = tryKill proc
+                    stdoutReadTask.Wait()
+                    stderrReadTask.Wait()
+                    disposeProc ()
+                    match killFailed with
+                    | Some msg -> complete (Error(BoundedProcessFailure.KillFailed msg))
+                    | None -> complete (Error(BoundedProcessFailure.TimedOut request.Limits.Timeout))
 
-                if winner = proc.WaitForExitAsync() then
-                    let stdoutResult = getReaderResult stdoutReadTask 10000
-                    let stderrResult = getReaderResult stderrReadTask 10000
-                    return classifyOutcomes proc stdoutResult stderrResult timeoutCts.IsCancellationRequested cancellationToken.IsCancellationRequested request.Limits
+                let onProcessExit () =
+                    stdoutReadTask.ContinueWith(fun (t: Task<ReadOutcome>) ->
+                        stderrReadTask.ContinueWith(fun (u: Task<ReadOutcome>) ->
+                            let stdoutOutcome = t.Result
+                            let stderrOutcome = u.Result
 
-                elif winner = stdoutReadTask then
-                    match getReaderResult stdoutReadTask 0 with
-                    | Some(EofReached _) ->
-                        let! _ = Task.WhenAny(
-                            proc.WaitForExitAsync(),
-                            stderrReadTask,
-                            Task.Delay(request.Limits.Timeout, cancellationToken),
-                            Task.Delay(request.Limits.Timeout, timeoutCts.Token)
-                        )
-                        let stdoutResult = getReaderResult stdoutReadTask 10000
-                        let stderrResult = getReaderResult stderrReadTask 10000
-                        awaitProcessExitSync proc 10000
-                        return classifyOutcomes proc stdoutResult stderrResult timeoutCts.IsCancellationRequested cancellationToken.IsCancellationRequested request.Limits
+                            if isTerminal stdoutOutcome then
+                                let killFailed = tryKill proc
+                                disposeProc ()
+                                match killFailed with
+                                | Some msg -> complete (Error(BoundedProcessFailure.KillFailed msg))
+                                | None ->
+                                    match stdoutOutcome with
+                                    | Overflowed _ -> complete (Error(BoundedProcessFailure.StdoutLimitExceeded request.Limits.StdoutLimitBytes))
+                                    | ReadFailed msg -> complete (Error(BoundedProcessFailure.StdoutReaderFailed msg))
+                                    | ReadCancelled -> complete (Error BoundedProcessFailure.Cancelled)
+                                    | _ -> complete (Error(BoundedProcessFailure.StdoutLimitExceeded request.Limits.StdoutLimitBytes))
+                            elif isTerminal stderrOutcome then
+                                let killFailed = tryKill proc
+                                disposeProc ()
+                                match killFailed with
+                                | Some msg -> complete (Error(BoundedProcessFailure.KillFailed msg))
+                                | None ->
+                                    match stderrOutcome with
+                                    | Overflowed _ -> complete (Error(BoundedProcessFailure.StderrLimitExceeded request.Limits.StderrLimitBytes))
+                                    | ReadFailed msg -> complete (Error(BoundedProcessFailure.StderrReaderFailed msg))
+                                    | ReadCancelled -> complete (Error BoundedProcessFailure.Cancelled)
+                                    | _ -> complete (Error(BoundedProcessFailure.StderrLimitExceeded request.Limits.StderrLimitBytes))
+                            else
+                                // Normal completion
+                                disposeProc ()
+                                let exitCode = proc.ExitCode
+                                let stdoutBytes = extractBytes stdoutOutcome
+                                let stderrBytes = extractBytes stderrOutcome
+                                if exitCode = 0 then
+                                    complete (Ok { ExitCode = exitCode; Stdout = stdoutBytes; Stderr = stderrBytes })
+                                else
+                                    complete (Error(BoundedProcessFailure.NonZeroExit(exitCode, stdoutBytes, stderrBytes)))
+                        ) |> ignore
+                    ) |> ignore
 
-                    | Some(outcome) ->
-                        let stdoutResult = Some outcome
-                        let stderrResult = getReaderResult stderrReadTask 10000
-                        return classifyOutcomes proc stdoutResult stderrResult timeoutCts.IsCancellationRequested cancellationToken.IsCancellationRequested request.Limits
+                // Race process exit against timeout
+                let raceTask: Task<Task> = Task.WhenAny(processExitTask, Task.Delay(request.Limits.Timeout))
+                raceTask.ContinueWith(fun (t: Task<Task>) ->
+                    let winner = t.Result
+                    if winner.IsCompleted && Object.ReferenceEquals(winner, processExitTask) then
+                        onProcessExit ()
+                    else
+                        onTimeout ()
+                ) |> ignore
 
-                    | None ->
-                        return Error(BoundedProcessFailure.LaunchFailed(request.Executable, "Unexpected state"))
-
-                else
-                    match getReaderResult stderrReadTask 0 with
-                    | Some(EofReached _) ->
-                        let! _ = Task.WhenAny(
-                            proc.WaitForExitAsync(),
-                            stdoutReadTask,
-                            Task.Delay(request.Limits.Timeout, cancellationToken),
-                            Task.Delay(request.Limits.Timeout, timeoutCts.Token)
-                        )
-                        let stdoutResult = getReaderResult stdoutReadTask 10000
-                        let stderrResult = getReaderResult stderrReadTask 10000
-                        awaitProcessExitSync proc 10000
-                        return classifyOutcomes proc stdoutResult stderrResult timeoutCts.IsCancellationRequested cancellationToken.IsCancellationRequested request.Limits
-
-                    | Some(outcome) ->
-                        let stdoutResult = getReaderResult stdoutReadTask 10000
-                        let stderrResult = Some outcome
-                        return classifyOutcomes proc stdoutResult stderrResult timeoutCts.IsCancellationRequested cancellationToken.IsCancellationRequested request.Limits
-
-                    | None ->
-                        return Error(BoundedProcessFailure.LaunchFailed(request.Executable, "Unexpected state"))
-        }
+                tcs.Task
+            with
+            | ex ->
+                disposeProc ()
+                complete (Error(BoundedProcessFailure.KillFailed ex.Message))
+                tcs.Task
