@@ -525,7 +525,7 @@ let tests =
           }
 
           // ---------------------------------------------------------------
-          // 22-26. Five injected regressions using the LifecycleSeam.
+          // 22-26. Six injected regressions using the LifecycleSeam.
           //
           // The seam lets the test inject OS-level states (faulted/cancelled
           // exit task, slow process that stays alive after cleanup grace,
@@ -616,10 +616,14 @@ let tests =
               | Error(Cancelled) -> failwithf "cancelled exit task leaked as caller Cancelled"
               | Error e -> failwithf "expected WaitFailed, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
+              cts.Dispose()
           }
 
-          // 24. Process still active after cleanup grace -> TerminationCleanupFailed
-          testTask "process still active after cleanup grace produces TerminationCleanupFailed" {
+          // 24. Timer fires while both readers are at EOF but the exit
+          // task is still pending. EOF alone must not impersonate process
+          // exit; TimeoutFire must surface as a TerminationCleanupFailed
+          // whose context proves the read streams completed cleanly.
+          testTask "timer fires while streams at EOF but exit pending -> TerminationCleanupFailed { TimeoutFire; streams complete }" {
               let pendingExit = TaskCompletionSource<bool>()
               let seam = {
                   ExitTask = pendingExit.Task
@@ -634,13 +638,50 @@ let tests =
                       (Task.FromResult(EofReached [||]))
                       (TimeSpan.FromMilliseconds 100.0) 1024 1024
               match result with
-              | Error(TerminationCleanupFailed { ProcessExited = false }) -> ()
-              | Error e -> failwithf "expected TerminationCleanupFailed, got: %A" e
+              | Error(
+                  TerminationCleanupFailed {
+                      Cause = TimeoutFire
+                      TerminalFailure = None
+                      ProcessExited = false
+                      StdoutComplete = true
+                      StderrComplete = true
+                  }
+                ) ->
+                  ()
+              | Error e -> failwithf "expected TerminationCleanupFailed { TimeoutFire; streams complete }, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
 
-          // 25. Reader terminal with no exit code -> typed Error (not task fault)
-          testTask "reader terminal with no exit code returns typed Error" {
+          // 25a. Reader failure with successful cleanup: kill completes
+          // the exit task, HasExited returns true, ReadExitCode returns 0.
+          // The stdout reader failure mode is the precise public failure.
+          testTask "reader failure with successful cleanup returns typed StdoutReaderFailed" {
+              let pendingExit = TaskCompletionSource<bool>()
+              let failedStdout = Task.FromResult(ReadFailed "synthetic reader pipe closed")
+              let seam = {
+                  ExitTask = pendingExit.Task
+                  Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
+                  HasExited = fun () -> true
+                  ReadExitCode = fun () -> 0
+                  Dispose = fun () -> ()
+              }
+              let! result =
+                  runWithSeam seam
+                      failedStdout
+                      (Task.FromResult(EofReached [||]))
+                      (TimeSpan.FromMilliseconds 100.0) 1024 1024
+              match result with
+              | Error(StdoutReaderFailed detail) ->
+                  Expect.equal detail "synthetic reader pipe closed" "should retain reader detail"
+              | Error e -> failwithf "expected StdoutReaderFailed, got: %A" e
+              | Ok s -> failwithf "expected failure, got Ok: %A" s
+          }
+
+          // 25b. Reader failure with unsuccessful cleanup: kill returns
+          // Ok but does NOT complete the exit task, and HasExited keeps
+          // reporting false. The classifier must surface the captured
+          // cause and TerminalFailure rather than the reader error.
+          testTask "reader failure with unsuccessful cleanup returns TerminationCleanupFailed { StdoutTerminal }" {
               let pendingExit = TaskCompletionSource<bool>()
               let failedStdout = Task.FromResult(ReadFailed "synthetic reader pipe closed")
               let seam = {
@@ -656,12 +697,25 @@ let tests =
                       (Task.FromResult(EofReached [||]))
                       (TimeSpan.FromMilliseconds 100.0) 1024 1024
               match result with
-              | Error(StdoutReaderFailed _) -> ()
-              | Error e -> failwithf "expected StdoutReaderFailed, got: %A" e
+              | Error(
+                  TerminationCleanupFailed {
+                      Cause = StdoutTerminal
+                      TerminalFailure = Some(StdoutReadFailure "synthetic reader pipe closed")
+                      ProcessExited = false
+                      StdoutComplete = true
+                      StderrComplete = true
+                  }
+                ) ->
+                  ()
+              | Error e -> failwithf "expected TerminationCleanupFailed { StdoutTerminal }, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
 
-          // 26. Stdout EOF + sleeping child -> timeout-responsive
+          // 26. Stdout EOF + stderr EOF + sleeping child -> TimedOut.
+          // The kill callback is allowed to complete the exit task so the
+          // some-child-alive-after-grace risk is bounded. The contract is
+          // only that EOF alone is nonterminal: TimedOut is the public
+          // error, not a successful Exit 0.
           testTask "stdout EOF followed by sleeping child remains timeout-responsive" {
               let pendingExit = TaskCompletionSource<bool>()
               let seam = {

@@ -3,7 +3,7 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 #nowarn "3511"
 
 // =============================================================================
-// Bounded-process core -- CORRECTION 12
+// Bounded-process core -- CORRECTION 13
 //
 // P0 lifecycle classification fixes (from the persistent review):
 // - Select ExitWaitFailed when the exit task is faulted or cancelled.
@@ -16,6 +16,18 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 // - LifecycleSeam exposes (ExitTask, Kill, HasExited, ExitCode) so the
 //   unreachable OS states (faulted/cancelled exit, cleanup expiry, kill
 //   failure) can be tested without depending on a real subprocess.
+//
+// P2 classifier extraction:
+// - Introduce ClassificationSnapshot so the final classification can be
+//   expressed as a pure function without task, mutable cell, Option.Value,
+//   or Task access. The lifecycle task builds the snapshot at the end and
+//   forwards it to `classify`.
+// - Capture TerminalFailure alongside TerminalCause so the classifier can
+//   surface the precise reader failure mode (Overflowed, ReadFailed,
+//   unexpected reader cancellation) instead of reusing cause state.
+// - Correct natural completion: both streams at EOF is no longer enough;
+//   the exit task must have been observed successfully and the exit code
+//   captured. EOF without process exit no longer pretends success.
 // =============================================================================
 
 open System
@@ -294,32 +306,151 @@ type internal LifecycleSeam = {
 }
 
 // -----------------------------------------------------------------------------
-// Termination-cleanup failure constructor helper
+// Classification snapshot
 //
-// All production sites that surface a TerminationCleanupFailed fail through
-// this helper so the record layout has exactly one owner. This checkpoint
-// only normalises the payload shape; actual TerminalFailure values are
-// captured by a later classifier-only checkpoint.
+// The lifecycle task gathers every value needed to classify the result
+// into this immutable record and then forwards it to the pure `classify`
+// function. Building the snapshot is the only place where mutable cells,
+// Task access, and Option.Value extraction live. The classifier itself
+// contains no task, no mutable state, no option value extraction, and no
+// task or process access.
 // -----------------------------------------------------------------------------
 
-let private terminationCleanupFailure
-    cause
-    terminalFailure
-    killDetail
-    processExited
-    stdoutComplete
-    stderrComplete
-    waitDetail
-    =
-    BoundedProcessFailure.TerminationCleanupFailed {
-        Cause = cause
-        TerminalFailure = terminalFailure
-        KillDetail = killDetail
-        ProcessExited = processExited
-        StdoutComplete = stdoutComplete
-        StderrComplete = stderrComplete
-        WaitDetail = waitDetail
+type private ClassificationSnapshot = {
+    Cause: TerminalCause
+    TerminalFailure: TerminalFailure option
+    KillDetail: string option
+    WaitDetail: string option
+    ProcessExited: bool
+    StdoutComplete: bool
+    StderrComplete: bool
+    ExitCode: int option
+    StdoutOutcome: ReadOutcome option
+    StderrOutcome: ReadOutcome option
+}
+
+// -----------------------------------------------------------------------------
+// Pure classification helpers
+// -----------------------------------------------------------------------------
+
+let private cleanupContext
+    (snapshot: ClassificationSnapshot)
+    : TerminationCleanupContext =
+    {
+        Cause = snapshot.Cause
+        TerminalFailure = snapshot.TerminalFailure
+        KillDetail = snapshot.KillDetail
+        ProcessExited = snapshot.ProcessExited
+        StdoutComplete = snapshot.StdoutComplete
+        StderrComplete = snapshot.StderrComplete
+        WaitDetail = snapshot.WaitDetail
     }
+
+let private cleanupIncomplete (snapshot: ClassificationSnapshot) : bool =
+    not snapshot.ProcessExited
+    || not snapshot.StdoutComplete
+    || not snapshot.StderrComplete
+
+let private exitWaitFailed (snapshot: ClassificationSnapshot) : bool =
+    match snapshot.WaitDetail, snapshot.ExitCode with
+    | Some _, None -> true
+    | _ -> false
+
+/// Pure classifier that maps a snapshot onto the final Result. Contains
+/// no task, no mutable state, no Option.Value extraction, and no access
+/// to Task or Process. F# if/then/else and match are expression forms
+/// that directly produce the Result value.
+let private classify
+    (request: BoundedProcessRequest)
+    (snapshot: ClassificationSnapshot)
+    : Result<BoundedProcessSuccess, BoundedProcessFailure> =
+
+    // Global termination failure takes precedence over every other branch.
+    // When a kill was attempted and the kill itself failed, surface
+    // KillFailed regardless of cause or cleanup completeness.
+    match snapshot.KillDetail with
+    | Some killDetail ->
+        Error(BoundedProcessFailure.KillFailed killDetail)
+
+    | None ->
+        match snapshot.Cause with
+        | ExitWaitFailed ->
+            let detail =
+                match snapshot.WaitDetail with
+                | Some d -> d
+                | None -> "process exit unavailable"
+            Error(BoundedProcessFailure.WaitFailed detail)
+
+        | TimeoutFire ->
+            if cleanupIncomplete snapshot then
+                Error(BoundedProcessFailure.TerminationCleanupFailed (cleanupContext snapshot))
+            else
+                Error(BoundedProcessFailure.TimedOut request.Limits.Timeout)
+
+        | CallerCancel ->
+            if cleanupIncomplete snapshot then
+                Error(BoundedProcessFailure.TerminationCleanupFailed (cleanupContext snapshot))
+            else
+                Error BoundedProcessFailure.Cancelled
+
+        | StdoutTerminal ->
+            if cleanupIncomplete snapshot then
+                // Preserve the captured TerminalFailure so the caller can
+                // see why the loop decided to terminate, but never hide an
+                // unconfirmed surviving process behind a reader error.
+                Error(BoundedProcessFailure.TerminationCleanupFailed (cleanupContext snapshot))
+            else
+                match snapshot.TerminalFailure with
+                | Some StdoutOverflow ->
+                    Error(BoundedProcessFailure.StdoutLimitExceeded request.Limits.StdoutLimitBytes)
+                | Some (StdoutReadFailure detail) ->
+                    Error(BoundedProcessFailure.StdoutReaderFailed detail)
+                | Some UnexpectedStdoutCancellation ->
+                    Error(BoundedProcessFailure.IncompleteOutput(snapshot.StdoutComplete, snapshot.StderrComplete))
+                | _ ->
+                    // Caught cases: StderrOverflow, StderrReadFailure,
+                    // UnexpectedStderrCancellation, or None. The lifecycle
+                    // is supposed to keep cause and terminalFailure in the
+                    // same stream, but we fall back to IncompleteOutput
+                    // for any cross-stream mismatch.
+                    Error(BoundedProcessFailure.IncompleteOutput(snapshot.StdoutComplete, snapshot.StderrComplete))
+
+        | StderrTerminal ->
+            if cleanupIncomplete snapshot then
+                Error(BoundedProcessFailure.TerminationCleanupFailed (cleanupContext snapshot))
+            else
+                match snapshot.TerminalFailure with
+                | Some StderrOverflow ->
+                    Error(BoundedProcessFailure.StderrLimitExceeded request.Limits.StderrLimitBytes)
+                | Some (StderrReadFailure detail) ->
+                    Error(BoundedProcessFailure.StderrReaderFailed detail)
+                | Some UnexpectedStderrCancellation ->
+                    Error(BoundedProcessFailure.IncompleteOutput(snapshot.StdoutComplete, snapshot.StderrComplete))
+                | _ ->
+                    Error(BoundedProcessFailure.IncompleteOutput(snapshot.StdoutComplete, snapshot.StderrComplete))
+
+        | NaturalExit ->
+            if cleanupIncomplete snapshot then
+                Error(BoundedProcessFailure.TerminationCleanupFailed (cleanupContext snapshot))
+            elif exitWaitFailed snapshot then
+                let detail =
+                    match snapshot.WaitDetail with
+                    | Some d -> d
+                    | None -> "process exit unavailable"
+                Error(BoundedProcessFailure.WaitFailed detail)
+            else
+                match snapshot.StdoutOutcome, snapshot.StderrOutcome, snapshot.ExitCode with
+                | Some (EofReached stdout), Some (EofReached stderr), Some exitCode ->
+                    if exitCode = 0 then
+                        Ok {
+                            ExitCode = exitCode
+                            Stdout = stdout
+                            Stderr = stderr
+                        }
+                    else
+                        Error(BoundedProcessFailure.NonZeroExit(exitCode, stdout, stderr))
+                | _ ->
+                    Error(BoundedProcessFailure.IncompleteOutput(snapshot.StdoutComplete, snapshot.StderrComplete))
 
 // -----------------------------------------------------------------------------
 // Lifecycle implementation
@@ -345,10 +476,29 @@ let internal executeLifecycleWithSeam
         let waitDetailCell = { Value = None }
         let killErrorCell = { Value = None }
         let terminalCauseCell = { Value = NaturalExit }
+        let terminalFailureCell = { Value = None }
         let mutable killRequested = false
         let mutable timeoutObserved = false
         let mutable cancellationObserved = false
         let mutable exitObserved = false
+
+        let captureStdoutFailure (outcome: ReadOutcome) =
+            // Map a terminal stdout outcome into the corresponding
+            // TerminalFailure. EOF is intentionally not terminal and never
+            // produces a TerminalFailure. The caller has already verified
+            // that the outcome is terminal.
+            match outcome with
+            | Overflowed _ -> Some TerminalFailure.StdoutOverflow
+            | ReadFailed detail -> Some(TerminalFailure.StdoutReadFailure detail)
+            | ReadCancelled -> Some TerminalFailure.UnexpectedStdoutCancellation
+            | EofReached _ -> None
+
+        let captureStderrFailure (outcome: ReadOutcome) =
+            match outcome with
+            | Overflowed _ -> Some TerminalFailure.StderrOverflow
+            | ReadFailed detail -> Some(TerminalFailure.StderrReadFailure detail)
+            | ReadCancelled -> Some TerminalFailure.UnexpectedStderrCancellation
+            | EofReached _ -> None
 
         let killNow () =
             if not killRequested then
@@ -404,42 +554,64 @@ let internal executeLifecycleWithSeam
                 let outcome = tryReadOutcome stdoutTask
                 stdoutOutcomeCell.Value <- Some outcome
                 if isTerminal outcome then
+                    // ReadCancelled is treated as a "real" terminal outcome
+                    // only when neither timeout nor cancellation has been
+                    // observed. In that case it sets both the cause and
+                    // the TerminalFailure. Otherwise it is ignored, just
+                    // like the previous checkpoints.
                     let isAuthTimeoutOrCancel = timeoutObserved || cancellationObserved
-                    if not isAuthTimeoutOrCancel && terminalCauseCell.Value = NaturalExit then
-                        match outcome with
-                        | ReadCancelled ->
-                            ()
-                        | _ ->
-                            terminalCauseCell.Value <- StdoutTerminal
+                    if not isAuthTimeoutOrCancel then
+                        terminalCauseCell.Value <- StdoutTerminal
+                        match captureStdoutFailure outcome with
+                        | Some failure -> terminalFailureCell.Value <- Some failure
+                        | None -> ()
                     killNow()
             elif stderrOutcome.IsNone && Object.ReferenceEquals(winner, stderrTask) then
                 let outcome = tryReadOutcome stderrTask
                 stderrOutcomeCell.Value <- Some outcome
                 if isTerminal outcome then
                     let isAuthTimeoutOrCancel = timeoutObserved || cancellationObserved
-                    if not isAuthTimeoutOrCancel && terminalCauseCell.Value = NaturalExit then
-                        match outcome with
-                        | ReadCancelled ->
-                            ()
-                        | _ ->
-                            terminalCauseCell.Value <- StderrTerminal
+                    if not isAuthTimeoutOrCancel then
+                        terminalCauseCell.Value <- StderrTerminal
+                        match captureStderrFailure outcome with
+                        | Some failure -> terminalFailureCell.Value <- Some failure
+                        | None -> ()
                     killNow()
 
             let sOut = stdoutOutcomeCell.Value
             let sErr = stderrOutcomeCell.Value
-            let stdoutTerminal = sOut.IsSome && isTerminal(sOut.Value)
-            let stderrTerminal = sErr.IsSome && isTerminal(sErr.Value)
+            let stdoutTerminal =
+                match sOut with
+                | Some o -> isTerminal o
+                | None -> false
+            let stderrTerminal =
+                match sErr with
+                | Some o -> isTerminal o
+                | None -> false
             let hasAuthoritativeCause =
                 timeoutObserved || cancellationObserved
                 || terminalCauseCell.Value = StdoutTerminal
                 || terminalCauseCell.Value = StderrTerminal
                 || terminalCauseCell.Value = ExitWaitFailed
                 || (waitDetailCell.Value.IsSome && not exitObserved)
+            // P2 fix: natural completion now requires the exit task to
+            // have been observed successfully and the exit code to be
+            // captured. Both streams reaching EOF is no longer enough on
+            // its own; a hung child that produced no output can no longer
+            // impersonate a successful exit.
+            let stdoutEof =
+                match sOut with
+                | Some o -> isEof o
+                | None -> false
+            let stderrEof =
+                match sErr with
+                | Some o -> isEof o
+                | None -> false
             let naturalComplete =
-                stdoutTerminal = false
-                && stderrTerminal = false
-                && sOut.IsSome && isEof(sOut.Value)
-                && sErr.IsSome && isEof(sErr.Value)
+                exitObserved
+                && exitCodeCell.Value.IsSome
+                && stdoutEof
+                && stderrEof
                 && terminalCauseCell.Value = NaturalExit
             loopDone <- hasAuthoritativeCause || naturalComplete
 
@@ -520,128 +692,26 @@ let internal executeLifecycleWithSeam
             faultObserver seam.ExitTask
             disposeOnce())) |> ignore
 
-        // ---- Classify ----
-        let cause = terminalCauseCell.Value
-        let killDetail = killErrorCell.Value
-        let waitDetail = waitDetailCell.Value
-        // P0 fix: cleanup is incomplete when the process is still alive
-        // OR when either reader did not settle during the grace window.
-        let cleanupIncomplete =
-            not processExited
-            || not stdoutComplete
-            || not stderrComplete
-        // The wait is "failed" when we have a wait detail but no exit code.
-        let exitWaitFailed = waitDetail.IsSome && exitCodeCell.Value.IsNone
+        // ---- Build classification snapshot and classify ----
+        //
+        // The snapshot is the only bridge between the mutable lifecycle
+        // state and the pure classifier. Gathering the values here is
+        // the last place where Option.Value extraction is allowed; the
+        // classifier itself never sees a MutableCell.
+        let snapshot = {
+            Cause = terminalCauseCell.Value
+            TerminalFailure = terminalFailureCell.Value
+            KillDetail = killErrorCell.Value
+            WaitDetail = waitDetailCell.Value
+            ProcessExited = processExited
+            StdoutComplete = stdoutComplete
+            StderrComplete = stderrComplete
+            ExitCode = exitCodeCell.Value
+            StdoutOutcome = stdoutOutcomeCell.Value
+            StderrOutcome = stderrOutcomeCell.Value
+        }
 
-        match cause with
-        | TimeoutFire ->
-            if killDetail.IsSome then
-                return Error(BoundedProcessFailure.KillFailed killDetail.Value)
-            elif cleanupIncomplete then
-                return Error(terminationCleanupFailure cause None killDetail processExited stdoutComplete stderrComplete waitDetail)
-            else
-                return Error(BoundedProcessFailure.TimedOut request.Limits.Timeout)
-        | CallerCancel ->
-            if killDetail.IsSome then
-                return Error(BoundedProcessFailure.KillFailed killDetail.Value)
-            elif cleanupIncomplete then
-                return Error(terminationCleanupFailure cause None killDetail processExited stdoutComplete stderrComplete waitDetail)
-            else
-                return Error BoundedProcessFailure.Cancelled
-        | StdoutTerminal ->
-            if killDetail.IsSome then
-                return Error(BoundedProcessFailure.KillFailed killDetail.Value)
-            elif cleanupIncomplete then
-                return Error(terminationCleanupFailure cause None killDetail processExited stdoutComplete stderrComplete waitDetail)
-            elif exitWaitFailed then
-                return Error(BoundedProcessFailure.WaitFailed waitDetail.Value)
-            elif exitCodeCell.Value.IsNone
-                 || stdoutOutcomeCell.Value.IsNone
-                 || stderrOutcomeCell.Value.IsNone then
-                return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
-            else
-                match stdoutOutcomeCell.Value.Value, stderrOutcomeCell.Value.Value, exitCodeCell.Value.Value with
-                | Overflowed _, _, _ ->
-                    return Error(BoundedProcessFailure.StdoutLimitExceeded request.Limits.StdoutLimitBytes)
-                | ReadFailed msg, _, _ ->
-                    return Error(BoundedProcessFailure.StdoutReaderFailed msg)
-                | ReadCancelled, _, _ ->
-                    return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
-                | EofReached b, Overflowed _, _ ->
-                    return Error(BoundedProcessFailure.StderrLimitExceeded request.Limits.StderrLimitBytes)
-                | EofReached b, ReadFailed msg, _ ->
-                    return Error(BoundedProcessFailure.StderrReaderFailed msg)
-                | EofReached b, ReadCancelled, _ ->
-                    return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
-                | EofReached b, EofReached eb, code ->
-                    if code = 0 then
-                        return Ok { ExitCode = code; Stdout = b; Stderr = eb }
-                    else
-                        return Error(BoundedProcessFailure.NonZeroExit(code, b, eb))
-        | StderrTerminal ->
-            if killDetail.IsSome then
-                return Error(BoundedProcessFailure.KillFailed killDetail.Value)
-            elif cleanupIncomplete then
-                return Error(terminationCleanupFailure cause None killDetail processExited stdoutComplete stderrComplete waitDetail)
-            elif exitWaitFailed then
-                return Error(BoundedProcessFailure.WaitFailed waitDetail.Value)
-            elif exitCodeCell.Value.IsNone
-                 || stdoutOutcomeCell.Value.IsNone
-                 || stderrOutcomeCell.Value.IsNone then
-                return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
-            else
-                match stdoutOutcomeCell.Value.Value, stderrOutcomeCell.Value.Value, exitCodeCell.Value.Value with
-                | _, Overflowed _, _ ->
-                    return Error(BoundedProcessFailure.StderrLimitExceeded request.Limits.StderrLimitBytes)
-                | _, ReadFailed msg, _ ->
-                    return Error(BoundedProcessFailure.StderrReaderFailed msg)
-                | _, ReadCancelled, _ ->
-                    return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
-                | Overflowed _, _, _ ->
-                    return Error(BoundedProcessFailure.StdoutLimitExceeded request.Limits.StdoutLimitBytes)
-                | ReadFailed msg, _, _ ->
-                    return Error(BoundedProcessFailure.StdoutReaderFailed msg)
-                | EofReached b, EofReached eb, code ->
-                    if code = 0 then
-                        return Ok { ExitCode = code; Stdout = b; Stderr = eb }
-                    else
-                        return Error(BoundedProcessFailure.NonZeroExit(code, b, eb))
-                | _ ->
-                    return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
-        | ExitWaitFailed ->
-            // P0 fix: classify wait failure with the captured detail.
-            let detail = defaultArg waitDetail "process exit unavailable"
-            return Error(BoundedProcessFailure.WaitFailed detail)
-        | NaturalExit ->
-            if killDetail.IsSome then
-                return Error(BoundedProcessFailure.KillFailed killDetail.Value)
-            elif cleanupIncomplete then
-                return Error(terminationCleanupFailure cause None killDetail processExited stdoutComplete stderrComplete waitDetail)
-            elif exitWaitFailed then
-                return Error(BoundedProcessFailure.WaitFailed waitDetail.Value)
-            elif exitCodeCell.Value.IsNone
-                 || stdoutOutcomeCell.Value.IsNone
-                 || stderrOutcomeCell.Value.IsNone then
-                return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
-            else
-                match stdoutOutcomeCell.Value.Value, stderrOutcomeCell.Value.Value, exitCodeCell.Value.Value with
-                | Overflowed _, _, _ ->
-                    return Error(BoundedProcessFailure.StdoutLimitExceeded request.Limits.StdoutLimitBytes)
-                | ReadFailed msg, _, _ ->
-                    return Error(BoundedProcessFailure.StdoutReaderFailed msg)
-                | ReadCancelled, _, _ ->
-                    return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
-                | EofReached b, Overflowed _, _ ->
-                    return Error(BoundedProcessFailure.StderrLimitExceeded request.Limits.StderrLimitBytes)
-                | EofReached b, ReadFailed msg, _ ->
-                    return Error(BoundedProcessFailure.StderrReaderFailed msg)
-                | EofReached b, ReadCancelled, _ ->
-                    return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
-                | EofReached b, EofReached eb, code ->
-                    if code = 0 then
-                        return Ok { ExitCode = code; Stdout = b; Stderr = eb }
-                    else
-                        return Error(BoundedProcessFailure.NonZeroExit(code, b, eb))
+        return classify request snapshot
     }
 
 // -----------------------------------------------------------------------------
