@@ -30,28 +30,33 @@ let private smokeTestFixture (label: string) (path: string) : unit =
     psi.FileName <- "dotnet"
     // Pass --smoke so sleep fixtures exit immediately. The flag is
     // irrelevant for non-sleep fixtures; they ignore unknown args.
-    psi.Arguments <- sprintf "fsi --exec \"%s\" --smoke" path
+    //
+    // ArgumentList is preferred over the manually-escaped `Arguments`
+    // string: ProcessStartInfo treats each entry as a single argv slot,
+    // so embedded quotes and spaces do not need shell-level escaping.
+    psi.ArgumentList.Add("fsi")
+    psi.ArgumentList.Add("--exec")
+    psi.ArgumentList.Add(path)
+    psi.ArgumentList.Add("--smoke")
     psi.UseShellExecute <- false
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
     psi.CreateNoWindow <- true
     use p = Process.Start(psi)
-    // Drain redirected stdout concurrently.  Reading only stderr after
-    // WaitForExit is a documented deadlock pattern when the child writes
-    // to a redirected pipe faster than the OS buffers free.
-    let stdoutDrain =
-        Task.Run(fun () ->
-            try
-                while not p.StandardOutput.EndOfStream do
-                    p.StandardOutput.Read() |> ignore
-            with
-            | _ -> ())
+    // Drain BOTH redirected streams concurrently.  Reading only one
+    // after WaitForExit is the documented deadlock pattern when the
+    // child writes to a redirected pipe faster than the OS buffers free.
+    let stdoutTask = p.StandardOutput.ReadToEndAsync()
+    let stderrTask = p.StandardError.ReadToEndAsync()
     if not (p.WaitForExit(30000)) then
         try p.Kill() with | _ -> ()
-        try stdoutDrain.Wait(5000) |> ignore with | _ -> ()
+        try stdoutTask.Wait(5000) |> ignore with | _ -> ()
+        try stderrTask.Wait(5000) |> ignore with | _ -> ()
         failwithf "smoke test timed out for %s (%s)" label path
-    let err = p.StandardError.ReadToEnd()
-    try stdoutDrain.Wait(5000) |> ignore with | _ -> ()
+    let err =
+        try stderrTask.GetAwaiter().GetResult()
+        with | _ -> ""
+    try stdoutTask.Wait(5000) |> ignore with | _ -> ()
     if err.Contains("error FS") then
         failwithf "smoke test detected F# compile error in %s (%s): %s" label path err
 
@@ -516,6 +521,159 @@ let tests =
               | Error(InvalidRequest msg) ->
                   Expect.stringContains msg "environment" "should mention environment"
               | Error e -> failwithf "expected InvalidRequest, got: %A" e
+              | Ok s -> failwithf "expected failure, got Ok: %A" s
+          }
+
+          // ---------------------------------------------------------------
+          // 22-26. Five injected regressions using the LifecycleSeam.
+          //
+          // The seam lets the test inject OS-level states (faulted/cancelled
+          // exit task, slow process that stays alive after cleanup grace,
+          // kill failure) that are not reliably reachable through a real
+          // child process. These complement the 21 real-process tests above.
+          // ---------------------------------------------------------------
+
+          /// Helper that drives executeLifecycleWithSeam directly with the
+          /// given seam and policy. The seam owns the exit task and the
+          /// stdout/stderr inputs; lifecycle plumbing is otherwise
+          /// identical to the production run.
+          let runWithSeam
+              (seam: LifecycleSeam)
+              (stdoutTask: Task<ReadOutcome>)
+              (stderrTask: Task<ReadOutcome>)
+              (timeout: TimeSpan)
+              (stdoutLimit: int)
+              (stderrLimit: int)
+              : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
+              let request = {
+                  Executable = "ignored"
+                  WorkingDirectory = "."
+                  Arguments = []
+                  Environment = []
+                  Limits = {
+                      Timeout = timeout
+                      StdoutLimitBytes = stdoutLimit
+                      StderrLimitBytes = stderrLimit
+                  }
+              }
+              let lcts = new CancellationTokenSource()
+              let tcts = new CancellationTokenSource(timeout)
+              let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+              let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+              let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
+              let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
+              task {
+                  let! result =
+                      executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
+                  try tReg.Dispose() with | _ -> ()
+                  try cReg.Dispose() with | _ -> ()
+                  try tcts.Dispose() with | _ -> ()
+                  try lcts.Dispose() with | _ -> ()
+                  return result
+              }
+
+          // 22. Faulted exit task -> WaitFailed with retained detail
+          testTask "faulted exit task produces WaitFailed with detail" {
+              let faultedExit = Task.FromException(System.Exception "synthetic exit wait fault")
+              let seam = {
+                  ExitTask = faultedExit
+                  Kill = fun () -> Ok ()
+                  HasExited = fun () -> true
+                  ReadExitCode = fun () -> 0
+              }
+              let! result =
+                  runWithSeam seam
+                      (Task.FromResult(EofReached [||]))
+                      (Task.FromResult(EofReached [||]))
+                      (TimeSpan.FromSeconds 5.0) 1024 1024
+              match result with
+              | Error(WaitFailed detail) ->
+                  Expect.stringContains detail "synthetic exit wait fault" "should retain fault detail"
+              | Error e -> failwithf "expected WaitFailed, got: %A" e
+              | Ok s -> failwithf "expected failure, got Ok: %A" s
+          }
+
+          // 23. Cancelled exit task -> WaitFailed, not caller Cancelled
+          testTask "cancelled exit task produces WaitFailed (not caller Cancelled)" {
+              let cts = new CancellationTokenSource()
+              cts.Cancel()
+              let cancelledExit = Task.FromCanceled(cts.Token)
+              let seam = {
+                  ExitTask = cancelledExit
+                  Kill = fun () -> Ok ()
+                  HasExited = fun () -> true
+                  ReadExitCode = fun () -> 0
+              }
+              let! result =
+                  runWithSeam seam
+                      (Task.FromResult(EofReached [||]))
+                      (Task.FromResult(EofReached [||]))
+                      (TimeSpan.FromSeconds 5.0) 1024 1024
+              match result with
+              | Error(WaitFailed _) -> ()
+              | Error(Cancelled) -> failwithf "cancelled exit task leaked as caller Cancelled"
+              | Error e -> failwithf "expected WaitFailed, got: %A" e
+              | Ok s -> failwithf "expected failure, got Ok: %A" s
+          }
+
+          // 24. Process still active after cleanup grace -> TerminationCleanupFailed
+          testTask "process still active after cleanup grace produces TerminationCleanupFailed" {
+              let pendingExit = TaskCompletionSource<bool>()
+              let seam = {
+                  ExitTask = pendingExit.Task
+                  Kill = fun () -> Ok ()
+                  HasExited = fun () -> false
+                  ReadExitCode = fun () -> 0
+              }
+              let! result =
+                  runWithSeam seam
+                      (Task.FromResult(EofReached [||]))
+                      (Task.FromResult(EofReached [||]))
+                      (TimeSpan.FromMilliseconds 100.0) 1024 1024
+              match result with
+              | Error(TerminationCleanupFailed(_, _, false, _, _, _)) -> ()
+              | Error e -> failwithf "expected TerminationCleanupFailed, got: %A" e
+              | Ok s -> failwithf "expected failure, got Ok: %A" s
+          }
+
+          // 25. Reader terminal with no exit code -> typed Error (not task fault)
+          testTask "reader terminal with no exit code returns typed Error" {
+              let pendingExit = TaskCompletionSource<bool>()
+              let failedStdout = Task.FromResult(ReadFailed "synthetic reader pipe closed")
+              let seam = {
+                  ExitTask = pendingExit.Task
+                  Kill = fun () -> Ok ()
+                  HasExited = fun () -> false
+                  ReadExitCode = fun () -> 0
+              }
+              let! result =
+                  runWithSeam seam
+                      failedStdout
+                      (Task.FromResult(EofReached [||]))
+                      (TimeSpan.FromMilliseconds 100.0) 1024 1024
+              match result with
+              | Error(StdoutReaderFailed _) -> ()
+              | Error e -> failwithf "expected StdoutReaderFailed, got: %A" e
+              | Ok s -> failwithf "expected failure, got Ok: %A" s
+          }
+
+          // 26. Stdout EOF + sleeping child -> timeout-responsive
+          testTask "stdout EOF followed by sleeping child remains timeout-responsive" {
+              let pendingExit = TaskCompletionSource<bool>()
+              let seam = {
+                  ExitTask = pendingExit.Task
+                  Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
+                  HasExited = fun () -> false
+                  ReadExitCode = fun () -> 0
+              }
+              let! result =
+                  runWithSeam seam
+                      (Task.FromResult(EofReached [||]))
+                      (Task.FromResult(EofReached [||]))
+                      (TimeSpan.FromMilliseconds 300.0) 1024 1024
+              match result with
+              | Error(TimedOut _) -> ()
+              | Error e -> failwithf "expected TimedOut, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
         ]
