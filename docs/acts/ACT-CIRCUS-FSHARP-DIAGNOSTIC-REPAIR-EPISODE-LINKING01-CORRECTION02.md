@@ -186,25 +186,47 @@ bounded_process:
   commit: <see git log at CORRECTION02 commit>
   build: PASS
   individual_tests: PASS_REPORTED
-  canonical_suite: SLOW_BUT_TERMINATING
-  root_cause: not_identified
-  authority_ready: false
 
-slice_evidence:
-  precompiled_fixture:
-    modes: [empty, stdout, stderr, both, sleep, exit, exit-with-both, echo-args, working-directory]
-    invocation: dotnet <fixture.dll> <mode> [args...]
-    build: PASS
-    smoke_direct: PASS
-  test_36:
-    registration_callback_race: pass
-    exactly_once_dispose: pass
-    test_thread_responsive: pass
+  registration_race_test:
+    status: IN_PROGRESS
+    defects:
+      - CancelAsync_await_cycle: FIXED
+      - release_finally_scope: EXTENDED_TO_COVER_COMPLETION_OBSERVATION
+
+  production_async_registration_disposal:
+    status: IMPLEMENTED
+    note: disposeOnceAsync uses tReg.DisposeAsync().AsTask() and cReg.DisposeAsync().AsTask()
+
+  canonical_suite:
+    status: UNVERIFIED
+    blocker: test36_verification_pending_build_and_run
+
+  test36:
+    cancel_async_fire_and_forget: CORRECTION18
+    bounded_completion_observation: IN_PLACE
+    release_guarantee: COVERS_COMPLETION_AND_FINALIZATION
+
+  hygiene:
+    fixture_lock_terminal_lf: FIXED
+
+  authority_ready: false
+  git_adapter_allowed: false
 
 next_slice:
-  name: git_adapter_subprocess
-  git_adapter_allowed: true
+  name: test36_verification_and_suite_run
+  test34_redesign: deferred_until_suite_terminates
 ```
+
+**Correction applied**:
+- Production async registration disposal was already implemented in CORRECTION17 via
+  `disposeOnceAsync()` using `tReg.DisposeAsync().AsTask()` and `cReg.DisposeAsync().AsTask()`
+- Test 36 had two issues fixed by CORRECTION18:
+  1. `CancelAsync()` await cycle: now stores task and awaits after callback release
+  2. `try/finally` scope: now covers bounded completion observation via `Task.WhenAny`
+- Added bounded timeout to `completionTask` observation so synchronous disposal regression
+  produces assertion failure rather than hang
+- Bounded callback-start wait to prevent hang before reaching protected block
+- All cleanup awaits bounded with `Task.WhenAny` to ensure test completes on all paths
 
 ## Remaining work
 

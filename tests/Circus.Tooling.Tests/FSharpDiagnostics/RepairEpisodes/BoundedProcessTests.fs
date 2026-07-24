@@ -371,14 +371,18 @@ let tests =
           /// stdout/stderr inputs; lifecycle plumbing is otherwise
           /// identical to the production run. The lifecycle's finalizer
           /// owns tReg, cReg, tcts, lcts, and the seam's Dispose callback.
-          let runWithSeam
+          /// Like runWithSeamCustom but returns the raw LifecycleCompletion
+          /// so the test can inspect the Result before the deferred
+          /// finalization completes. Used by the disposal-ordering
+          /// regressions and the disposed-seam state-access test.
+          let runWithSeamCompletion
               (seam: LifecycleSeam)
               (stdoutTask: Task<ReadOutcome>)
               (stderrTask: Task<ReadOutcome>)
               (timeout: TimeSpan)
               (stdoutLimit: int)
               (stderrLimit: int)
-              : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
+              : Task<LifecycleCompletion> =
               let request = {
                   Executable = "ignored"
                   WorkingDirectory = "."
@@ -396,16 +400,54 @@ let tests =
               let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
               let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
               let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
-              // The new internal return shape is LifecycleCompletion carrying
-              // the public Result and the disposal Task. The public run()
-              // awaits both; tests that need to inspect the Result before
-              // the finalization completes use this helper directly.
-              let completion: Task<LifecycleCompletion> =
-                  executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
+              executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
+
+          /// Observe a deferred finalization's faults without blocking
+          /// synchronously on its completion. The lifecycle has already
+          /// classified the operation as `Deferred`, meaning the finalizer
+          /// cannot complete until the caller supplies whatever state the
+          /// outstanding operations are waiting on. The public `run` does
+          /// not block on a Deferred finalizer either: it observes the
+          /// task to surface faults via `UnobservedTaskException` at GC
+          /// time, which is acceptable for best-effort disposal that
+          /// already failed at the classification level.
+          let observeDeferred (finalization: Task) : unit =
+              finalization.ContinueWith(fun (t: Task) ->
+                  if t.IsFaulted then
+                      ignore t.Exception) |> ignore
+
+          /// Default seam-injection helper. Mirrors the public `run`
+          /// contract by respecting `FinalizationMode`: a deferred
+          /// finalizer is observed (not awaited), and a normal
+          /// `AwaitBeforeReturn` finalizer is awaited. Awaiting a
+          /// Deferred finalizer would block the test indefinitely when
+          /// the seam never completes its outstanding operation.
+          let runWithSeam
+              (seam: LifecycleSeam)
+              (stdoutTask: Task<ReadOutcome>)
+              (stderrTask: Task<ReadOutcome>)
+              (timeout: TimeSpan)
+              (stdoutLimit: int)
+              (stderrLimit: int)
+              : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
               task {
-                  let! c = completion
-                  do! c.Finalization
-                  return c.Result
+                  let! completion =
+                      runWithSeamCompletion
+                          seam
+                          stdoutTask
+                          stderrTask
+                          timeout
+                          stdoutLimit
+                          stderrLimit
+
+                  match completion.FinalizationMode with
+                  | AwaitBeforeReturn ->
+                      do! completion.Finalization
+                      return completion.Result
+
+                  | Deferred ->
+                      observeDeferred completion.Finalization
+                      return completion.Result
               }
 
           /// Like runWithSeam but lets the test inject the timeout and
@@ -448,37 +490,6 @@ let tests =
                   do! c.Finalization
                   return c.Result
               }
-
-          /// Like runWithSeamCustom but returns the raw LifecycleCompletion
-          /// so the test can inspect the Result before the deferred
-          /// finalization completes. Used by the disposal-ordering
-          /// regressions and the disposed-seam state-access test.
-          let runWithSeamCompletion
-              (seam: LifecycleSeam)
-              (stdoutTask: Task<ReadOutcome>)
-              (stderrTask: Task<ReadOutcome>)
-              (timeout: TimeSpan)
-              (stdoutLimit: int)
-              (stderrLimit: int)
-              : Task<LifecycleCompletion> =
-              let request = {
-                  Executable = "ignored"
-                  WorkingDirectory = "."
-                  Arguments = []
-                  Environment = []
-                  Limits = {
-                      Timeout = timeout
-                      StdoutLimitBytes = stdoutLimit
-                      StderrLimitBytes = stderrLimit
-                  }
-              }
-              let lcts = new CancellationTokenSource()
-              let tcts = new CancellationTokenSource(timeout)
-              let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
-              let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
-              let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
-              let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
-              executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
 
           // 22. Faulted exit task -> WaitFailed with retained detail
           testTask "faulted exit task produces WaitFailed with detail" {
@@ -531,10 +542,96 @@ let tests =
           // task is still pending. EOF alone must not impersonate process
           // exit; TimeoutFire must surface as a TerminationCleanupFailed
           // whose context proves the read streams completed cleanly.
+          //
+          // CORRECTION20: this test owns a deliberately-pending
+          // synthetic exit task. It uses `runWithSeamCompletion` directly
+          // because the lifecycle returns `FinalizationMode = Deferred`
+          // here, and awaiting the deferred finalizer would block
+          // forever (the finalizer cannot complete until the caller
+          // supplies the state the outstanding operation is waiting on).
+          // The synthetic exit task is completed in a `finally` block so
+          // the finalizer can finish, observe exactly-once disposal,
+          // and release its owned resources before the test returns.
           testTask "timer fires while streams at EOF but exit pending -> TerminationCleanupFailed { TimeoutFire; streams complete }" {
-              let pendingExit = TaskCompletionSource<bool>()
+              let mutable disposeCount = 0
+              let pendingExit =
+                  TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
               let seam = {
                   ExitTask = pendingExit.Task
+                  Kill = fun () -> Ok ()
+                  HasExited = fun () -> false
+                  ReadExitCode = fun () -> 0
+                  Dispose = fun () -> disposeCount <- disposeCount + 1
+              }
+              let completion: Task<LifecycleCompletion> =
+                  runWithSeamCompletion seam
+                      (Task.FromResult(EofReached [||]))
+                      (Task.FromResult(EofReached [||]))
+                      (TimeSpan.FromMilliseconds 100.0) 1024 1024
+              try
+                  let! c = completion
+                  match c.Result with
+                  | Error(
+                      TerminationCleanupFailed {
+                          Cause = TimeoutFire
+                          TerminalFailure = None
+                          ProcessExited = false
+                          StdoutComplete = true
+                          StderrComplete = true
+                      }
+                    ) ->
+                      ()
+                  | Error e ->
+                      failtest "expected TerminationCleanupFailed { TimeoutFire; streams complete }, got: %A" e
+                  | Ok s ->
+                      failtestf "expected failure, got Ok: %A" s
+
+                  // The finalizer is deferred: ExitTask is still pending
+                  // so the lifecycle cannot dispose yet.
+                  Expect.equal
+                      c.FinalizationMode
+                      Deferred
+                      "incomplete exit must select deferred finalization"
+
+                  Expect.isFalse
+                      c.Finalization.IsCompleted
+                      "finalization must remain pending while ExitTask is pending"
+
+                  Expect.equal
+                      disposeCount
+                      0
+                      "resources must not be disposed before ExitTask settles"
+              finally
+                  // Settle the synthetic exit task so the finalizer can
+                  // run and dispose exactly once.
+                  pendingExit.TrySetResult(true) |> ignore
+
+              // The helper returns the LifecycleCompletion task itself;
+              // the public caller now owns the deferred finalizer and
+              // can await it after the synthetic exit has been settled.
+              let! c = completion
+              do! c.Finalization
+
+              Expect.equal
+                  disposeCount
+                  1
+                  "resources are disposed exactly once after ExitTask settles"
+          }
+
+          // 24a. Helper-contract regression: `runWithSeam` must NOT
+          // block on a deferred finalizer. This proves that ordinary
+          // test code that uses the default seam-injection helper
+          // cannot silently regress to unconditional finalization
+          // awaiting.
+          testTask "runWithSeam returns within a strict bound when finalization is deferred" {
+              let pendingExit =
+                  TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+              let seam = {
+                  ExitTask = pendingExit.Task
+                  // Kill does NOT complete pendingExit: this is exactly
+                  // the scenario Test 24 uses. If the helper regresses
+                  // to unconditional finalization awaiting, this test
+                  // hangs forever.
                   Kill = fun () -> Ok ()
                   HasExited = fun () -> false
                   ReadExitCode = fun () -> 0
@@ -545,6 +642,8 @@ let tests =
                       (Task.FromResult(EofReached [||]))
                       (Task.FromResult(EofReached [||]))
                       (TimeSpan.FromMilliseconds 100.0) 1024 1024
+              // Helper must return without awaiting the pending
+              // finalizer; the test would otherwise block forever.
               match result with
               | Error(
                   TerminationCleanupFailed {
@@ -556,8 +655,15 @@ let tests =
                   }
                 ) ->
                   ()
-              | Error e -> failtest "expected TerminationCleanupFailed { TimeoutFire; streams complete }, got: %A" e
-              | Ok s -> failwithf "expected failure, got Ok: %A" s
+              | Error e ->
+                  failtest
+                      "expected deferred TimeoutFire cleanup failure, got: %A"
+                      e
+              | Ok s ->
+                  failtestf "expected failure, got Ok: %A" s
+              // Release the pending exit so the deferred finalizer can
+              // settle and the test process can shut down cleanly.
+              pendingExit.TrySetResult(true) |> ignore
           }
 
           // 25a. Reader failure with successful cleanup: kill completes
@@ -1034,47 +1140,144 @@ let tests =
               let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
               let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
 
-              // Trigger the custom callback asynchronously so the main
-              // test thread is not blocked by the callback itself.
-              do! customCts.CancelAsync ()
-              // Wait for the callback to actually start so the test can
-              // assert "callback started" deterministically.
-              do! callbackStarted.Task
+              // CORRECTION18: Fire-and-forget CancelAsync. Awaiting it here
+              // would deadlock: CancelAsync() only completes after ALL
+              // registered callbacks have finished, but releaseCallback is
+              // held by the test until the assertions pass.
+              let cancellationTask = customCts.CancelAsync()
+              let mutable completionResult: LifecycleCompletion option = None
+              let mutable callbackStartedInTime = false
+              let mutable completionReturnedInTime = false
+              let mutable finalizationSuspended = false
+              let mutable threadResponsive = false
 
-              // Run the lifecycle with the BLOCKING registration as
-              // tReg. The customReg is the lifecycle's tReg, so the
-              // finalizer's `tReg.DisposeAsync().AsTask()` will be
-              // forced to wait for the blocking callback.
-              let completion: Task<LifecycleCompletion> =
-                  executeLifecycleWithSeam
-                      lcts request timeoutTcs cancelTcs
-                      okStdout okStderr seam
-                      customReg cReg tcts
-              let! c = completion
+              // Use try/finally so releaseCallback is always completed
+              // even if an assertion fails. A failing test could strand
+              // a callback and poison the remainder of the suite.
+              try
+                  // Bounded wait for callback to start. If CancelAsync fails
+                  // to schedule the callback, the timeout causes assertion
+                  // failure rather than suite hang.
+                  let! callbackWinner =
+                      Task.WhenAny(
+                          callbackStarted.Task :> Task,
+                          Task.Delay(TimeSpan.FromSeconds 2.0)
+                      )
 
-              // Assertion: the finalizer is suspended because the
-              // callback is still blocked on the release task.
-              Expect.isFalse
-                  c.Finalization.IsCompleted
-                  "finalization must NOT complete while the callback is blocked"
+                  callbackStartedInTime <-
+                      Object.ReferenceEquals(
+                          callbackWinner,
+                          callbackStarted.Task
+                      )
 
-              // Assertion: the test thread remains responsive. The
-              // finalizer is suspended on a thread-pool thread; the
-              // main test thread can still yield and run other work.
-              do! Task.Delay(100)
+                  if callbackStartedInTime then
+                      // Run the lifecycle with the BLOCKING registration as
+                      // tReg. The customReg is the lifecycle's tReg, so the
+                      // finalizer's DisposeAsync() will be forced to wait
+                      // asynchronously for the blocking callback.
+                      let lifecycleTask =
+                          executeLifecycleWithSeam
+                              lcts request timeoutTcs cancelTcs
+                              okStdout okStderr seam
+                              customReg cReg tcts
+
+                      // Bounded wait for lifecycle to return. A regression
+                      // to synchronous disposal would block indefinitely here.
+                      let! completionWinner =
+                          Task.WhenAny(
+                              lifecycleTask :> Task,
+                              Task.Delay(TimeSpan.FromSeconds 2.0)
+                          )
+
+                      completionReturnedInTime <-
+                          Object.ReferenceEquals(
+                              completionWinner,
+                              lifecycleTask
+                          )
+
+                      if completionReturnedInTime then
+                          let! c = lifecycleTask
+                          completionResult <- Some c
+
+                          // Assertion: the finalizer is suspended because the
+                          // callback is still blocked on the release task.
+                          finalizationSuspended <-
+                              not c.Finalization.IsCompleted
+
+                          // Assertion: the test thread remains responsive.
+                          do! Task.Delay(100)
+                          threadResponsive <-
+                              not c.Finalization.IsCompleted
+              finally
+                  // Release the callback. The disposal await resumes, the
+                  // finalizer proceeds through the remaining disposals,
+                  // and the seam's Dispose callback runs exactly once.
+                  releaseCallback.TrySetResult(true) |> ignore
+
+              // Bounded wait for CancelAsync to complete after callback release.
+              let! cancellationWinner =
+                  Task.WhenAny(
+                      cancellationTask,
+                      Task.Delay(TimeSpan.FromSeconds 2.0)
+                  )
+
               Expect.isTrue
-                  (not c.Finalization.IsCompleted)
-                  "finalization is still blocked after the test thread has yielded"
+                  (Object.ReferenceEquals(
+                      cancellationWinner,
+                      cancellationTask
+                  ))
+                  "CancelAsync must finish after callback release"
 
-              // Release the callback. The disposal await resumes, the
-              // finalizer proceeds through the remaining disposals,
-              // and the seam's Dispose callback runs exactly once.
-              releaseCallback.SetResult(true) |> ignore
+              // Explicitly await the winning task to observe any fault.
+              do! cancellationTask
 
-              do! c.Finalization
-              Expect.equal disposeCount 1 "finalizer must dispose exactly once after the callback releases"
+              match completionResult with
+              | Some completion ->
+                  // Bounded wait for finalization after callback release.
+                  let! finalizationWinner =
+                      Task.WhenAny(
+                          completion.Finalization,
+                          Task.Delay(TimeSpan.FromSeconds 2.0)
+                      )
 
+                  Expect.isTrue
+                      (Object.ReferenceEquals(
+                          finalizationWinner,
+                          completion.Finalization
+                      ))
+                      "finalization must complete after callback release"
+
+                  // Explicitly await the winning task to observe any fault.
+                  do! completion.Finalization
+
+              | None ->
+                  ()
+
+              // Dispose after observing CancelAsync task completion.
               customCts.Dispose()
+
+              // Assert recorded conditions after all cleanup is complete.
+              // This ensures all paths through the try block are bounded.
+              Expect.isTrue callbackStartedInTime
+                  "callback must start within the bound"
+
+              Expect.isTrue completionReturnedInTime
+                  "lifecycle must return without waiting synchronously for disposal"
+
+              Expect.isTrue finalizationSuspended
+                  "finalization must await the active callback"
+
+              Expect.isTrue threadResponsive
+                  "test thread must remain responsive"
+
+              Expect.isTrue
+                  (Object.ReferenceEquals(
+                      cancellationWinner,
+                      cancellationTask
+                  ))
+                  "CancelAsync must finish after callback release"
+
+              Expect.equal disposeCount 1 "dispose exactly once"
           }
         ]
     // Intrinsic sequencing: the canonical gate is deterministic without
