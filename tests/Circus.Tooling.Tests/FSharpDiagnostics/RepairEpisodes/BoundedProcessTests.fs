@@ -580,6 +580,7 @@ let tests =
                   Kill = fun () -> Ok ()
                   HasExited = fun () -> true
                   ReadExitCode = fun () -> 0
+                  Dispose = fun () -> ()
               }
               let! result =
                   runWithSeam seam
@@ -603,6 +604,7 @@ let tests =
                   Kill = fun () -> Ok ()
                   HasExited = fun () -> true
                   ReadExitCode = fun () -> 0
+                  Dispose = fun () -> ()
               }
               let! result =
                   runWithSeam seam
@@ -624,6 +626,7 @@ let tests =
                   Kill = fun () -> Ok ()
                   HasExited = fun () -> false
                   ReadExitCode = fun () -> 0
+                  Dispose = fun () -> ()
               }
               let! result =
                   runWithSeam seam
@@ -631,7 +634,7 @@ let tests =
                       (Task.FromResult(EofReached [||]))
                       (TimeSpan.FromMilliseconds 100.0) 1024 1024
               match result with
-              | Error(TerminationCleanupFailed(_, _, false, _, _, _)) -> ()
+              | Error(TerminationCleanupFailed { ProcessExited = false }) -> ()
               | Error e -> failwithf "expected TerminationCleanupFailed, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
@@ -645,6 +648,7 @@ let tests =
                   Kill = fun () -> Ok ()
                   HasExited = fun () -> false
                   ReadExitCode = fun () -> 0
+                  Dispose = fun () -> ()
               }
               let! result =
                   runWithSeam seam
@@ -665,6 +669,7 @@ let tests =
                   Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
                   HasExited = fun () -> false
                   ReadExitCode = fun () -> 0
+                  Dispose = fun () -> ()
               }
               let! result =
                   runWithSeam seam

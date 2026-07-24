@@ -56,6 +56,24 @@ type TerminalCause =
     | StderrTerminal
     | ExitWaitFailed
 
+type TerminalFailure =
+    | StdoutOverflow
+    | StderrOverflow
+    | StdoutReadFailure of detail: string
+    | StderrReadFailure of detail: string
+    | UnexpectedStdoutCancellation
+    | UnexpectedStderrCancellation
+
+type TerminationCleanupContext = {
+    Cause: TerminalCause
+    TerminalFailure: TerminalFailure option
+    KillDetail: string option
+    ProcessExited: bool
+    StdoutComplete: bool
+    StderrComplete: bool
+    WaitDetail: string option
+}
+
 type BoundedProcessFailure =
     | InvalidRequest of detail: string
     | LaunchFailed of executable: string * detail: string
@@ -69,13 +87,7 @@ type BoundedProcessFailure =
     | WaitFailed of detail: string
     | KillFailed of detail: string
     | IncompleteOutput of stdoutComplete: bool * stderrComplete: bool
-    | TerminationCleanupFailed of
-        cause: TerminalCause *
-        killDetail: string option *
-        processExited: bool *
-        stdoutComplete: bool *
-        stderrComplete: bool *
-        waitDetail: string option
+    | TerminationCleanupFailed of TerminationCleanupContext
 
 // -----------------------------------------------------------------------------
 // Request validation
@@ -274,7 +286,40 @@ type internal LifecycleSeam = {
     /// Named to avoid the field-name collision with BoundedProcessSuccess
     /// the test site relies on for type inference.
     ReadExitCode: unit -> int
+    /// Release the resources owned by the seam. In this checkpoint the
+    /// field is supplied by every construction site but the lifecycle
+    /// does not invoke it yet; ownership behaviour is left to a later
+    /// checkpoint that wires Task.WhenAll-based disposal.
+    Dispose: unit -> unit
 }
+
+// -----------------------------------------------------------------------------
+// Termination-cleanup failure constructor helper
+//
+// All production sites that surface a TerminationCleanupFailed fail through
+// this helper so the record layout has exactly one owner. This checkpoint
+// only normalises the payload shape; actual TerminalFailure values are
+// captured by a later classifier-only checkpoint.
+// -----------------------------------------------------------------------------
+
+let private terminationCleanupFailure
+    cause
+    terminalFailure
+    killDetail
+    processExited
+    stdoutComplete
+    stderrComplete
+    waitDetail
+    =
+    BoundedProcessFailure.TerminationCleanupFailed {
+        Cause = cause
+        TerminalFailure = terminalFailure
+        KillDetail = killDetail
+        ProcessExited = processExited
+        StdoutComplete = stdoutComplete
+        StderrComplete = stderrComplete
+        WaitDetail = waitDetail
+    }
 
 // -----------------------------------------------------------------------------
 // Lifecycle implementation
@@ -493,21 +538,21 @@ let internal executeLifecycleWithSeam
             if killDetail.IsSome then
                 return Error(BoundedProcessFailure.KillFailed killDetail.Value)
             elif cleanupIncomplete then
-                return Error(BoundedProcessFailure.TerminationCleanupFailed(cause, killDetail, processExited, stdoutComplete, stderrComplete, waitDetail))
+                return Error(terminationCleanupFailure cause None killDetail processExited stdoutComplete stderrComplete waitDetail)
             else
                 return Error(BoundedProcessFailure.TimedOut request.Limits.Timeout)
         | CallerCancel ->
             if killDetail.IsSome then
                 return Error(BoundedProcessFailure.KillFailed killDetail.Value)
             elif cleanupIncomplete then
-                return Error(BoundedProcessFailure.TerminationCleanupFailed(cause, killDetail, processExited, stdoutComplete, stderrComplete, waitDetail))
+                return Error(terminationCleanupFailure cause None killDetail processExited stdoutComplete stderrComplete waitDetail)
             else
                 return Error BoundedProcessFailure.Cancelled
         | StdoutTerminal ->
             if killDetail.IsSome then
                 return Error(BoundedProcessFailure.KillFailed killDetail.Value)
             elif cleanupIncomplete then
-                return Error(BoundedProcessFailure.TerminationCleanupFailed(cause, killDetail, processExited, stdoutComplete, stderrComplete, waitDetail))
+                return Error(terminationCleanupFailure cause None killDetail processExited stdoutComplete stderrComplete waitDetail)
             elif exitWaitFailed then
                 return Error(BoundedProcessFailure.WaitFailed waitDetail.Value)
             elif exitCodeCell.Value.IsNone
@@ -537,7 +582,7 @@ let internal executeLifecycleWithSeam
             if killDetail.IsSome then
                 return Error(BoundedProcessFailure.KillFailed killDetail.Value)
             elif cleanupIncomplete then
-                return Error(BoundedProcessFailure.TerminationCleanupFailed(cause, killDetail, processExited, stdoutComplete, stderrComplete, waitDetail))
+                return Error(terminationCleanupFailure cause None killDetail processExited stdoutComplete stderrComplete waitDetail)
             elif exitWaitFailed then
                 return Error(BoundedProcessFailure.WaitFailed waitDetail.Value)
             elif exitCodeCell.Value.IsNone
@@ -571,7 +616,7 @@ let internal executeLifecycleWithSeam
             if killDetail.IsSome then
                 return Error(BoundedProcessFailure.KillFailed killDetail.Value)
             elif cleanupIncomplete then
-                return Error(BoundedProcessFailure.TerminationCleanupFailed(cause, killDetail, processExited, stdoutComplete, stderrComplete, waitDetail))
+                return Error(terminationCleanupFailure cause None killDetail processExited stdoutComplete stderrComplete waitDetail)
             elif exitWaitFailed then
                 return Error(BoundedProcessFailure.WaitFailed waitDetail.Value)
             elif exitCodeCell.Value.IsNone
@@ -617,6 +662,12 @@ let private defaultSeam (procObj: Process) : LifecycleSeam =
             | :? System.NotSupportedException as ex -> Error ex.Message
         HasExited = fun () -> procObj.HasExited
         ReadExitCode = fun () -> procObj.ExitCode
+        Dispose =
+            fun () ->
+                try
+                    procObj.Dispose()
+                with
+                | _ -> ()
     }
 
 // -----------------------------------------------------------------------------
