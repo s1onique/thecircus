@@ -3,17 +3,19 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 #nowarn "3511"
 
 // =============================================================================
-// Bounded-process core — CORRECTION 09
+// Bounded-process core — CORRECTION 10
 //
-// Cleanup-and-classification follow-up to CORRECTION 08.
+// Async-cleanup and authoritative-cause follow-up to CORRECTION 09.
 //
-// P0 fixes from CORRECTION08 expert review:
-// - Terminal cleanup awaits process exit and readers explicitly (bounded grace)
-// - Timeout vs cancellation classification uses the winning tcs/task identity
-// - Reader faults become ReadFailed with the actual exception
-// - Process-wait failure becomes WaitFailed, not exit code -1
-// - IncompleteOutput used when cleanup grace expires without completion
-// - Disposal happens after tasks finish, not before
+// P0 fixes from CORRECTION09 expert review:
+// - All cleanup "waits" are now async races against Task.Delay (no Task.Wait)
+// - Reader cancellation is non-authoritative; public reason comes from the
+//   winning tcs.Task (timeout vs caller cancel), not from linked reader cancel
+// - KillFailed is preserved on every termination path (overflow, reader
+//   failures, timeout, cancellation)
+// - Process-wait failure retains the actual exception
+// - TerminationCleanupFailed carries the original cause alongside cleanup state
+// - Disposal happens after cleanup completes successfully
 // =============================================================================
 
 open System
@@ -46,6 +48,14 @@ type BoundedProcessSuccess = {
     Stderr: byte array
 }
 
+// Internal-cause that determines the public failure classification
+type TerminalCause =
+    | NaturalExit
+    | TimeoutFire
+    | CallerCancel
+    | StdoutTerminal
+    | StderrTerminal
+
 type BoundedProcessFailure =
     | InvalidRequest of detail: string
     | LaunchFailed of executable: string * detail: string
@@ -59,6 +69,13 @@ type BoundedProcessFailure =
     | WaitFailed of detail: string
     | KillFailed of detail: string
     | IncompleteOutput of stdoutComplete: bool * stderrComplete: bool
+    | TerminationCleanupFailed of
+        cause: TerminalCause *
+        killDetail: string option *
+        processExited: bool *
+        stdoutComplete: bool *
+        stderrComplete: bool *
+        waitDetail: string option
 
 // -----------------------------------------------------------------------------
 // Request validation
@@ -230,28 +247,14 @@ type MutableCell<'T> =
     { mutable Value: 'T }
 
 // -----------------------------------------------------------------------------
-// Await helper - await a task with timeout, returns true if completed
+// Async grace-period race helper - no Task.Wait
 // -----------------------------------------------------------------------------
 
-let private tryAwait (t: Task) (timeout: TimeSpan) : bool =
-    if t.IsCompleted then true
-    else
-        try
-            t.Wait(timeout)
-        with
-        | _ -> false
-
-let private tryAwaitOutcome (t: Task<ReadOutcome>) (timeout: TimeSpan) : bool =
-    if t.IsCompleted then true
-    else
-        try
-            t.Wait(timeout) |> ignore
-            true
-        with
-        | _ -> false
+let private raceWithDelay (t: Task) (grace: TimeSpan) : Task<Task> =
+    Task.WhenAny(t, Task.Delay(grace))
 
 // -----------------------------------------------------------------------------
-// Inner event loop body — CORRECTION 09
+// Inner event loop body — CORRECTION 10
 // -----------------------------------------------------------------------------
 
 let private executeLifecycle
@@ -273,10 +276,11 @@ let private executeLifecycle
         let stdoutOutcomeCell = { Value = None }
         let stderrOutcomeCell = { Value = None }
         let exitCodeCell = { Value = None }
+        let waitDetailCell = { Value = None }
         let killErrorCell = { Value = None }
+        let terminalCauseCell = { Value = NaturalExit }
         let mutable killRequested = false
-        let mutable timedOut = false
-        let mutable cancelled = false
+        let mutable killObserved = false
 
         let killNow () =
             if not killRequested then
@@ -309,78 +313,93 @@ let private executeLifecycle
             let! winner = Task.WhenAny(pending.ToArray())
 
             if Object.ReferenceEquals(winner, timeoutTcs.Task) then
-                timedOut <- true
+                terminalCauseCell.Value <- TimeoutFire
                 killNow()
             elif Object.ReferenceEquals(winner, cancelTcs.Task) then
-                cancelled <- true
+                terminalCauseCell.Value <- CallerCancel
                 killNow()
             elif stdoutOutcome.IsNone && Object.ReferenceEquals(winner, stdoutTask) then
                 let outcome = tryReadOutcome stdoutTask
                 stdoutOutcomeCell.Value <- Some outcome
                 if isTerminal outcome then
+                    // Record cause but don't classify yet; reader cancellation
+                    // may be due to timeout/caller cancel that wins later
+                    if terminalCauseCell.Value = NaturalExit then
+                        terminalCauseCell.Value <- StdoutTerminal
                     killNow()
             elif stderrOutcome.IsNone && Object.ReferenceEquals(winner, stderrTask) then
                 let outcome = tryReadOutcome stderrTask
                 stderrOutcomeCell.Value <- Some outcome
                 if isTerminal outcome then
+                    if terminalCauseCell.Value = NaturalExit then
+                        terminalCauseCell.Value <- StderrTerminal
                     killNow()
             elif exitCode.IsNone && Object.ReferenceEquals(winner, exitTask) then
-                try
-                    exitCodeCell.Value <- Some(procObj.ExitCode)
-                with
-                | _ -> ()
-                // If ExitCode throws (process still running), leave as None
+                if exitTask.IsCompletedSuccessfully then
+                    try
+                        exitCodeCell.Value <- Some(procObj.ExitCode)
+                    with
+                    | ex ->
+                        waitDetailCell.Value <- Some ex.Message
+                        exitCodeCell.Value <- None
+                else if exitTask.IsFaulted then
+                    waitDetailCell.Value <- Some(exitTask.Exception.GetBaseException().Message)
+                else if exitTask.IsCanceled then
+                    waitDetailCell.Value <- Some "process exit wait cancelled"
 
             let sOut = stdoutOutcomeCell.Value
             let sErr = stderrOutcomeCell.Value
             let eC = exitCodeCell.Value
             let stdoutTerminal = sOut.IsSome && isTerminal(sOut.Value)
             let stderrTerminal = sErr.IsSome && isTerminal(sErr.Value)
-            // Natural completion: process exited (exit code captured) and both readers EOF
+            // Only stop looping on natural completion if no kill was needed
             let naturalComplete =
                 eC.IsSome
                 && sOut.IsSome && isEof(sOut.Value)
                 && sErr.IsSome && isEof(sErr.Value)
+                && terminalCauseCell.Value = NaturalExit
             loopDone <-
                 naturalComplete
-                || timedOut
-                || cancelled
-                || stdoutTerminal
-                || stderrTerminal
+                || (terminalCauseCell.Value <> NaturalExit
+                    && (killObserved || (killRequested && procObj.HasExited)))
 
-        // ---- Terminal cleanup: explicit await with bounded grace ----
+        // ---- Terminal cleanup: async grace races (no Task.Wait) ----
         // Cancel linked token to stop readers
         try lcts.Cancel() with | _ -> ()
 
-        // Best-effort await process exit (up to 5 seconds)
-        let exitCompleted = tryAwait exitTask (TimeSpan.FromSeconds(5.0))
+        // Async race: await process exit or 5s grace
+        let exitRace = raceWithDelay exitTask (TimeSpan.FromSeconds(5.0))
+        let! exitWinner = exitRace
+        let processExited =
+            Object.ReferenceEquals(exitWinner, exitTask) && exitTask.IsCompletedSuccessfully
 
-        // Capture exit code if not already captured
-        if exitCodeCell.Value.IsNone then
-            try
-                if not procObj.HasExited then
-                    procObj.WaitForExit(1000) |> ignore
-            with
-            | _ -> ()
+        // Capture exit code if process exited but we didn't get it from the loop
+        if exitCodeCell.Value.IsNone && processExited then
             try
                 exitCodeCell.Value <- Some(procObj.ExitCode)
             with
-            | _ -> ()
+            | ex ->
+                waitDetailCell.Value <- Some ex.Message
 
-        // Best-effort await readers (up to 2 seconds each)
-        let stdoutCompleted = tryAwaitOutcome stdoutTask (TimeSpan.FromSeconds(2.0))
-        let stderrCompleted = tryAwaitOutcome stderrTask (TimeSpan.FromSeconds(2.0))
+        // Async race: stdout reader vs 2s grace
+        let stdoutRace = raceWithDelay stdoutTask (TimeSpan.FromSeconds(2.0))
+        let! stdoutWinner = stdoutRace
+        let stdoutComplete =
+            Object.ReferenceEquals(stdoutWinner, stdoutTask) && stdoutTask.IsCompleted
 
-        // Capture remaining reader outcomes if not already captured
+        // Async race: stderr reader vs 2s grace
+        let stderrRace = raceWithDelay stderrTask (TimeSpan.FromSeconds(2.0))
+        let! stderrWinner = stderrRace
+        let stderrComplete =
+            Object.ReferenceEquals(stderrWinner, stderrTask) && stderrTask.IsCompleted
+
+        // Capture any missing reader outcomes
         if stdoutOutcomeCell.Value.IsNone then
             stdoutOutcomeCell.Value <- Some(tryReadOutcome stdoutTask)
         if stderrOutcomeCell.Value.IsNone then
             stderrOutcomeCell.Value <- Some(tryReadOutcome stderrTask)
 
-        let stdoutComplete = stdoutCompleted && stdoutTask.IsCompleted
-        let stderrComplete = stderrCompleted && stderrTask.IsCompleted
-
-        // Dispose everything now that all tasks have settled
+        // Dispose everything only after cleanup attempts complete
         tReg.Dispose()
         cReg.Dispose()
         lcts.Dispose()
@@ -388,44 +407,113 @@ let private executeLifecycle
         try procObj.Dispose() with | _ -> ()
 
         // ---- Classify ----
-        if cancelled then
-            match killErrorCell.Value with
-            | Some msg -> return Error(BoundedProcessFailure.KillFailed msg)
-            | None -> return Error BoundedProcessFailure.Cancelled
-        elif timedOut then
-            match killErrorCell.Value with
-            | Some msg -> return Error(BoundedProcessFailure.KillFailed msg)
-            | None -> return Error(BoundedProcessFailure.TimedOut request.Limits.Timeout)
-        elif exitCodeCell.Value.IsNone then
-            // Process wait failed
-            match killErrorCell.Value with
-            | Some msg -> return Error(BoundedProcessFailure.KillFailed msg)
-            | None -> return Error(BoundedProcessFailure.WaitFailed "process exit wait failed")
-        elif not stdoutComplete || not stderrComplete then
-            // Cleanup grace expired without completion
-            return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
-        else
-            let stdoutFinal = stdoutOutcomeCell.Value.Value
-            let stderrFinal = stderrOutcomeCell.Value.Value
-            let code = exitCodeCell.Value.Value
-            match stdoutFinal with
-            | Overflowed _ -> return Error(BoundedProcessFailure.StdoutLimitExceeded request.Limits.StdoutLimitBytes)
-            | ReadFailed msg -> return Error(BoundedProcessFailure.StdoutReaderFailed msg)
-            | ReadCancelled -> return Error BoundedProcessFailure.Cancelled
-            | EofReached b ->
+        let cause = terminalCauseCell.Value
+        let killDetail = killErrorCell.Value
+        let waitDetail = waitDetailCell.Value
+
+        // Determine if cleanup was incomplete
+        let cleanupIncomplete = not stdoutComplete || not stderrComplete
+
+        match cause with
+        | TimeoutFire ->
+            if killDetail.IsSome then
+                return Error(BoundedProcessFailure.KillFailed killDetail.Value)
+            elif cleanupIncomplete then
+                return Error(BoundedProcessFailure.TerminationCleanupFailed(cause, killDetail, processExited, stdoutComplete, stderrComplete, waitDetail))
+            else
+                return Error(BoundedProcessFailure.TimedOut request.Limits.Timeout)
+        | CallerCancel ->
+            if killDetail.IsSome then
+                return Error(BoundedProcessFailure.KillFailed killDetail.Value)
+            elif cleanupIncomplete then
+                return Error(BoundedProcessFailure.TerminationCleanupFailed(cause, killDetail, processExited, stdoutComplete, stderrComplete, waitDetail))
+            else
+                return Error BoundedProcessFailure.Cancelled
+        | StdoutTerminal ->
+            // Reader cancellation here is non-authoritative - if cause was set to
+            // TimeoutFire or CallerCancel (already handled above), this branch
+            // handles cases where reader terminal cause is independent
+            if killDetail.IsSome then
+                return Error(BoundedProcessFailure.KillFailed killDetail.Value)
+            elif cleanupIncomplete then
+                return Error(BoundedProcessFailure.TerminationCleanupFailed(cause, killDetail, processExited, stdoutComplete, stderrComplete, waitDetail))
+            elif exitCodeCell.Value.IsNone then
+                let detail = waitDetail |> Option.defaultValue "process exit unavailable"
+                return Error(BoundedProcessFailure.WaitFailed detail)
+            else
+                let stdoutFinal = stdoutOutcomeCell.Value.Value
+                let stderrFinal = stderrOutcomeCell.Value.Value
+                let code = exitCodeCell.Value.Value
+                match stdoutFinal with
+                | Overflowed _ -> return Error(BoundedProcessFailure.StdoutLimitExceeded request.Limits.StdoutLimitBytes)
+                | ReadFailed msg -> return Error(BoundedProcessFailure.StdoutReaderFailed msg)
+                | ReadCancelled -> return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
+                | EofReached b ->
+                    match stderrFinal with
+                    | Overflowed _ -> return Error(BoundedProcessFailure.StderrLimitExceeded request.Limits.StderrLimitBytes)
+                    | ReadFailed msg -> return Error(BoundedProcessFailure.StderrReaderFailed msg)
+                    | ReadCancelled -> return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
+                    | EofReached eb ->
+                        if code = 0 then
+                            return Ok { ExitCode = code; Stdout = b; Stderr = eb }
+                        else
+                            return Error(BoundedProcessFailure.NonZeroExit(code, b, eb))
+        | StderrTerminal ->
+            if killDetail.IsSome then
+                return Error(BoundedProcessFailure.KillFailed killDetail.Value)
+            elif cleanupIncomplete then
+                return Error(BoundedProcessFailure.TerminationCleanupFailed(cause, killDetail, processExited, stdoutComplete, stderrComplete, waitDetail))
+            elif exitCodeCell.Value.IsNone then
+                let detail = waitDetail |> Option.defaultValue "process exit unavailable"
+                return Error(BoundedProcessFailure.WaitFailed detail)
+            else
+                let stdoutFinal = stdoutOutcomeCell.Value.Value
+                let stderrFinal = stderrOutcomeCell.Value.Value
+                let code = exitCodeCell.Value.Value
                 match stderrFinal with
                 | Overflowed _ -> return Error(BoundedProcessFailure.StderrLimitExceeded request.Limits.StderrLimitBytes)
                 | ReadFailed msg -> return Error(BoundedProcessFailure.StderrReaderFailed msg)
-                | ReadCancelled -> return Error BoundedProcessFailure.Cancelled
+                | ReadCancelled -> return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
                 | EofReached eb ->
-                    if code = 0 then
-                        return Ok { ExitCode = code; Stdout = b; Stderr = eb }
-                    else
-                        return Error(BoundedProcessFailure.NonZeroExit(code, b, eb))
+                    match stdoutFinal with
+                    | Overflowed _ -> return Error(BoundedProcessFailure.StdoutLimitExceeded request.Limits.StdoutLimitBytes)
+                    | ReadFailed msg -> return Error(BoundedProcessFailure.StdoutReaderFailed msg)
+                    | ReadCancelled -> return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
+                    | EofReached b ->
+                        if code = 0 then
+                            return Ok { ExitCode = code; Stdout = b; Stderr = eb }
+                        else
+                            return Error(BoundedProcessFailure.NonZeroExit(code, b, eb))
+        | NaturalExit ->
+            if killDetail.IsSome then
+                return Error(BoundedProcessFailure.KillFailed killDetail.Value)
+            elif cleanupIncomplete then
+                return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
+            elif exitCodeCell.Value.IsNone then
+                let detail = waitDetail |> Option.defaultValue "process exit unavailable"
+                return Error(BoundedProcessFailure.WaitFailed detail)
+            else
+                let stdoutFinal = stdoutOutcomeCell.Value.Value
+                let stderrFinal = stderrOutcomeCell.Value.Value
+                let code = exitCodeCell.Value.Value
+                match stdoutFinal with
+                | Overflowed _ -> return Error(BoundedProcessFailure.StdoutLimitExceeded request.Limits.StdoutLimitBytes)
+                | ReadFailed msg -> return Error(BoundedProcessFailure.StdoutReaderFailed msg)
+                | ReadCancelled -> return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
+                | EofReached b ->
+                    match stderrFinal with
+                    | Overflowed _ -> return Error(BoundedProcessFailure.StderrLimitExceeded request.Limits.StderrLimitBytes)
+                    | ReadFailed msg -> return Error(BoundedProcessFailure.StderrReaderFailed msg)
+                    | ReadCancelled -> return Error(BoundedProcessFailure.IncompleteOutput(stdoutComplete, stderrComplete))
+                    | EofReached eb ->
+                        if code = 0 then
+                            return Ok { ExitCode = code; Stdout = b; Stderr = eb }
+                        else
+                            return Error(BoundedProcessFailure.NonZeroExit(code, b, eb))
     }
 
 // -----------------------------------------------------------------------------
-// Process runner (public API) — CORRECTION 09
+// Process runner (public API) — CORRECTION 10
 // -----------------------------------------------------------------------------
 
 let run
