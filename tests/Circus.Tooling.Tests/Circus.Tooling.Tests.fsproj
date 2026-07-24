@@ -66,4 +66,48 @@
     <ProjectReference Include="..\..\tools\Circus.Tooling\Circus.Tooling.fsproj" />
   </ItemGroup>
 
+  <!--
+    BoundedProcess authority tests require a precompiled F# fixture
+    executable that BoundedProcess can launch as a child process. The
+    fixture is built as a standalone project (no apphost) and its
+    assembly plus runtimeconfig.json are copied into this test
+    project's output directory so `AppContext.BaseDirectory` resolves
+    a stable, cross-platform path.
+
+    The project reference is declared with
+    `ReferenceOutputAssembly="false"` so the fixture assembly is
+    *built* but never loaded into the test process. Each BoundedProcess
+    authority test launches the fixture as a separate `dotnet` process
+    via `dotnet <fixture.dll> <mode> ...`. Loading the fixture into
+    the test process would hold the DLL mapped and create a transient
+    `BoundedProcess` lifetime risk that has nothing to do with the
+    production lifecycle under test.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Circus.Tooling.ProcessTreeFixture\Circus.Tooling.ProcessTreeFixture.fsproj"
+                      PrivateAssets="all"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="None"
+                      SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+  <!--
+    Copy the fixture's bare managed assembly and its runtimeconfig.json
+    into the test output directory. The runtimeconfig.json is required
+    for `dotnet <fixture.dll>` to identify the framework; the assembly
+    is the managed code under test.
+  -->
+  <Target Name="CopyProcessTreeFixture"
+          AfterTargets="Build"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\Circus.Tooling.ProcessTreeFixture\bin\$(Configuration)\net10.0\circus-process-tree-fixture.dll')">
+    <ItemGroup>
+      <_ProcessTreeFixtureFiles Include="..\Circus.Tooling.ProcessTreeFixture\bin\$(Configuration)\net10.0\circus-process-tree-fixture.dll" />
+      <_ProcessTreeFixtureFiles Include="..\Circus.Tooling.ProcessTreeFixture\bin\$(Configuration)\net10.0\circus-process-tree-fixture.runtimeconfig.json"
+                               Condition="Exists('..\Circus.Tooling.ProcessTreeFixture\bin\$(Configuration)\net10.0\circus-process-tree-fixture.runtimeconfig.json')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_ProcessTreeFixtureFiles)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

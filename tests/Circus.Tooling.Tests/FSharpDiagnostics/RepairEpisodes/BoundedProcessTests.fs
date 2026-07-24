@@ -10,154 +10,42 @@ open System.Threading.Tasks
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 
 // -----------------------------------------------------------------------------
-// Fixture smoke test
+// Precompiled F# fixture
 //
-// Every generated .fsx script is run via `dotnet fsi --exec` before it is
-// used as a process under test. The smoke assertion catches fixture-script
-// compilation errors (e.g. FS0039 on a missing qualification) and runtime
-// errors (e.g. an undefined identifier) so that BoundedProcess assertions
-// are about production behaviour, not fixture defects.
+// Every BoundedProcess real-process test launches the precompiled
+//   tests/Circus.Tooling.ProcessTreeFixture
+// project assembly via `dotnet <fixture.dll> <mode> ...`. The fixture
+// is built as a separate project that the test project references with
+// `ReferenceOutputAssembly="false"`; a custom MSBuild target copies the
+// fixture's managed assembly and runtimeconfig.json into this test
+// project's output directory so the path is stable and cross-platform.
 //
-// The smoke test only fails on:
-//   - compile errors (any stderr line containing "error FS")
-//   - hangs (timeout)
-// The intended exit code is NOT asserted: a fixture that should exit with
-// a non-zero code (e.g. `createExitFixture`) is still a valid fixture.
+// The fixture is NEVER loaded into the test process; it is launched
+// as a separate `dotnet` child for every BoundedProcess invocation.
+// This removes the FSI startup / dynamic-compilation cost that the
+// previous checkpoint left on the authority test workload and removes
+// the smoke-test-of-fixture-script step that introduced an
+// `error FS` failure mode unrelated to BoundedProcess itself.
+//
+// See `tests/Circus.Tooling.ProcessTreeFixture/Program.fs` for the
+// full mode grammar.
 // -----------------------------------------------------------------------------
 
-let private smokeTestFixture (label: string) (path: string) : unit =
-    let psi = ProcessStartInfo()
-    psi.FileName <- "dotnet"
-    // Pass --smoke so sleep fixtures exit immediately. The flag is
-    // irrelevant for non-sleep fixtures; they ignore unknown args.
-    //
-    // ArgumentList is preferred over the manually-escaped `Arguments`
-    // string: ProcessStartInfo treats each entry as a single argv slot,
-    // so embedded quotes and spaces do not need shell-level escaping.
-    psi.ArgumentList.Add("fsi")
-    psi.ArgumentList.Add("--exec")
-    psi.ArgumentList.Add(path)
-    psi.ArgumentList.Add("--smoke")
-    psi.UseShellExecute <- false
-    psi.RedirectStandardOutput <- true
-    psi.RedirectStandardError <- true
-    psi.CreateNoWindow <- true
-    use p = Process.Start(psi)
-    // Drain BOTH redirected streams concurrently.  Reading only one
-    // after WaitForExit is the documented deadlock pattern when the
-    // child writes to a redirected pipe faster than the OS buffers free.
-    let stdoutTask = p.StandardOutput.ReadToEndAsync()
-    let stderrTask = p.StandardError.ReadToEndAsync()
-    if not (p.WaitForExit(30000)) then
-        try p.Kill() with | _ -> ()
-        try stdoutTask.Wait(5000) |> ignore with | _ -> ()
-        try stderrTask.Wait(5000) |> ignore with | _ -> ()
-        failwithf "smoke test timed out for %s (%s)" label path
-    let err =
-        try stderrTask.GetAwaiter().GetResult()
-        with | _ -> ""
-    try stdoutTask.Wait(5000) |> ignore with | _ -> ()
-    if err.Contains("error FS") then
-        failwithf "smoke test detected F# compile error in %s (%s): %s" label path err
+let private fixturePath =
+    Path.Combine(AppContext.BaseDirectory, "circus-process-tree-fixture.dll")
 
-// -----------------------------------------------------------------------------
-// Raw-byte test fixtures
-//
-// Every generated script begins with `open System` so that
-// `Console.OpenStandardOutput()` / `Console.OpenStandardError()` resolve
-// inside the `dotnet fsi --exec` script context, which does not
-// auto-open `System`. Binary writes are retained — the raw bytes are
-// piped through `Stream.Write(array, offset, count)` rather than
-// converted to strings.
-// -----------------------------------------------------------------------------
-
-/// Renders a byte array as an F# byte-literal array expression. The empty
-/// case produces `[||]`; otherwise each byte is rendered as `Nuy` and
-/// the array is closed with `|]`.
-let private renderByteLiteralArray (bytes: byte array) : string =
-    if bytes.Length = 0 then
-        "[||]"
-    else
-        let literals = String.concat "uy;" (Array.map string bytes)
-        sprintf "[|%s|]" (literals + "uy")
-
-/// Creates a fixture that writes raw bytes to stdout using binary stream
-let private createRawStdoutFixture (bytes: byte array) : string =
-    let path = Path.Combine(Path.GetTempPath(), $"fixture-raw-stdout-{Guid.NewGuid():N}.fsx")
-    let literalArray = renderByteLiteralArray bytes
-    let content =
-        sprintf "open System\nlet bytes = %s\nlet stream = Console.OpenStandardOutput()\nstream.Write(bytes, 0, bytes.Length)\nstream.Flush()\n"
-            literalArray
-    File.WriteAllText(path, content)
-    path
-
-/// Creates a fixture that writes raw bytes to stderr using binary stream
-let private createRawStderrFixture (bytes: byte array) : string =
-    let path = Path.Combine(Path.GetTempPath(), $"fixture-raw-stderr-{Guid.NewGuid():N}.fsx")
-    let literalArray = renderByteLiteralArray bytes
-    let content =
-        sprintf "open System\nlet bytes = %s\nlet stream = Console.OpenStandardError()\nstream.Write(bytes, 0, bytes.Length)\nstream.Flush()\n"
-            literalArray
-    File.WriteAllText(path, content)
-    path
-
-/// Creates a fixture that writes raw bytes to both stdout and stderr
-let private createRawBothFixture (stdoutBytes: byte array) (stderrBytes: byte array) : string =
-    let path = Path.Combine(Path.GetTempPath(), $"fixture-raw-both-{Guid.NewGuid():N}.fsx")
-    let stdoutLiteralArray = renderByteLiteralArray stdoutBytes
-    let stderrLiteralArray = renderByteLiteralArray stderrBytes
-    let content =
-        sprintf "open System\nlet stdoutBytes = %s\nlet stderrBytes = %s\nlet stdoutStream = Console.OpenStandardOutput()\nstdoutStream.Write(stdoutBytes, 0, stdoutBytes.Length)\nstdoutStream.Flush()\nlet stderrStream = Console.OpenStandardError()\nstderrStream.Write(stderrBytes, 0, stderrBytes.Length)\nstderrStream.Flush()\n"
-            stdoutLiteralArray stderrLiteralArray
-    File.WriteAllText(path, content)
-    path
-
-/// Creates a fixture that sleeps for specified milliseconds and writes
-/// "done" to stdout afterwards. When the `--smoke` flag is passed (the
-/// smoke test path), the script exits immediately without sleeping so the
-/// BoundedProcess test alone owns the timing budget.
-let private createSleepFixture (ms: int) : string =
-    let path = Path.Combine(Path.GetTempPath(), $"fixture-sleep-{Guid.NewGuid():N}.fsx")
-    let content =
-        sprintf "open System\nopen System.Threading\nlet stdout = Console.OpenStandardOutput()\nlet isSmoke = fsi.CommandLineArgs |> Array.exists (fun a -> a = \"--smoke\")\nif not isSmoke then Thread.Sleep(%d)\nlet payload = System.Text.Encoding.UTF8.GetBytes(\"done\")\nstdout.Write(payload, 0, payload.Length)\nstdout.Flush()\n" ms
-    File.WriteAllText(path, content)
-    path
-
-/// Creates a fixture that writes raw bytes to stdout/stderr and exits
-/// with the specified code.
-let private createExitFixture (code: int) (stdoutBytes: byte array) (stderrBytes: byte array) : string =
-    let path = Path.Combine(Path.GetTempPath(), $"fixture-exit-{Guid.NewGuid():N}.fsx")
-    let stdoutLiteralArray = renderByteLiteralArray stdoutBytes
-    let stderrLiteralArray = renderByteLiteralArray stderrBytes
-    let content =
-        sprintf "open System\nlet stdoutBytes = %s\nlet stderrBytes = %s\nlet stdoutStream = Console.OpenStandardOutput()\nstdoutStream.Write(stdoutBytes, 0, stdoutBytes.Length)\nstdoutStream.Flush()\nlet stderrStream = Console.OpenStandardError()\nstderrStream.Write(stderrBytes, 0, stderrBytes.Length)\nstderrStream.Flush()\nexit %d\n"
-            stdoutLiteralArray stderrLiteralArray code
-    File.WriteAllText(path, content)
-    path
-
-/// Creates a fixture that echoes its arguments to stdout. Each argument
-/// is followed by a single space, then a trailing newline is written
-/// using a binary `Stream.Write` so the fixture stays on the raw-byte
-/// path (no `TextWriter.WriteLine`).
-///
-/// `fsi.CommandLineArgs` for `dotnet fsi --exec file.fsx arg1 arg2 ...`
-/// returns `[script-path; arg1; arg2; ...]` in --exec mode, so the
-/// script path is the first element and the user-supplied arguments
-/// start at index 1.
-let private createEchoArgsFixture () : string =
-    let path = Path.Combine(Path.GetTempPath(), $"fixture-echo-{Guid.NewGuid():N}.fsx")
-    let content =
-        "open System\nlet stdout = Console.OpenStandardOutput()\nfor arg in fsi.CommandLineArgs |> Array.skip 1 do\n    let payload = System.Text.Encoding.UTF8.GetBytes(arg + \" \")\n    stdout.Write(payload, 0, payload.Length)\nlet newline = System.Text.Encoding.UTF8.GetBytes(System.Environment.NewLine)\nstdout.Write(newline, 0, newline.Length)\nstdout.Flush()\n"
-    File.WriteAllText(path, content)
-    path
-
-/// Creates a fixture that prints the working directory to stdout.
-let private createWorkingDirFixture () : string =
-    let path = Path.Combine(Path.GetTempPath(), $"fixture-workdir-{Guid.NewGuid():N}.fsx")
-    let content =
-        "open System\nopen System.IO\nlet stdout = Console.OpenStandardOutput()\nlet bytes = System.Text.Encoding.UTF8.GetBytes(Directory.GetCurrentDirectory())\nstdout.Write(bytes, 0, bytes.Length)\nstdout.Flush()\n"
-    File.WriteAllText(path, content)
-    path
+/// Resolves the absolute path of the precompiled F# fixture used by
+/// every real-process test. Fails fast with a clear message if the
+/// fixture DLL is missing from the test output directory, which
+/// means the MSBuild `CopyProcessTreeFixture` target did not run.
+let private resolveFixturePath () : string =
+    if not (File.Exists fixturePath) then
+        let msg =
+            sprintf
+                "precompiled process fixture not found at %s. The MSBuild `CopyProcessTreeFixture` target must run for the test project's output to contain the fixture's managed assembly. Rebuild the test project (`dotnet build tests/Circus.Tooling.Tests`) before running this test."
+                fixturePath
+        failwithf "%s" msg
+    fixturePath
 
 // -----------------------------------------------------------------------------
 // Test helpers
@@ -186,18 +74,20 @@ let private runBounded
     }
     run request CancellationToken.None
 
-/// Helper to create a fixture and assert it compiles + runs to completion.
-let private createAndSmoke (label: string) (create: unit -> string) : string =
-    let path = create()
-    smokeTestFixture label path
-    path
-
-/// Helper to create a fixture without smoke testing. Used for the
-/// pre-cancellation test, where the test's purpose is to prove that
-/// production does NOT launch the child, so smoke-running the fixture
-/// would be wasteful and confounded with the test's own timing.
-let private createNoSmoke (create: unit -> string) : string =
-    create()
+/// Launch the precompiled fixture as a child process via `dotnet
+/// <fixture.dll> <mode> ...`. The fixture is the authority for every
+/// real-process test in this file; no FSI script is generated or
+/// dynamically compiled.
+let private runFixture
+    (workingDirectory: string)
+    (modeArgs: string list)
+    (timeout: TimeSpan)
+    (stdoutLimit: int)
+    (stderrLimit: int)
+    : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
+    let fixture = resolveFixturePath ()
+    let args = fixture :: modeArgs
+    runBounded "dotnet" workingDirectory args [] timeout stdoutLimit stderrLimit
 
 /// Helper to make expected stdout bytes
 let private makeStdoutBytes (count: int) : byte array =
@@ -218,243 +108,186 @@ let tests =
         [
           // 1. Empty stdout process succeeds
           testTask "empty stdout process returns Ok with empty arrays" {
-              let fixture = createAndSmoke "createRawStdoutFixture" (fun () -> createRawStdoutFixture [||])
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
-                  match result with
-                  | Ok success ->
-                      Expect.equal success.ExitCode 0 "exit code should be 0"
-                      Expect.equal success.Stdout [||] "stdout should be empty"
-                      Expect.equal success.Stderr [||] "stderr should be empty"
-                  | Error e -> failwithf "expected Ok, got Error: %A" e
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "empty" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+              match result with
+              | Ok success ->
+                  Expect.equal success.ExitCode 0 "exit code should be 0"
+                  Expect.equal success.Stdout [||] "stdout should be empty"
+                  Expect.equal success.Stderr [||] "stderr should be empty"
+              | Error e -> failwithf "expected Ok, got Error: %A" e
           }
 
           // 2. Non-empty stdout is captured
           testTask "non-empty stdout is captured correctly" {
               let expected = makeStdoutBytes 10
-              let fixture = createAndSmoke "createRawStdoutFixture" (fun () -> createRawStdoutFixture expected)
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
-                  match result with
-                  | Ok success ->
-                      Expect.equal success.ExitCode 0 "exit code should be 0"
-                      Expect.equal success.Stdout expected "stdout should have 10 bytes"
-                      Expect.equal success.Stderr [||] "stderr should be empty"
-                  | Error e -> failwithf "expected Ok, got Error: %A" e
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "stdout"; "10" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+              match result with
+              | Ok success ->
+                  Expect.equal success.ExitCode 0 "exit code should be 0"
+                  Expect.equal success.Stdout expected "stdout should have 10 bytes"
+                  Expect.equal success.Stderr [||] "stderr should be empty"
+              | Error e -> failwithf "expected Ok, got Error: %A" e
           }
 
           // 3. Non-empty stderr is captured
           testTask "non-empty stderr is captured correctly" {
               let expected = makeStderrBytes 10
-              let fixture = createAndSmoke "createRawStderrFixture" (fun () -> createRawStderrFixture expected)
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
-                  match result with
-                  | Ok success ->
-                      Expect.equal success.ExitCode 0 "exit code should be 0"
-                      Expect.equal success.Stdout [||] "stdout should be empty"
-                      Expect.equal success.Stderr expected "stderr should have 10 bytes"
-                  | Error e -> failwithf "expected Ok, got Error: %A" e
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "stderr"; "10" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+              match result with
+              | Ok success ->
+                  Expect.equal success.ExitCode 0 "exit code should be 0"
+                  Expect.equal success.Stdout [||] "stdout should be empty"
+                  Expect.equal success.Stderr expected "stderr should have 10 bytes"
+              | Error e -> failwithf "expected Ok, got Error: %A" e
           }
 
           // 4. Working directory is propagated
           testTask "working directory is propagated to subprocess" {
               let tempDir = Path.GetTempPath()
-              let fixture = createAndSmoke "createWorkingDirFixture" createWorkingDirFixture
-              try
-                  let! result = runBounded "dotnet" tempDir [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
-                  match result with
-                  | Ok success ->
-                      let expectedDir = tempDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                      let actualDir = System.Text.Encoding.UTF8.GetString(success.Stdout).Trim()
-                      Expect.equal actualDir expectedDir "working directory propagated"
-                  | Error e -> failwithf "expected Ok, got Error: %A" e
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture tempDir [ "working-directory" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+              match result with
+              | Ok success ->
+                  let expectedDir = tempDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                  let actualDir = System.Text.Encoding.UTF8.GetString(success.Stdout).Trim()
+                  Expect.equal actualDir expectedDir "working directory propagated"
+              | Error e -> failwithf "expected Ok, got Error: %A" e
           }
 
           // 5. Arguments with spaces are preserved
           testTask "arguments containing spaces remain as one argument" {
-              let fixture = createAndSmoke "createEchoArgsFixture" createEchoArgsFixture
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture; "hello world"; "foo" ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
-                  match result with
-                  | Ok success ->
-                      let output = System.Text.Encoding.UTF8.GetString(success.Stdout).Trim()
-                      Expect.stringContains output "hello world" "spaces should be preserved"
-                      Expect.stringContains output "foo" "foo should be present"
-                  | Error e -> failwithf "expected Ok, got Error: %A" e
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result =
+                  runFixture
+                      (Path.GetTempPath())
+                      [ "echo-args"; "hello world"; "foo" ]
+                      (TimeSpan.FromSeconds 5.0) 1024 1024
+              match result with
+              | Ok success ->
+                  let output = System.Text.Encoding.UTF8.GetString(success.Stdout).Trim()
+                  Expect.stringContains output "hello world" "spaces should be preserved"
+                  Expect.stringContains output "foo" "foo should be present"
+              | Error e -> failwithf "expected Ok, got Error: %A" e
           }
 
           // 6. Quote characters in arguments
           testTask "quote characters in arguments are preserved" {
-              let fixture = createAndSmoke "createEchoArgsFixture" createEchoArgsFixture
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture; "\"hello\""; "'world'" ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
-                  match result with
-                  | Ok success ->
-                      let output = System.Text.Encoding.UTF8.GetString(success.Stdout)
-                      Expect.stringContains output "\"hello\"" "double quotes preserved"
-                      Expect.stringContains output "'world'" "single quotes preserved"
-                  | Error e -> failwithf "expected Ok, got Error: %A" e
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result =
+                  runFixture
+                      (Path.GetTempPath())
+                      [ "echo-args"; "\"hello\""; "'world'" ]
+                      (TimeSpan.FromSeconds 5.0) 1024 1024
+              match result with
+              | Ok success ->
+                  let output = System.Text.Encoding.UTF8.GetString(success.Stdout)
+                  Expect.stringContains output "\"hello\"" "double quotes preserved"
+                  Expect.stringContains output "'world'" "single quotes preserved"
+              | Error e -> failwithf "expected Ok, got Error: %A" e
           }
 
           // 7. Exact stdout limit succeeds
           testTask "exact stdout limit succeeds" {
               let expected = makeStdoutBytes 50
-              let fixture = createAndSmoke "createRawStdoutFixture" (fun () -> createRawStdoutFixture expected)
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 50 1024
-                  match result with
-                  | Ok success ->
-                      Expect.equal success.ExitCode 0 "exit code should be 0"
-                      Expect.equal success.Stdout expected "stdout should match at exact limit"
-                  | Error e -> failwithf "expected Ok, got Error: %A" e
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "stdout"; "50" ] (TimeSpan.FromSeconds 5.0) 50 1024
+              match result with
+              | Ok success ->
+                  Expect.equal success.ExitCode 0 "exit code should be 0"
+                  Expect.equal success.Stdout expected "stdout should match at exact limit"
+              | Error e -> failwithf "expected Ok, got Error: %A" e
           }
 
           // 8. Stdout over limit fails
           testTask "stdout over limit fails with StdoutLimitExceeded" {
-              let bytes = makeStdoutBytes 51
-              let fixture = createAndSmoke "createRawStdoutFixture" (fun () -> createRawStdoutFixture bytes)
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 50 1024
-                  match result with
-                  | Error(StdoutLimitExceeded limit) when limit = 50 -> ()
-                  | Error e -> failwithf "expected StdoutLimitExceeded(50), got: %A" e
-                  | Ok s -> failwithf "expected failure, got Ok: %A" s
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "stdout"; "51" ] (TimeSpan.FromSeconds 5.0) 50 1024
+              match result with
+              | Error(StdoutLimitExceeded limit) when limit = 50 -> ()
+              | Error e -> failwithf "expected StdoutLimitExceeded(50), got: %A" e
+              | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
 
           // 9. Exact stderr limit succeeds
           testTask "exact stderr limit succeeds" {
               let expected = makeStderrBytes 50
-              let fixture = createAndSmoke "createRawStderrFixture" (fun () -> createRawStderrFixture expected)
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 50
-                  match result with
-                  | Ok success ->
-                      Expect.equal success.ExitCode 0 "exit code should be 0"
-                      Expect.equal success.Stderr expected "stderr should match at exact limit"
-                  | Error e -> failwithf "expected Ok, got Error: %A" e
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "stderr"; "50" ] (TimeSpan.FromSeconds 5.0) 1024 50
+              match result with
+              | Ok success ->
+                  Expect.equal success.ExitCode 0 "exit code should be 0"
+                  Expect.equal success.Stderr expected "stderr should match at exact limit"
+              | Error e -> failwithf "expected Ok, got Error: %A" e
           }
 
           // 10. Stderr over limit fails
           testTask "stderr over limit fails with StderrLimitExceeded" {
-              let bytes = makeStderrBytes 51
-              let fixture = createAndSmoke "createRawStderrFixture" (fun () -> createRawStderrFixture bytes)
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 50
-                  match result with
-                  | Error(StderrLimitExceeded limit) when limit = 50 -> ()
-                  | Error e -> failwithf "expected StderrLimitExceeded(50), got: %A" e
-                  | Ok s -> failwithf "expected failure, got Ok: %A" s
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "stderr"; "51" ] (TimeSpan.FromSeconds 5.0) 1024 50
+              match result with
+              | Error(StderrLimitExceeded limit) when limit = 50 -> ()
+              | Error e -> failwithf "expected StderrLimitExceeded(50), got: %A" e
+              | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
 
           // 11. Zero stdout limit with zero bytes succeeds
           testTask "zero stdout limit with zero bytes succeeds" {
-              let fixture = createAndSmoke "createRawStdoutFixture" (fun () -> createRawStdoutFixture [||])
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 0 1024
-                  match result with
-                  | Ok success ->
-                      Expect.equal success.ExitCode 0 "exit code should be 0"
-                      Expect.equal success.Stdout [||] "stdout should be empty"
-                  | Error e -> failwithf "expected Ok, got Error: %A" e
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "empty" ] (TimeSpan.FromSeconds 5.0) 0 1024
+              match result with
+              | Ok success ->
+                  Expect.equal success.ExitCode 0 "exit code should be 0"
+                  Expect.equal success.Stdout [||] "stdout should be empty"
+              | Error e -> failwithf "expected Ok, got Error: %A" e
           }
 
           // 12. Zero stdout limit with one byte fails
           testTask "zero stdout limit with one byte fails" {
-              let bytes = [| 0xFFuy |]  // Raw binary byte, not valid UTF-8
-              let fixture = createAndSmoke "createRawStdoutFixture" (fun () -> createRawStdoutFixture bytes)
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 0 1024
-                  match result with
-                  | Error(StdoutLimitExceeded limit) when limit = 0 -> ()
-                  | Error e -> failwithf "expected StdoutLimitExceeded(0), got: %A" e
-                  | Ok s -> failwithf "expected failure, got Ok: %A" s
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "stdout"; "1" ] (TimeSpan.FromSeconds 5.0) 0 1024
+              match result with
+              | Error(StdoutLimitExceeded limit) when limit = 0 -> ()
+              | Error e -> failwithf "expected StdoutLimitExceeded(0), got: %A" e
+              | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
 
           // 13. Concurrent stdout and stderr
           testTask "concurrent stdout and stderr are both captured" {
               let stdout = makeStdoutBytes 100
               let stderr = makeStderrBytes 100
-              let fixture = createAndSmoke "createRawBothFixture" (fun () -> createRawBothFixture stdout stderr)
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 10.0) 1024 1024
-                  match result with
-                  | Ok success ->
-                      Expect.equal success.ExitCode 0 "exit code should be 0"
-                      Expect.equal success.Stdout stdout "stdout bytes preserved"
-                      Expect.equal success.Stderr stderr "stderr bytes preserved"
-                  | Error e -> failwithf "expected Ok, got Error: %A" e
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "both"; "100"; "100" ] (TimeSpan.FromSeconds 10.0) 1024 1024
+              match result with
+              | Ok success ->
+                  Expect.equal success.ExitCode 0 "exit code should be 0"
+                  Expect.equal success.Stdout stdout "stdout bytes preserved"
+                  Expect.equal success.Stderr stderr "stderr bytes preserved"
+              | Error e -> failwithf "expected Ok, got Error: %A" e
           }
 
           // 14. Non-zero exit code preserves output
           testTask "non-zero exit preserves exit code and output" {
               let stdout = makeStdoutBytes 10
               let stderr = makeStderrBytes 10
-              let fixture = createAndSmoke "createExitFixture" (fun () -> createExitFixture 42 stdout stderr)
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
-                  match result with
-                  | Error(NonZeroExit(code, actualStdout, actualStderr)) when code = 42 ->
-                      Expect.equal actualStdout stdout "stdout preserved"
-                      Expect.equal actualStderr stderr "stderr preserved"
-                  | Error e -> failwithf "expected NonZeroExit(42, ...), got: %A" e
-                  | Ok s -> failwithf "expected NonZeroExit, got Ok: %A" s
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result =
+                  runFixture (Path.GetTempPath()) [ "exit-with-both"; "10"; "10"; "42" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+              match result with
+              | Error(NonZeroExit(code, actualStdout, actualStderr)) when code = 42 ->
+                  Expect.equal actualStdout stdout "stdout preserved"
+                  Expect.equal actualStderr stderr "stderr preserved"
+              | Error e -> failwithf "expected NonZeroExit(42, ...), got: %A" e
+              | Ok s -> failwithf "expected NonZeroExit, got Ok: %A" s
           }
 
           // 15. Timeout returns TimedOut
           testTask "timeout returns TimedOut" {
-              let fixture = createAndSmoke "createSleepFixture" (fun () -> createSleepFixture 5000) // 5 seconds
-              try
-                  let! result = runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixture ] [] (TimeSpan.FromMilliseconds 500.0) 1024 1024
-                  match result with
-                  | Error(TimedOut timeout) ->
-                      Expect.isTrue (timeout.TotalMilliseconds <= 1000.0) "timeout should be reasonable"
-                  | Error e -> failwithf "expected TimedOut, got: %A" e
-                  | Ok s -> failwithf "expected failure, got Ok: %A" s
-              finally
-                  if File.Exists fixture then File.Delete fixture
+              let! result = runFixture (Path.GetTempPath()) [ "sleep"; "5000" ] (TimeSpan.FromMilliseconds 500.0) 1024 1024
+              match result with
+              | Error(TimedOut timeout) ->
+                  Expect.isTrue (timeout.TotalMilliseconds <= 1000.0) "timeout should be reasonable"
+              | Error e -> failwithf "expected TimedOut, got: %A" e
+              | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
 
           // 16. Pre-cancelled token returns Cancelled without starting process
           testTask "pre-cancelled token returns Cancelled" {
               let cts = new CancellationTokenSource()
               cts.Cancel()
-              // Intentionally NOT smoke-tested: the test asserts that
-              // production does not launch the child, so smoke-running
-              // the fixture would defeat the purpose and waste 10 seconds.
-              let fixture = createNoSmoke (fun () -> createSleepFixture 10000)
+              let fixture = resolveFixturePath ()
               let req = {
                   Executable = "dotnet"
                   WorkingDirectory = Path.GetTempPath()
-                  Arguments = [ "fsi"; "--exec"; fixture ]
+                  Arguments = [ fixture; "sleep"; "10000" ]
                   Environment = []
                   Limits = {
                       Timeout = TimeSpan.FromSeconds 30.0
@@ -470,7 +303,7 @@ let tests =
                   | Error e -> failwithf "expected Cancelled, got: %A" e
                   | Ok s -> failwithf "expected failure, got Ok: %A" s
               finally
-                  if File.Exists fixture then File.Delete fixture
+                  cts.Dispose()
           }
 
           // 17. Missing executable produces LaunchFailed
@@ -575,66 +408,6 @@ let tests =
                   return c.Result
               }
 
-          /// Like runWithSeamCustom but returns the raw LifecycleCompletion
-          /// so the test can inspect the Result before the deferred
-          /// finalization completes. Used by the disposal-ordering
-          /// regressions and the disposed-seam state-access test.
-          let runWithSeamCompletion
-              (seam: LifecycleSeam)
-              (stdoutTask: Task<ReadOutcome>)
-              (stderrTask: Task<ReadOutcome>)
-              (timeout: TimeSpan)
-              (stdoutLimit: int)
-              (stderrLimit: int)
-              : Task<LifecycleCompletion> =
-              let request = {
-                  Executable = "ignored"
-                  WorkingDirectory = "."
-                  Arguments = []
-                  Environment = []
-                  Limits = {
-                      Timeout = timeout
-                      StdoutLimitBytes = stdoutLimit
-                      StderrLimitBytes = stderrLimit
-                  }
-              }
-              let lcts = new CancellationTokenSource()
-              let tcts = new CancellationTokenSource(timeout)
-              let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
-              let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
-              let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
-              let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
-              executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
-
-          /// Like runWithSeamCompletion but lets the test inject the
-          /// timeout and cancellation TaskCompletionSources directly.
-          let runWithSeamCompletionCustom
-              (timeoutTcs: TaskCompletionSource<bool>)
-              (cancelTcs: TaskCompletionSource<bool>)
-              (seam: LifecycleSeam)
-              (stdoutTask: Task<ReadOutcome>)
-              (stderrTask: Task<ReadOutcome>)
-              (timeout: TimeSpan)
-              (stdoutLimit: int)
-              (stderrLimit: int)
-              : Task<LifecycleCompletion> =
-              let request = {
-                  Executable = "ignored"
-                  WorkingDirectory = "."
-                  Arguments = []
-                  Environment = []
-                  Limits = {
-                      Timeout = timeout
-                      StdoutLimitBytes = stdoutLimit
-                      StderrLimitBytes = stderrLimit
-                  }
-              }
-              let lcts = new CancellationTokenSource()
-              let tcts = new CancellationTokenSource(timeout)
-              let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
-              let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
-              executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
-
           /// Like runWithSeam but lets the test inject the timeout and
           /// cancellation TaskCompletionSources directly so it can
           /// pre-complete them. The lifecycle's finalizer still owns
@@ -703,35 +476,6 @@ let tests =
               let tcts = new CancellationTokenSource(timeout)
               let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
               let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
-              let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
-              let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
-              executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
-
-          /// Like runWithSeamCompletion but lets the test inject the
-          /// timeout and cancellation TaskCompletionSources directly.
-          let runWithSeamCompletionCustom
-              (timeoutTcs: TaskCompletionSource<bool>)
-              (cancelTcs: TaskCompletionSource<bool>)
-              (seam: LifecycleSeam)
-              (stdoutTask: Task<ReadOutcome>)
-              (stderrTask: Task<ReadOutcome>)
-              (timeout: TimeSpan)
-              (stdoutLimit: int)
-              (stderrLimit: int)
-              : Task<LifecycleCompletion> =
-              let request = {
-                  Executable = "ignored"
-                  WorkingDirectory = "."
-                  Arguments = []
-                  Environment = []
-                  Limits = {
-                      Timeout = timeout
-                      StdoutLimitBytes = stdoutLimit
-                      StderrLimitBytes = stderrLimit
-                  }
-              }
-              let lcts = new CancellationTokenSource()
-              let tcts = new CancellationTokenSource(timeout)
               let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
               let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
               executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
@@ -1122,22 +866,12 @@ let tests =
           // ---------------------------------------------------------------
           // 33-35. P3.1 disposal-ordering regressions and deterministic
           // timeout/cancellation precedence.
-          //
-          // These tests close the gap the previous checkpoint left open:
-          // (a) state access after disposal is impossible (test 33);
-          // (b) sequential real-process invocations complete without
-          //     hanging (test 34);
-          // (c) caller-cancellation wins over timeout when both
-          //     participants are pre-completed (test 35).
           // ---------------------------------------------------------------
 
           // 33. Disposed-seam state access regression: a test seam that
           // throws from HasExited and ReadExitCode after disposal proves
           // the lifecycle captures all required state BEFORE the finalizer
-          // disposes the seam. With the finalizer scheduled at the start
-          // of the lifecycle, this test would fail because the disposal
-          // could race the cleanup races that call HasExited and
-          // ReadExitCode.
+          // disposes the seam.
           testTask "disposed-seam state access is impossible after disposal" {
               let pendingExit = TaskCompletionSource<bool>()
               let mutable disposed = false
@@ -1182,26 +916,17 @@ let tests =
           // reproduces the full-suite hang that the previous checkpoint
           // failed to close.
           testTask "sequential real-process invocations complete in order (20 iterations)" {
-              let fixtureEmpty = createAndSmoke "createRawStdoutFixture" (fun () -> createRawStdoutFixture [||])
-              try
-                  for _ in 1..20 do
-                      let! result1 =
-                          runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixtureEmpty ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
-                      match result1 with
-                      | Ok _ -> ()
-                      | Error e -> failtest "first invocation failed: %A" e
-                      let bytes = makeStdoutBytes 10
-                      let fixtureBytes = createRawStdoutFixture bytes
-                      try
-                          let! result2 =
-                              runBounded "dotnet" (Path.GetTempPath()) [ "fsi"; "--exec"; fixtureBytes ] [] (TimeSpan.FromSeconds 5.0) 1024 1024
-                          match result2 with
-                          | Ok _ -> ()
-                          | Error e -> failtest "second invocation failed: %A" e
-                      finally
-                          if File.Exists fixtureBytes then File.Delete fixtureBytes
-              finally
-                  if File.Exists fixtureEmpty then File.Delete fixtureEmpty
+              for _ in 1..20 do
+                  let! result1 =
+                      runFixture (Path.GetTempPath()) [ "empty" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+                  match result1 with
+                  | Ok _ -> ()
+                  | Error e -> failtest "first invocation failed: %A" e
+                  let! result2 =
+                      runFixture (Path.GetTempPath()) [ "stdout"; "10" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+                  match result2 with
+                  | Ok _ -> ()
+                  | Error e -> failtest "second invocation failed: %A" e
           }
 
           // 35. Deterministic timeout/cancellation precedence: when both
@@ -1241,9 +966,119 @@ let tests =
                   | Error e -> failtest "expected Cancelled, got: %A" e
                   | Ok s -> failtest "expected Cancelled, got Ok: %A" s
           }
+
+          // ---------------------------------------------------------------
+          // 36. CORRECTION17 registration-callback race regression.
+          //
+          // The lifecycle's finalizer must dispose CancellationToken
+          // registrations asynchronously so a callback that is currently
+          // executing on another thread can complete without blocking the
+          // finalizer. This test injects a custom CancellationTokenRegistration
+          // whose callback:
+          //   1. signals that it started;
+          //   2. blocks on a release task;
+          //   3. then returns.
+          // As long as the callback is blocked, the finalizer's
+          // `tReg.DisposeAsync().AsTask()` await must remain suspended.
+          // The test thread must remain responsive while the finalizer is
+          // suspended, and releasing the callback must let the finalizer
+          // complete and dispose exactly once.
+          // ---------------------------------------------------------------
+          testTask "registration-callback race: finalizer awaits async-dispose of blocking callback" {
+              let mutable disposeCount = 0
+              let callbackStarted = TaskCompletionSource<bool>()
+              let releaseCallback = TaskCompletionSource<bool>()
+
+              // Custom CTS + registration whose callback blocks on a
+              // release task. CancellationTokenSource.CancelAsync runs
+              // the callback on a thread-pool thread, not the calling
+              // thread, so the main test thread is not blocked by the
+              // callback itself.
+              let customCts = new CancellationTokenSource()
+              let customReg =
+                customCts.Token.Register(fun () ->
+                    callbackStarted.TrySetResult(true) |> ignore
+                    // Block on the release task. The synchronous
+                    // GetResult mirrors the classic CancellationRegistration
+                    // deadlock pattern: a disposal cannot complete
+                    // until this callback returns, and this callback
+                    // cannot return until the test thread releases it.
+                    releaseCallback.Task.GetAwaiter().GetResult() |> ignore)
+
+              // All three operations are pre-settled so the lifecycle
+              // reaches the finalizer without any further input.
+              let okExit = Task.FromResult(0)
+              let okStdout = Task.FromResult(EofReached [||])
+              let okStderr = Task.FromResult(EofReached [||])
+              let seam = {
+                  ExitTask = okExit
+                  Kill = fun () -> Ok ()
+                  HasExited = fun () -> true
+                  ReadExitCode = fun () -> 0
+                  Dispose = fun () -> disposeCount <- disposeCount + 1
+              }
+              let request = {
+                  Executable = "ignored"
+                  WorkingDirectory = "."
+                  Arguments = []
+                  Environment = []
+                  Limits = {
+                      Timeout = TimeSpan.FromSeconds 5.0
+                      StdoutLimitBytes = 1024
+                      StderrLimitBytes = 1024
+                  }
+              }
+              let lcts = new CancellationTokenSource()
+              let tcts = new CancellationTokenSource(TimeSpan.FromSeconds 5.0)
+              let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+              let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+              let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
+
+              // Trigger the custom callback asynchronously so the main
+              // test thread is not blocked by the callback itself.
+              do! customCts.CancelAsync ()
+              // Wait for the callback to actually start so the test can
+              // assert "callback started" deterministically.
+              do! callbackStarted.Task
+
+              // Run the lifecycle with the BLOCKING registration as
+              // tReg. The customReg is the lifecycle's tReg, so the
+              // finalizer's `tReg.DisposeAsync().AsTask()` will be
+              // forced to wait for the blocking callback.
+              let completion: Task<LifecycleCompletion> =
+                  executeLifecycleWithSeam
+                      lcts request timeoutTcs cancelTcs
+                      okStdout okStderr seam
+                      customReg cReg tcts
+              let! c = completion
+
+              // Assertion: the finalizer is suspended because the
+              // callback is still blocked on the release task.
+              Expect.isFalse
+                  c.Finalization.IsCompleted
+                  "finalization must NOT complete while the callback is blocked"
+
+              // Assertion: the test thread remains responsive. The
+              // finalizer is suspended on a thread-pool thread; the
+              // main test thread can still yield and run other work.
+              do! Task.Delay(100)
+              Expect.isTrue
+                  (not c.Finalization.IsCompleted)
+                  "finalization is still blocked after the test thread has yielded"
+
+              // Release the callback. The disposal await resumes, the
+              // finalizer proceeds through the remaining disposals,
+              // and the seam's Dispose callback runs exactly once.
+              releaseCallback.SetResult(true) |> ignore
+
+              do! c.Finalization
+              Expect.equal disposeCount 1 "finalizer must dispose exactly once after the callback releases"
+
+              customCts.Dispose()
+          }
         ]
     // Intrinsic sequencing: the canonical gate is deterministic without
-    // requiring an operator `--sequenced` flag, because the fixtures
-    // spawn heavyweight `dotnet fsi --exec` children that contend when
-    // run in parallel.
+    // requiring an operator `--sequenced` flag, because the fixture
+    // now spawns short-lived `dotnet <fixture.dll> <mode> ...` children
+    // instead of the previous heavyweight `dotnet fsi --exec` compiles.
     |> (fun t -> Test.Sequenced (SequenceMethod.Synchronous, t))
