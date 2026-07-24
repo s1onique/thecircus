@@ -525,7 +525,7 @@ let tests =
           }
 
           // ---------------------------------------------------------------
-          // 22-26. Six injected regressions using the LifecycleSeam.
+          // 22-26. Five injected regressions using the LifecycleSeam.
           //
           // The seam lets the test inject OS-level states (faulted/cancelled
           // exit task, slow process that stays alive after cleanup grace,
@@ -536,7 +536,8 @@ let tests =
           /// Helper that drives executeLifecycleWithSeam directly with the
           /// given seam and policy. The seam owns the exit task and the
           /// stdout/stderr inputs; lifecycle plumbing is otherwise
-          /// identical to the production run.
+          /// identical to the production run. The lifecycle's finalizer
+          /// owns tReg, cReg, tcts, lcts, and the seam's Dispose callback.
           let runWithSeam
               (seam: LifecycleSeam)
               (stdoutTask: Task<ReadOutcome>)
@@ -562,15 +563,38 @@ let tests =
               let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
               let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
               let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
-              task {
-                  let! result =
-                      executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
-                  try tReg.Dispose() with | _ -> ()
-                  try cReg.Dispose() with | _ -> ()
-                  try tcts.Dispose() with | _ -> ()
-                  try lcts.Dispose() with | _ -> ()
-                  return result
+              executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
+
+          /// Like runWithSeam but lets the test inject the timeout and
+          /// cancellation TaskCompletionSources directly so it can
+          /// pre-complete them. The lifecycle's finalizer still owns
+          /// tReg, cReg, tcts, lcts, and the seam's Dispose callback.
+          let runWithSeamCustom
+              (timeoutTcs: TaskCompletionSource<bool>)
+              (cancelTcs: TaskCompletionSource<bool>)
+              (seam: LifecycleSeam)
+              (stdoutTask: Task<ReadOutcome>)
+              (stderrTask: Task<ReadOutcome>)
+              (timeout: TimeSpan)
+              (stdoutLimit: int)
+              (stderrLimit: int)
+              : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
+              let request = {
+                  Executable = "ignored"
+                  WorkingDirectory = "."
+                  Arguments = []
+                  Environment = []
+                  Limits = {
+                      Timeout = timeout
+                      StdoutLimitBytes = stdoutLimit
+                      StderrLimitBytes = stderrLimit
+                  }
               }
+              let lcts = new CancellationTokenSource()
+              let tcts = new CancellationTokenSource(timeout)
+              let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
+              let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
+              executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
 
           // 22. Faulted exit task -> WaitFailed with retained detail
           testTask "faulted exit task produces WaitFailed with detail" {
@@ -648,7 +672,7 @@ let tests =
                   }
                 ) ->
                   ()
-              | Error e -> failwithf "expected TerminationCleanupFailed { TimeoutFire; streams complete }, got: %A" e
+              | Error e -> failtest "expected TerminationCleanupFailed { TimeoutFire; streams complete }, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
 
@@ -707,7 +731,7 @@ let tests =
                   }
                 ) ->
                   ()
-              | Error e -> failwithf "expected TerminationCleanupFailed { StdoutTerminal }, got: %A" e
+              | Error e -> failtest "expected TerminationCleanupFailed { StdoutTerminal }, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
 
@@ -734,6 +758,222 @@ let tests =
               | Error(TimedOut _) -> ()
               | Error e -> failwithf "expected TimedOut, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
+          }
+
+          // ---------------------------------------------------------------
+          // 27-28. P3 authority-race regressions.
+          //
+          // The timeout and caller-cancellation participants must remain
+          // the public cause authority even when a reader cancellation
+          // is already complete by the time the loop inspects the
+          // pending tasks. Running each race repeatedly proves the
+          // classification is deterministic regardless of which task
+          // Task.WhenAny returns first.
+          // ---------------------------------------------------------------
+
+          // 27. Timeout participant already complete + stdout cancelled
+          // -> TimedOut is the public cause; reader cancellation is
+          // ignored as a cause. Repeated 100x to defeat ordering races.
+          testTask "timeout participant and stdout already-cancelled race -> TimedOut (100 iterations)" {
+              for _ in 1..100 do
+                  let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+                  timeoutTcs.SetResult(true)
+                  let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+                  let pendingExit = TaskCompletionSource<bool>()
+                  let seam = {
+                      ExitTask = pendingExit.Task
+                      Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
+                      HasExited = fun () -> true
+                      ReadExitCode = fun () -> 0
+                      Dispose = fun () -> ()
+                  }
+                  let! result =
+                      runWithSeamCustom
+                          timeoutTcs
+                          cancelTcs
+                          seam
+                          (Task.FromResult(ReadCancelled))
+                          (Task.FromResult(EofReached [||]))
+                          (TimeSpan.FromSeconds 5.0) 1024 1024
+                  match result with
+                  | Error(TimedOut _) -> ()
+                  | Error(IncompleteOutput (_, _)) -> failwithf "expected TimedOut, got IncompleteOutput"
+                  | Error(TerminationCleanupFailed { Cause = StdoutTerminal }) -> failwithf "expected TimedOut, got TerminationCleanupFailed StdoutTerminal"
+                  | Error(StdoutReaderFailed _) -> failwithf "expected TimedOut, got StdoutReaderFailed"
+                  | Error Cancelled -> failwithf "expected TimedOut, got Cancelled"
+                  | Error e -> failwithf "expected TimedOut, got: %A" e
+                  | Ok s -> failwithf "expected TimedOut, got Ok: %A" s
+          }
+
+          // 28. Caller-cancellation participant already complete + stderr
+          // cancelled -> Cancelled is the public cause; reader
+          // cancellation is ignored as a cause. Repeated 100x to defeat
+          // ordering races.
+          testTask "caller-cancellation participant and stderr already-cancelled race -> Cancelled (100 iterations)" {
+              for _ in 1..100 do
+                  let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+                  cancelTcs.SetResult(true)
+                  let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+                  let pendingExit = TaskCompletionSource<bool>()
+                  let seam = {
+                      ExitTask = pendingExit.Task
+                      Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
+                      HasExited = fun () -> true
+                      ReadExitCode = fun () -> 0
+                      Dispose = fun () -> ()
+                  }
+                  let! result =
+                      runWithSeamCustom
+                          timeoutTcs
+                          cancelTcs
+                          seam
+                          (Task.FromResult(EofReached [||]))
+                          (Task.FromResult(ReadCancelled))
+                          (TimeSpan.FromSeconds 5.0) 1024 1024
+                  match result with
+                  | Error Cancelled -> ()
+                  | Error(TimedOut _) -> failwithf "expected Cancelled, got TimedOut"
+                  | Error(TerminationCleanupFailed { Cause = StderrTerminal }) -> failwithf "expected Cancelled, got TerminationCleanupFailed StderrTerminal"
+                  | Error(StderrReaderFailed _) -> failwithf "expected Cancelled, got StderrReaderFailed"
+                  | Error(IncompleteOutput (_, _)) -> failwithf "expected Cancelled, got IncompleteOutput"
+                  | Error e -> failwithf "expected Cancelled, got: %A" e
+                  | Ok s -> failwithf "expected Cancelled, got Ok: %A" s
+          }
+
+          // ---------------------------------------------------------------
+          // 29-32. P3 resource-ownership regressions.
+          //
+          // One finalizer owns all five resources (tReg, cReg, lcts,
+          // tcts, seam.Dispose). The test seam's Dispose increments a
+          // counter so the test can observe when exactly-once disposal
+          // actually fires.
+          // ---------------------------------------------------------------
+
+          // 29. Completing one of the three operations must NOT dispose.
+          // The finalizer must wait for all three.
+          testTask "first completion must not dispose; finalizer waits for all three operations" {
+              let mutable disposeCount = 0
+              let pendingExit = TaskCompletionSource<bool>()
+              let pendingStderr = TaskCompletionSource<ReadOutcome>()
+              let okStdout = Task.FromResult(EofReached [||])
+              let seam = {
+                  ExitTask = pendingExit.Task
+                  Kill = fun () -> Ok ()
+                  HasExited = fun () -> false
+                  ReadExitCode = fun () -> 0
+                  Dispose = fun () -> disposeCount <- disposeCount + 1
+              }
+              let lifecycle =
+                  runWithSeam seam
+                      okStdout
+                      pendingStderr.Task
+                      (TimeSpan.FromSeconds 30.0) 1024 1024
+              // Yield long enough for the loop to consume okStdout
+              do! Task.Delay(200)
+              Expect.equal disposeCount 0 "stdoutTask completion alone must not dispose"
+              // Complete stderrTask only
+              pendingStderr.SetResult(EofReached [||]) |> ignore
+              do! Task.Delay(200)
+              Expect.equal disposeCount 0 "stderrTask completion alone must not dispose"
+              // Complete exitTask; the lifecycle and the finalizer both
+              // reach their all-done state.
+              pendingExit.SetResult(true) |> ignore
+              let! _ = lifecycle
+              do! Task.Delay(200)
+              Expect.equal disposeCount 1 "all tasks completing must dispose exactly once"
+          }
+
+          // 30. Simultaneous completion of all three operations must
+          // still trigger exactly-once disposal.
+          testTask "simultaneous completion of all three tasks disposes exactly once" {
+              let mutable disposeCount = 0
+              let pendingExit = TaskCompletionSource<bool>()
+              let pendingStdout = TaskCompletionSource<ReadOutcome>()
+              let pendingStderr = TaskCompletionSource<ReadOutcome>()
+              let seam = {
+                  ExitTask = pendingExit.Task
+                  Kill = fun () -> Ok ()
+                  HasExited = fun () -> false
+                  ReadExitCode = fun () -> 0
+                  Dispose = fun () -> disposeCount <- disposeCount + 1
+              }
+              let lifecycle =
+                  runWithSeam seam
+                      pendingStdout.Task
+                      pendingStderr.Task
+                      (TimeSpan.FromSeconds 30.0) 1024 1024
+              do! Task.Delay(100)
+              Expect.equal disposeCount 0 "no disposal before any task completes"
+              // Complete all three simultaneously
+              pendingStdout.SetResult(EofReached [||]) |> ignore
+              pendingStderr.SetResult(EofReached [||]) |> ignore
+              pendingExit.SetResult(true) |> ignore
+              let! _ = lifecycle
+              do! Task.Delay(200)
+              Expect.equal disposeCount 1 "simultaneous completion still disposes exactly once"
+          }
+
+          // 31. Cleanup-failure returned from the lifecycle must NOT
+          // have disposed yet. The finalizer remains pending until the
+          // outstanding tasks settle.
+          testTask "cleanup-failure defers disposal until outstanding tasks settle" {
+              let mutable disposeCount = 0
+              let pendingExit = TaskCompletionSource<bool>()
+              let pendingStderr = TaskCompletionSource<ReadOutcome>()
+              let okStdout = Task.FromResult(EofReached [||])
+              let seam = {
+                  ExitTask = pendingExit.Task
+                  Kill = fun () -> Ok ()
+                  HasExited = fun () -> false
+                  ReadExitCode = fun () -> 0
+                  Dispose = fun () -> disposeCount <- disposeCount + 1
+              }
+              let lifecycle =
+                  runWithSeam seam
+                      okStdout
+                      pendingStderr.Task
+                      (TimeSpan.FromMilliseconds 100.0) 1024 1024
+              let! result = lifecycle
+              match result with
+              | Error(TerminationCleanupFailed _) -> ()
+              | Error e -> failtest "expected TerminationCleanupFailed, got: %A" e
+              | Ok s -> failtest "expected TerminationCleanupFailed, got Ok: %A" s
+              Expect.equal disposeCount 0 "no disposal when exitTask and stderrTask still pending"
+              // Complete the outstanding tasks and the finalizer fires.
+              pendingExit.SetResult(true) |> ignore
+              pendingStderr.SetResult(EofReached [||]) |> ignore
+              do! Task.Delay(300)
+              Expect.equal disposeCount 1 "finalizer disposes exactly once after outstanding tasks settle"
+          }
+
+          // 32. Faulted and cancelled tasks still finalize. The lifecycle
+          // observes aggregate faults (no throw escapes) and the seam's
+          // Dispose is invoked exactly once.
+          testTask "faulted and cancelled tasks still finalize exactly once" {
+              let mutable disposeCount = 0
+              let cts = new CancellationTokenSource()
+              cts.Cancel()
+              let okStdout = Task.FromResult(EofReached [||])
+              let faultedStderr = Task.FromException<ReadOutcome>(System.Exception "synthetic reader fault")
+              let cancelledExit = Task.FromCanceled(cts.Token)
+              let seam = {
+                  ExitTask = cancelledExit
+                  Kill = fun () -> Ok ()
+                  HasExited = fun () -> true
+                  ReadExitCode = fun () -> 0
+                  Dispose = fun () -> disposeCount <- disposeCount + 1
+              }
+              let! result =
+                  runWithSeam seam
+                      okStdout
+                      faultedStderr
+                      (TimeSpan.FromSeconds 5.0) 1024 1024
+              do! Task.Delay(200)
+              // The public lifecycle reached a typed Result without
+              // throwing despite one faulted and one cancelled task.
+              Expect.isNotNull (box result) "lifecycle must produce a typed Result"
+              Expect.equal disposeCount 1 "finalizer must dispose exactly once after a faulted and a cancelled task"
+              cts.Dispose()
           }
         ]
     // Intrinsic sequencing: the canonical gate is deterministic without
