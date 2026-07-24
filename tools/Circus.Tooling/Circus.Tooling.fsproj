@@ -64,6 +64,10 @@
     <Compile Include="FSharpDiagnostics\Verifier.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Domain.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Paths.fs" />
+    <!-- BoundedProcess is compiled before Git so the Git adapter can
+         open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
+         and consume BoundedProcess.run as its single execution authority. -->
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\BoundedProcess.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Git.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Episodes.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Transitions.fs" />
@@ -72,7 +76,6 @@
     <Compile Include="FSharpDiagnostics\RepairEpisodes\CaptureBinding.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Engine.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Cli.fs" />
-    <Compile Include="FSharpDiagnostics\RepairEpisodes\BoundedProcess.fs" />
     <Compile Include="FSharpDiagnostics\Cli.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
