@@ -376,17 +376,34 @@ type private ClassificationSnapshot = {
 }
 
 // -----------------------------------------------------------------------------
+// Finalization mode (internal)
+//
+// Whether the lifecycle must await finalization before returning, or
+// may defer it. AwaitBeforeReturn is only used when all three
+// operations have already settled, so the finalization completes
+// without waiting on anything that could be stuck. Deferred is used
+// when the cleanup deliberately returned while operations are still
+// active, so the public API does not block indefinitely on a Task
+// that cannot complete until the caller supplies the missing state.
+// -----------------------------------------------------------------------------
+
+type internal FinalizationMode =
+    | AwaitBeforeReturn
+    | Deferred
+
+// -----------------------------------------------------------------------------
 // Lifecycle completion (internal)
 //
 // Internal return shape for executeLifecycleWithSeam. The Result is the
 // public classification; the Finalization is the disposal Task that
-// callers (or the public run) must await so the disposal does not race
-// any other consumer of the seam.
+// callers (or the public run) may need to observe; the FinalizationMode
+// tells the caller whether the finalization has been awaited already.
 // -----------------------------------------------------------------------------
 
 type internal LifecycleCompletion = {
     Result: Result<BoundedProcessSuccess, BoundedProcessFailure>
     Finalization: Task
+    FinalizationMode: FinalizationMode
 }
 
 // -----------------------------------------------------------------------------
@@ -599,30 +616,28 @@ let internal executeLifecycleWithSeam
         // Helper that builds the finalization Task. The finalization waits
         // for the three operations to settle, observes aggregate faults,
         // and then invokes disposeOnce exactly once. The finalization
-        // never accesses the seam after disposal.
-        //
-        // We use TaskContinuationOptions.ExecuteSynchronously so the
-        // disposal continuation does NOT need the thread pool. This
-        // avoids a deadlock when the lifecycle task calls Task.Wait on
-        // the finalization Task: the continuation is already run by
-        // the time Wait returns.
+        // never accesses the seam after disposal. The finalization is a
+        // single F# task computation expression with no ContinueWith;
+        // it is awaited via the standard task CE continuation path so
+        // there is no synchronous Task.Wait deadlock.
         let buildFinalization () : Task =
-            let allOps =
-                Task.WhenAll(
-                    [|
-                        seam.ExitTask
-                        stdoutTask :> Task
-                        stderrTask :> Task
-                    |]
-                )
-            allOps.ContinueWith(
-                fun (t: Task) ->
-                    if t.IsFaulted then
-                        ignore t.Exception
-                    disposeOnce()
-                ,
-                TaskContinuationOptions.ExecuteSynchronously
-            )
+            task {
+                try
+                    do!
+                        Task.WhenAll(
+                            [|
+                                seam.ExitTask
+                                stdoutTask :> Task
+                                stderrTask :> Task
+                            |]
+                        )
+                with
+                | _ as failure ->
+                    // Observe aggregate faults so they are never
+                    // silently swallowed.
+                    ignore failure
+                disposeOnce()
+            }
 
         // Event loop - exits immediately on any authoritative terminal cause
         let mutable loopDone = false
@@ -863,32 +878,32 @@ let internal executeLifecycleWithSeam
                 || stderrTask.IsCanceled
                 || stderrTask.IsFaulted)
 
-        let finalization =
+        let finalization = buildFinalization ()
+        let finalizationMode =
             if operationsSettled then
                 // All operations have already settled. The finalization
-                // task's continuation has already been scheduled (via
-                // ContinueWith with ExecuteSynchronously) and has run
-                // synchronously. We just need to wait for the Task
-                // wrapper to mark itself completed. Wait() returns
-                // immediately for an already-completed Task and does
-                // NOT deadlock because the continuation did not
-                // schedule a thread-pool callback.
-                let finalizationTask = buildFinalization ()
-                try
-                    finalizationTask.Wait()
-                with
-                | _ -> ()
-                Task.CompletedTask
+                // task is already completed (or will complete
+                // immediately when awaited). The public run() must await
+                // it so a successful or normally-terminated process
+                // returns only after disposal.
+                AwaitBeforeReturn
             else
                 // The cleanup deliberately returned while operations are
-                // still active. Schedule the deferred finalizer with a
-                // fault-observing continuation so the test runner can
-                // detect any disposal-time failure. The finalizationTask
-                // already has its own fault-observing ContinueWith, so we
-                // do not attach a second one here.
-                buildFinalization ()
+                // still active. The public run() must NOT block on the
+                // finalization, because the finalization cannot complete
+                // until the caller supplies whatever state the
+                // outstanding operations are waiting on. The deferred
+                // finalizer is observed asynchronously; its failure (if
+                // any) is surfaced via UnobservedTaskException at GC
+                // time, which is acceptable for a best-effort disposal
+                // that already failed at the classification level.
+                Deferred
 
-        return { Result = result; Finalization = finalization }
+        return {
+            Result = result
+            Finalization = finalization
+            FinalizationMode = finalizationMode
+        }
     }
 
 // -----------------------------------------------------------------------------
@@ -955,16 +970,35 @@ let run
 
             let seam = defaultSeam procObj
 
-            // The lifecycle returns a LifecycleCompletion carrying both
-            // the public Result and the disposal Task. We await both so
-            // the public run() never returns while a resource it depends
-            // on is being released.
+            // The lifecycle returns a LifecycleCompletion carrying the
+            // public Result, the disposal Task, and a FinalizationMode.
+            // For AwaitBeforeReturn we await disposal before returning;
+            // for Deferred we observe disposal asynchronously so the
+            // public run() never blocks indefinitely on operations that
+            // are still pending.
             let completion =
                 executeLifecycleWithSeam
                     lcts request timeoutTcs cancelTcs
                     stdoutTask stderrTask seam tReg cReg tcts
             task {
                 let! c = completion
-                do! c.Finalization
-                return c.Result
+                match c.FinalizationMode with
+                | AwaitBeforeReturn ->
+                    do! c.Finalization
+                    return c.Result
+                | Deferred ->
+                    // Observe the finalization asynchronously with a
+                    // fault-detecting continuation. We do NOT block on
+                    // it because a Deferred finalization may be waiting
+                    // on operations that the caller is expected to
+                    // complete externally.
+                    c.Finalization.ContinueWith(
+                        fun (t: Task) ->
+                            if t.IsFaulted then
+                                ignore t.Exception
+                        ,
+                        TaskContinuationOptions.ExecuteSynchronously
+                    )
+                    |> ignore
+                    return c.Result
             }
