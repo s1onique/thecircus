@@ -600,22 +600,34 @@ let internal executeLifecycleWithSeam
                 | Error msg -> killErrorCell.Value <- Some msg
 
         // -----------------------------------------------------------------
-        // Exactly-once resource ownership. disposeOnce is only called from
-        // the finalizer (or from the synchronous finalization path below);
-        // it is never invoked from the event loop or cleanup.
+        // Exactly-once resource ownership. disposeOnceAsync is only
+        // awaited from the finalization Task; it is never invoked from
+        // the event loop or cleanup. Registration disposal uses the
+        // async DisposeAsync path so that a callback currently executing
+        // on another thread can finish without blocking the finalizer.
         // -----------------------------------------------------------------
         let mutable disposalState = 0
-        let disposeOnce () =
-            if Interlocked.Exchange(&disposalState, 1) = 0 then
-                try tReg.Dispose() with | _ -> ()
-                try cReg.Dispose() with | _ -> ()
-                try lcts.Dispose() with | _ -> ()
-                try tcts.Dispose() with | _ -> ()
-                try seam.Dispose() with | _ -> ()
+        let disposeOnceAsync () : Task =
+            task {
+                if Interlocked.Exchange(&disposalState, 1) = 0 then
+                    try
+                        do! tReg.DisposeAsync().AsTask()
+                    with
+                    | _ -> ()
+
+                    try
+                        do! cReg.DisposeAsync().AsTask()
+                    with
+                    | _ -> ()
+
+                    try lcts.Dispose() with | _ -> ()
+                    try tcts.Dispose() with | _ -> ()
+                    try seam.Dispose() with | _ -> ()
+            }
 
         // Helper that builds the finalization Task. The finalization waits
         // for the three operations to settle, observes aggregate faults,
-        // and then invokes disposeOnce exactly once. The finalization
+        // and then invokes disposeOnceAsync exactly once. The finalization
         // never accesses the seam after disposal. The finalization is a
         // single F# task computation expression with no ContinueWith;
         // it is awaited via the standard task CE continuation path so
@@ -636,7 +648,7 @@ let internal executeLifecycleWithSeam
                     // Observe aggregate faults so they are never
                     // silently swallowed.
                     ignore failure
-                disposeOnce()
+                do! disposeOnceAsync ()
             }
 
         // Event loop - exits immediately on any authoritative terminal cause
@@ -987,18 +999,20 @@ let run
                     do! c.Finalization
                     return c.Result
                 | Deferred ->
-                    // Observe the finalization asynchronously with a
-                    // fault-detecting continuation. We do NOT block on
-                    // it because a Deferred finalization may be waiting
-                    // on operations that the caller is expected to
-                    // complete externally.
-                    c.Finalization.ContinueWith(
-                        fun (t: Task) ->
-                            if t.IsFaulted then
-                                ignore t.Exception
-                        ,
-                        TaskContinuationOptions.ExecuteSynchronously
-                    )
+                    // Observe the finalization asynchronously. We do NOT
+                    // block on it because a Deferred finalization may be
+                    // waiting on operations that the caller is expected
+                    // to complete externally. There is no ContinueWith
+                    // here at all; we spawn a fire-and-forget async
+                    // observer that observes the finalization's failure
+                    // (if any) on the default scheduler.
+                    task {
+                        try
+                            do! c.Finalization
+                        with
+                        | _ as finalizationFailure ->
+                            ignore finalizationFailure
+                    }
                     |> ignore
                     return c.Result
             }
