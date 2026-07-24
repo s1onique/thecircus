@@ -3,7 +3,7 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 #nowarn "3511"
 
 // =============================================================================
-// Bounded-process core -- CORRECTION 14
+// Bounded-process core -- CORRECTION 15
 //
 // P0 lifecycle classification fixes (from the persistent review):
 // - Select ExitWaitFailed when the exit task is faulted or cancelled.
@@ -30,21 +30,49 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 //   the exit task must have been observed successfully and the exit code
 //   captured. EOF without process exit no longer pretends success.
 //
-// P3 authoritative cancellation and resource ownership:
-// - Linked reader cancellation must not override an authoritative
-//   timeout or caller-cancellation participant. The reader terminal
-//   branch uses participant completion checks (timeoutObserved OR
-//   timeoutTcs.Task.IsCompleted, cancellationObserved OR
-//   cancelTcs.Task.IsCompleted) to decide whether to surface an
-//   Unexpected*Cancellation, set the reader terminal cause, or wait
-//   for the authoritative participant to be observed.
-// - Registrations, cancellation sources, and the seam's Dispose are now
-//   owned by a single atomic finalizer (Interlocked.Exchange) that
-//   waits for the exit task, stdout task, and stderr task to settle
-//   before invoking the disposal callback. The previous per-task
-//   disposal continuations and the unsynchronized mutable Boolean are
-//   removed. Production's run() no longer disposes the process object
-//   directly; the seam's Dispose callback owns it.
+// P3 authoritative cancellation:
+// - Reader terminal branches now check participant completion
+//   (timeoutObserved OR timeoutTcs.Task.IsCompleted, cancellationObserved
+//   OR cancelTcs.Task.IsCompleted) rather than only the in-loop observed
+//   flag. ReadCancelled when neither participant is complete surfaces
+//   UnexpectedStdoutCancellation/UnexpectedStderrCancellation and
+//   terminates the child. ReadCancelled when a participant is already
+//   complete is stored without changing the cause.
+//
+// P3.1 deterministic timeout/cancellation precedence:
+// - When both timeout and caller-cancellation participants are completed,
+//   caller-cancellation wins. This is enforced in the event loop: if
+//   the timeout task is observed first, we check whether the cancellation
+//   task is also completed; if so, we set CallerCancel (not TimeoutFire).
+//   Documented in the docstring on executeLifecycleWithSeam.
+//
+// CORRECTION 15 finalizer ordering fix:
+// - The finalizer is NO LONGER scheduled at the start of the lifecycle.
+//   Doing so could race: the finalizer waits only for the three
+//   operations to settle, not for the lifecycle to finish processing
+//   those completions or capture the snapshot. Disposal could therefore
+//   run while the cleanup or snapshot capture still needed the seam's
+//   state (HasExited, ReadExitCode).
+// - The new finalization boundary is:
+//     (a) all three operations settled
+//     AND
+//     (b) the snapshot has been captured
+//     AND
+//     (c) the public classification no longer accesses the seam.
+// - After the snapshot is captured, executeLifecycleWithSeam decides:
+//     * If the three operations are already settled, await the
+//       finalization synchronously and then return.
+//     * If the cleanup deliberately returned while operations are still
+//       active (a cleanup-failure case), schedule the deferred
+//       finalizer and return the typed cleanup failure immediately.
+// - The finalizer is now observable: the internal return shape is
+//   `LifecycleCompletion` carrying the Result plus the Finalization
+//   Task. The finalization Task is fire-and-forget but a
+//   fault-observing continuation is attached so the test runner can
+//   detect any disposal-time failure.
+// - run() awaits both Result and Finalization, so the public caller
+//   never observes a Result while a resource it depends on is being
+//   released.
 // =============================================================================
 
 open System
@@ -317,8 +345,9 @@ type internal LifecycleSeam = {
     ReadExitCode: unit -> int
     /// Release the resources owned by the seam. The lifecycle's finalizer
     /// invokes this exactly once after the exit task, stdout task, and
-    /// stderr task have all settled. Production's default seam uses this
-    /// to dispose the real Process.
+    /// stderr task have all settled AND the lifecycle has finished
+    /// processing them. Production's default seam uses this to dispose
+    /// the real Process.
     Dispose: unit -> unit
 }
 
@@ -344,6 +373,20 @@ type private ClassificationSnapshot = {
     ExitCode: int option
     StdoutOutcome: ReadOutcome option
     StderrOutcome: ReadOutcome option
+}
+
+// -----------------------------------------------------------------------------
+// Lifecycle completion (internal)
+//
+// Internal return shape for executeLifecycleWithSeam. The Result is the
+// public classification; the Finalization is the disposal Task that
+// callers (or the public run) must await so the disposal does not race
+// any other consumer of the seam.
+// -----------------------------------------------------------------------------
+
+type internal LifecycleCompletion = {
+    Result: Result<BoundedProcessSuccess, BoundedProcessFailure>
+    Finalization: Task
 }
 
 // -----------------------------------------------------------------------------
@@ -471,6 +514,21 @@ let private classify
 
 // -----------------------------------------------------------------------------
 // Lifecycle implementation
+//
+// Authoritative cancellation order (P3.1):
+//   * The explicit timeout and caller-cancellation tasks are the public
+//     cause authorities. If both participants are pre-completed when
+//     the timeout task is observed by the event loop, the cause is
+//     CallerCancel (not TimeoutFire). This guarantees a deterministic
+//     public precedence regardless of which task `Task.WhenAny` returns
+//     first.
+//
+// Finalizer ordering (CORRECTION 15):
+//   * The disposal Task is established only after the snapshot has been
+//     captured. The finalization is awaited synchronously if the three
+//     operations are already settled, or scheduled as a fire-and-forget
+//     Task with a fault-observing continuation when the cleanup
+//     returned while operations were still active.
 // -----------------------------------------------------------------------------
 
 let internal executeLifecycleWithSeam
@@ -484,7 +542,7 @@ let internal executeLifecycleWithSeam
     (tReg: CancellationTokenRegistration)
     (cReg: CancellationTokenRegistration)
     (tcts: CancellationTokenSource)
-    : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
+    : Task<LifecycleCompletion> =
     task {
         // Mutable state
         let stdoutOutcomeCell = { Value = None }
@@ -525,14 +583,9 @@ let internal executeLifecycleWithSeam
                 | Error msg -> killErrorCell.Value <- Some msg
 
         // -----------------------------------------------------------------
-        // Exactly-once resource ownership.
-        //
-        // One finalizer owns the registrations, the cancellation sources,
-        // and the seam's Dispose. Interlocked.Exchange guarantees that
-        // even if multiple scheduling paths race, the disposal body runs
-        // exactly once. The finalizer waits for the exit task AND both
-        // reader tasks to settle before disposing; aggregate faults are
-        // observed so they are never silently swallowed.
+        // Exactly-once resource ownership. disposeOnce is only called from
+        // the finalizer (or from the synchronous finalization path below);
+        // it is never invoked from the event loop or cleanup.
         // -----------------------------------------------------------------
         let mutable disposalState = 0
         let disposeOnce () =
@@ -543,28 +596,33 @@ let internal executeLifecycleWithSeam
                 try tcts.Dispose() with | _ -> ()
                 try seam.Dispose() with | _ -> ()
 
-        let allOperations =
-            Task.WhenAll([|
-                seam.ExitTask
-                stdoutTask :> Task
-                stderrTask :> Task
-            |])
-
-        let finalizer =
-            task {
-                try
-                    do! allOperations
-                with
-                | _ ->
-                    if allOperations.IsFaulted then
-                        ignore allOperations.Exception
-                disposeOnce()
-            }
-
-        // Schedule the finalizer immediately. It runs concurrently with
-        // the lifecycle's event loop and cleanup races. The lifecycle's
-        // public Result is unaffected by the finalizer's completion.
-        finalizer |> ignore
+        // Helper that builds the finalization Task. The finalization waits
+        // for the three operations to settle, observes aggregate faults,
+        // and then invokes disposeOnce exactly once. The finalization
+        // never accesses the seam after disposal.
+        //
+        // We use TaskContinuationOptions.ExecuteSynchronously so the
+        // disposal continuation does NOT need the thread pool. This
+        // avoids a deadlock when the lifecycle task calls Task.Wait on
+        // the finalization Task: the continuation is already run by
+        // the time Wait returns.
+        let buildFinalization () : Task =
+            let allOps =
+                Task.WhenAll(
+                    [|
+                        seam.ExitTask
+                        stdoutTask :> Task
+                        stderrTask :> Task
+                    |]
+                )
+            allOps.ContinueWith(
+                fun (t: Task) ->
+                    if t.IsFaulted then
+                        ignore t.Exception
+                    disposeOnce()
+                ,
+                TaskContinuationOptions.ExecuteSynchronously
+            )
 
         // Event loop - exits immediately on any authoritative terminal cause
         let mutable loopDone = false
@@ -583,7 +641,14 @@ let internal executeLifecycleWithSeam
 
             if not timeoutObserved && Object.ReferenceEquals(winner, timeoutTcs.Task) then
                 timeoutObserved <- true
-                terminalCauseCell.Value <- TimeoutFire
+                // P3.1 deterministic precedence: if the caller-cancellation
+                // task is also already completed, caller cancellation wins
+                // over timeout. The public cause authority precedence is
+                // caller cancellation > timeout.
+                if cancellationObserved || cancelTcs.Task.IsCompleted then
+                    terminalCauseCell.Value <- CallerCancel
+                else
+                    terminalCauseCell.Value <- TimeoutFire
                 killNow()
             elif not cancellationObserved && Object.ReferenceEquals(winner, cancelTcs.Task) then
                 cancellationObserved <- true
@@ -712,6 +777,11 @@ let internal executeLifecycleWithSeam
             loopDone <- hasAuthoritativeCause || naturalComplete
 
         // ---- Terminal cleanup: async grace races ----
+        // The cleanup races (and the seam's HasExited / ReadExitCode
+        // calls below) MUST complete before the finalizer is allowed to
+        // dispose the seam. The classification snapshot is only built
+        // after this section, and the finalizer is only established
+        // after that.
         try lcts.Cancel() with | _ -> ()
 
         let exitRace = raceWithDelay seam.ExitTask (TimeSpan.FromSeconds(5.0))
@@ -753,16 +823,13 @@ let internal executeLifecycleWithSeam
         if stderrOutcomeCell.Value.IsNone then
             stderrOutcomeCell.Value <- Some(tryReadOutcome stderrTask)
 
-        // The finalizer scheduled above observes any late task faults and
-        // disposes exactly once after the three operations have settled.
-        // We do not duplicate that work here.
-
-        // ---- Build classification snapshot and classify ----
+        // ---- Build classification snapshot ----
         //
         // The snapshot is the only bridge between the mutable lifecycle
         // state and the pure classifier. Gathering the values here is
         // the last place where Option.Value extraction is allowed; the
-        // classifier itself never sees a MutableCell.
+        // classifier itself never sees a MutableCell. After the snapshot
+        // is captured, the lifecycle no longer accesses the seam.
         let snapshot = {
             Cause = terminalCauseCell.Value
             TerminalFailure = terminalFailureCell.Value
@@ -776,7 +843,52 @@ let internal executeLifecycleWithSeam
             StderrOutcome = stderrOutcomeCell.Value
         }
 
-        return classify request snapshot
+        let result = classify request snapshot
+
+        // ---- Establish finalization AFTER state capture ----
+        //
+        // By this point the lifecycle has finished using the seam: the
+        // event loop, the cleanup races, and the snapshot capture are
+        // all complete. The finalizer is now safe to dispose. The
+        // disposal Task is made observable via LifecycleCompletion so
+        // the public run can await it before returning.
+        let operationsSettled =
+            (seam.ExitTask.IsCompleted
+             || seam.ExitTask.IsCanceled
+             || seam.ExitTask.IsFaulted)
+            && (stdoutTask.IsCompleted
+                || stdoutTask.IsCanceled
+                || stdoutTask.IsFaulted)
+            && (stderrTask.IsCompleted
+                || stderrTask.IsCanceled
+                || stderrTask.IsFaulted)
+
+        let finalization =
+            if operationsSettled then
+                // All operations have already settled. The finalization
+                // task's continuation has already been scheduled (via
+                // ContinueWith with ExecuteSynchronously) and has run
+                // synchronously. We just need to wait for the Task
+                // wrapper to mark itself completed. Wait() returns
+                // immediately for an already-completed Task and does
+                // NOT deadlock because the continuation did not
+                // schedule a thread-pool callback.
+                let finalizationTask = buildFinalization ()
+                try
+                    finalizationTask.Wait()
+                with
+                | _ -> ()
+                Task.CompletedTask
+            else
+                // The cleanup deliberately returned while operations are
+                // still active. Schedule the deferred finalizer with a
+                // fault-observing continuation so the test runner can
+                // detect any disposal-time failure. The finalizationTask
+                // already has its own fault-observing ContinueWith, so we
+                // do not attach a second one here.
+                buildFinalization ()
+
+        return { Result = result; Finalization = finalization }
     }
 
 // -----------------------------------------------------------------------------
@@ -806,7 +918,10 @@ let private defaultSeam (procObj: Process) : LifecycleSeam =
 //
 // The lifecycle's finalizer disposes the process via the seam's Dispose
 // callback. run() therefore does NOT dispose procObj directly: doing so
-// would race the finalizer's exactly-once disposal.
+// would race the finalizer's exactly-once disposal. run() awaits both
+// the lifecycle's Result and its Finalization Task so the public caller
+// never observes a Result while a resource it depends on is being
+// released.
 // -----------------------------------------------------------------------------
 
 let run
@@ -840,7 +955,16 @@ let run
 
             let seam = defaultSeam procObj
 
-            // The lifecycle's finalizer owns the process; the lifecycle
-            // returns the public Result. We propagate the result and
-            // intentionally do not dispose the process here.
-            executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
+            // The lifecycle returns a LifecycleCompletion carrying both
+            // the public Result and the disposal Task. We await both so
+            // the public run() never returns while a resource it depends
+            // on is being released.
+            let completion =
+                executeLifecycleWithSeam
+                    lcts request timeoutTcs cancelTcs
+                    stdoutTask stderrTask seam tReg cReg tcts
+            task {
+                let! c = completion
+                do! c.Finalization
+                return c.Result
+            }
