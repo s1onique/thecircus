@@ -4,6 +4,8 @@ module Circus.Tooling.CanonicalEvidence.Cli
 // Canonical evidence – CLI dispatcher
 //
 // ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION01
+// ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION02
+//
 // Slice 7: CLI verb and registration.
 //
 // Invocations:
@@ -25,6 +27,13 @@ module Circus.Tooling.CanonicalEvidence.Cli
 //
 // On any failure path the CLI prints a diagnostic line to stderr
 // and NEVER prints a PASS line.
+//
+// CORRECTION02 adds an internal ``runCliWithDependencies`` entry
+// point that accepts an explicit ``CanonicalEvidenceDependencies``
+// record so hermetic tests can exercise the full CLI dispatch path
+// without depending on the bounded Git adapter's per-process
+// mutable ``gitExecutableCell``. The production CLI path always
+// constructs the dependency record through ``productionDependencies``.
 // =============================================================================
 
 open System
@@ -142,7 +151,7 @@ let private renderRegenerateSummary (e: CanonicalEvidence) (outputPath: string) 
         (if e.TestedTreeOid.Length >= 12 then e.TestedTreeOid.Substring(0, 12) else e.TestedTreeOid)
         (List.length e.Checks)
 
-let private renderVerifySummary (r: VerifyOutcome) : string =
+let private renderLegacyVerifySummary (r: VerifyOutcome) : string =
     let status =
         match r.Failure with
         | None -> "PASS"
@@ -168,8 +177,36 @@ let private renderVerifySummary (r: VerifyOutcome) : string =
             "canonical-evidence verify: %s (%s) commit=%s tree=%s path=%s"
             status reasons commitPrefix treePrefix r.Path
 
+let private renderDependencyVerifySummary (r: DependencyVerifyOutcome) : string =
+    let status =
+        match r.Failure with
+        | None -> "PASS"
+        | Some _ -> "FAIL"
+    let reasons =
+        match r.Failure with
+        | Some f -> dependencyVerifyFailureToString f
+        | None -> ""
+    let commitPrefix =
+        match r.Evidence with
+        | Some e when e.TestedCommitOid.Length >= 12 -> e.TestedCommitOid.Substring(0, 12)
+        | _ -> "?"
+    let treePrefix =
+        match r.Evidence with
+        | Some e when e.TestedTreeOid.Length >= 12 -> e.TestedTreeOid.Substring(0, 12)
+        | _ -> "?"
+    if String.IsNullOrEmpty reasons then
+        sprintf
+            "canonical-evidence verify: %s (commit=%s tree=%s path=%s)"
+            status commitPrefix treePrefix r.Path
+    else
+        sprintf
+            "canonical-evidence verify: %s (%s) commit=%s tree=%s path=%s"
+            status reasons commitPrefix treePrefix r.Path
+
 // -----------------------------------------------------------------------------
-// Runners
+// Production runners (delegate to the existing CORRECTION01 surface).
+// The dependency-driven entry points below are the canonical test
+// seam; production callers use these wrappers.
 // -----------------------------------------------------------------------------
 
 let runRegenerate (repoRoot: string) (outputPath: string) (baselineCommit: string) : int =
@@ -207,22 +244,103 @@ let runVerify (repoRoot: string) (inputPath: string) : int =
         match result.Failure with
         | Some _ -> ExitCode.policyFailure
         | None -> ExitCode.pass
-    let text = renderVerifySummary result
+    let text = renderLegacyVerifySummary result
     match result.Failure with
-    | Some _ -> stderr.WriteLine text
-    | None -> stdout.WriteLine text
+    | Some _ -> stderr.WriteLine(text)
+    | None -> stdout.WriteLine(text)
     verdict
 
-let run (argv: string list) : int =
+// -----------------------------------------------------------------------------
+// Dependency-driven runners
+//
+// ``runRegenerateWithDependencies`` and ``runVerifyWithDependencies``
+// take an explicit dependency record. Production callers should use
+// the legacy ``runRegenerate`` / ``runVerify`` (which use the proven
+// bounded authorities directly); the dependency-driven runners exist
+// for the hermetic CLI test surface required by CORRECTION02.
+// -----------------------------------------------------------------------------
+
+let internal runRegenerateWithDependencies
+    (deps: CanonicalEvidenceDependencies)
+    (repoRoot: string)
+    (outputPath: string)
+    (baselineCommit: string)
+    : int =
+    match regenerateWithDependencies deps repoRoot baselineCommit with
+    | Result.Error failure ->
+        stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (regenerateFailureToString failure))
+        ExitCode.operationalError
+    | Result.Ok evidence ->
+        let writeOutcome = writeArtifactWithDependencies deps outputPath evidence
+        if not writeOutcome.Success then
+            let reason =
+                match writeOutcome.Failure with
+                | Some f -> sprintf "%s:%s" f.Reason f.Detail
+                | None -> "unknown"
+            stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" reason)
+            ExitCode.operationalError
+        else
+            let overall = statusToken evidence.OverallStatus
+            let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
+            stdout.WriteLine(renderRegenerateSummary evidence outputPath writeOutcome.CanonicalSha256)
+            // Re-verify the freshly written bytes to confirm the
+            // artifact on disk is what the producer intended.
+            let verifyOutcome = verifyWithDependencies deps outputPath repoRoot
+            match verifyOutcome.Failure with
+            | Some f ->
+                stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (dependencyVerifyFailureToString f))
+                ExitCode.operationalError
+            | None ->
+                if overall = "pass" then ExitCode.pass
+                else ExitCode.policyFailure
+
+let internal runVerifyWithDependencies
+    (deps: CanonicalEvidenceDependencies)
+    (repoRoot: string)
+    (inputPath: string)
+    : int =
+    let result = verifyWithDependencies deps inputPath repoRoot
+    let verdict =
+        match result.Failure with
+        | Some _ -> ExitCode.policyFailure
+        | None -> ExitCode.pass
+    let text = renderDependencyVerifySummary result
+    match result.Failure with
+    | Some _ -> stderr.WriteLine(text)
+    | None -> stdout.WriteLine(text)
+    verdict
+
+// -----------------------------------------------------------------------------
+// Dependency-driven CLI dispatcher
+//
+// ``runCliWithDependencies`` parses ``argv`` through the SAME
+// production ``parse`` function used by the top-level CLI, then
+// dispatches the parsed command to the dependency-driven runners.
+// This guarantees the hermetic test path exercises the same parse,
+// arg-validation, and verb-dispatch logic as the production binary.
+//
+// Tests construct isolated fake ``CanonicalEvidenceDependencies``
+// records per test and assert the exit code, stdout, and stderr
+// produced by this dispatcher.
+// -----------------------------------------------------------------------------
+
+let internal runCliWithDependencies
+    (deps: CanonicalEvidenceDependencies)
+    (argv: string list)
+    : int =
     match parse argv with
     | Ok HelpCmd ->
         stdout.WriteLine(helpText ())
         ExitCode.pass
     | Ok(RegenerateCmd (repoRoot, outputPath, baselineCommit)) ->
-        runRegenerate repoRoot outputPath baselineCommit
+        runRegenerateWithDependencies deps repoRoot outputPath baselineCommit
     | Ok(VerifyCmd (repoRoot, inputPath)) ->
-        runVerify repoRoot inputPath
+        runVerifyWithDependencies deps repoRoot inputPath
     | Result.Error msg ->
         stderr.WriteLine(sprintf "error: %s" msg)
         stderr.WriteLine(helpText ())
         ExitCode.operationalError
+
+let run (argv: string list) : int =
+    let deps = productionDependencies ()
+    runCliWithDependencies deps argv
