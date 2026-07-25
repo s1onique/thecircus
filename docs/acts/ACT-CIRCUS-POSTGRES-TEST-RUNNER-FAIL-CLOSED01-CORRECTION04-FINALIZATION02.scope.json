@@ -7,6 +7,7 @@
     ".factory/gate-summary.json",
     "docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02.scope.json",
     "docs/close-reports/closure-ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION01.md",
+    "docs/close-reports/closure-ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02.md",
     "tools/Circus.Tooling/ScopeAuthority/Authority.fs",
     "tools/Circus.Tooling/ScopeAuthority/Domain.fs",
     "tools/Circus.Tooling/ProtectedScope/Check.fs",
