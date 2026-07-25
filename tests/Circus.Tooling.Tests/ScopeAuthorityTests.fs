@@ -16,17 +16,10 @@ let private scopePath = "scope.json"
 let private stringArray values =
     JsonSerializer.Serialize(values |> List.toArray)
 
-let private qualificationsJson =
-    "["
-    + "{\"path\":\"src/Circus.Persistence.Postgres/\","
-    + "\"reason\":\"production persistence root is immutable in this ACT\","
-    + "\"expected_descendants\":[\"src/Circus.Persistence.Postgres/JournalRepository.fs\"],"
-    + "\"sibling_mutation_test\":\"src/Circus.Persistence.Postgres.Tests/undeclared.fs\"},"
-    + "{\"path\":\"db/migrations/\","
-    + "\"reason\":\"migration history is immutable in this ACT\","
-    + "\"expected_descendants\":[\"db/migrations/000001_event_journal.sql\"],"
-    + "\"sibling_mutation_test\":\"db/not-migrations/undeclared.sql\"}"
-    + "]"
+// NOTE: With corrected prefix-qualification semantics, only ActOwned directory
+// prefixes require qualification metadata. GloballyProtected prefixes restrict
+// authority and do not need sibling-authorization justification.
+let private qualificationsJson = "[]"
 
 let private declarationJson baseline globallyProtected actOwned rejectUndeclared protectProduction =
     "{"
