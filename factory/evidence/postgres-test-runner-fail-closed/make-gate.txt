@@ -1,4 +1,3 @@
-=== make gate ===
 dotnet build tools/Circus.Tooling/Circus.Tooling.fsproj -c Release
   Determining projects to restore...
   All projects are up-to-date for restore.
@@ -8,10 +7,437 @@ Build succeeded.
     0 Warning(s)
     0 Error(s)
 
-Time Elapsed 00:00:20.14
+Time Elapsed 00:00:02.06
 dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll canonical-evidence verify \
 	--repo-root . \
 	--input .factory/canonical-evidence.json
-canonical-evidence verify: FAIL (identity unresolved: identity_failure:working tree is dirty (regeneration requires a clean tree)) commit=9247ebca947c tree=e2c4c4b229b8 path=.factory/canonical-evidence.json
-make: *** [Makefile:290: verify-canonical-evidence] Error 1
-MAKE_EXIT_CODE=2
+canonical-evidence verify: PASS (commit=2f60dd1b0639 tree=ea35a24ddd74 path=.factory/canonical-evidence.json)
+python3 scripts/verify_canonical_evidence_policy.py --repo-root .
+canonical-evidence policy: PASS (provider/schema/registry/projection/gate agreement; mutation detected)
+python3 scripts/project_leamas_gate_summary.py \
+	--canonical .factory/canonical-evidence.json \
+	--output .factory/gate-summary.json \
+	--verify-only
+project_leamas_gate_summary: PASS canonical=.factory/canonical-evidence.json projection=.factory/gate-summary.json checks=9 semantic_sha256=ef47ea37b96ad3b8330f53084d7dd8bba68bfe7d7a9e17b5c62e186f7e1364e1
+factorize: doctrine-verify
+doctrine verify: OK
+dotnet tool restore
+Tool 'fantomas' (version '7.0.5') was restored. Available commands: fantomas
+
+Restore was successful.
+dotnet restore Circus.sln --locked-mode
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+cd web && npm ci
+
+added 34 packages, and audited 35 packages in 3s
+
+5 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+dotnet fantomas --check src/ tests/
+cd web && ./node_modules/.bin/elm-format src tests --validate
+[]
+dotnet build Circus.sln -c Release --no-restore
+  Circus.Tooling.ProcessTreeFixture -> /home/thecircus/Projects/thecircus/tests/Circus.Tooling.ProcessTreeFixture/bin/Release/net10.0/circus-process-tree-fixture.dll
+  Circus.Domain -> /home/thecircus/Projects/thecircus/src/Circus.Domain/bin/Release/net10.0/Circus.Domain.dll
+  Circus.DevHost -> /home/thecircus/Projects/thecircus/tools/Circus.DevHost/bin/Release/net10.0/linux-x64/circus-dev.dll
+  Circus.Domain.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Domain.Tests/bin/Release/net10.0/Circus.Domain.Tests.dll
+  Circus.Contracts -> /home/thecircus/Projects/thecircus/src/Circus.Contracts/bin/Release/net10.0/Circus.Contracts.dll
+  Circus.DevHost.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.DevHost.Tests/bin/Release/net10.0/Circus.DevHost.Tests.dll
+  Circus.Contracts.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Contracts.Tests/bin/Release/net10.0/Circus.Contracts.Tests.dll
+  Circus.Application -> /home/thecircus/Projects/thecircus/src/Circus.Application/bin/Release/net10.0/Circus.Application.dll
+  Circus.Application.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Application.Tests/bin/Release/net10.0/Circus.Application.Tests.dll
+  Circus.Persistence.Postgres -> /home/thecircus/Projects/thecircus/src/Circus.Persistence.Postgres/bin/Release/net10.0/Circus.Persistence.Postgres.dll
+  Circus.Api -> /home/thecircus/Projects/thecircus/src/Circus.Api/bin/Release/net10.0/Circus.Api.dll
+  Circus.Persistence.Postgres.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/bin/Release/net10.0/Circus.Persistence.Postgres.Tests.dll
+  Circus.Api.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Api.Tests/bin/Release/net10.0/Circus.Api.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:30.22
+dotnet run --project tests/Circus.Domain.Tests   -c Release --no-build --no-restore
+[37m[[37m21:17:21 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m21:17:21 [37mINF[37m] [37mEXPECTO! [36m4[37m tests run in [32m00:00:00.1406136[37m for [36mProductIdentity[37m – [36m4[37m passed, [36m0[37m ignored, [36m0[37m failed, [36m0[37m errored. [36mSuccess![37m [37m<[37mExpecto[37m>[37m
+[0mdotnet run --project tests/Circus.Contracts.Tests -c Release --no-build --no-restore
+[37m[[37m21:17:22 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m21:17:23 [37mINF[37m] [37mEXPECTO! [36m37[37m tests run in [32m00:00:00.2253088[37m for [36mCircus.Contracts[37m – [36m37[37m passed, [36m0[37m ignored, [36m0[37m failed, [36m0[37m errored. [36mSuccess![37m [37m<[37mExpecto[37m>[37m
+[0mdotnet run --project tests/Circus.Application.Tests -c Release --no-build --no-restore
+[37m[[37m21:17:24 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m21:17:24 [37mINF[37m] [37mEXPECTO! [36m18[37m tests run in [32m00:00:00.0979493[37m for [36mCircus.Application.Tests[37m – [36m18[37m passed, [36m0[37m ignored, [36m0[37m failed, [36m0[37m errored. [36mSuccess![37m [37m<[37mExpecto[37m>[37m
+[0mmake test-postgres
+make[1]: Entering directory '/home/thecircus/Projects/thecircus'
+dotnet tool restore
+Tool 'fantomas' (version '7.0.5') was restored. Available commands: fantomas
+
+Restore was successful.
+dotnet restore Circus.sln --locked-mode
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+cd web && npm ci
+
+added 34 packages, and audited 35 packages in 1s
+
+5 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+dotnet build Circus.sln -c Release --no-restore
+  Circus.DevHost -> /home/thecircus/Projects/thecircus/tools/Circus.DevHost/bin/Release/net10.0/linux-x64/circus-dev.dll
+  Circus.Tooling.ProcessTreeFixture -> /home/thecircus/Projects/thecircus/tests/Circus.Tooling.ProcessTreeFixture/bin/Release/net10.0/circus-process-tree-fixture.dll
+  Circus.DevHost.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.DevHost.Tests/bin/Release/net10.0/Circus.DevHost.Tests.dll
+  Circus.Domain -> /home/thecircus/Projects/thecircus/src/Circus.Domain/bin/Release/net10.0/Circus.Domain.dll
+  Circus.Contracts -> /home/thecircus/Projects/thecircus/src/Circus.Contracts/bin/Release/net10.0/Circus.Contracts.dll
+  Circus.Domain.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Domain.Tests/bin/Release/net10.0/Circus.Domain.Tests.dll
+  Circus.Application -> /home/thecircus/Projects/thecircus/src/Circus.Application/bin/Release/net10.0/Circus.Application.dll
+  Circus.Contracts.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Contracts.Tests/bin/Release/net10.0/Circus.Contracts.Tests.dll
+  Circus.Application.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Application.Tests/bin/Release/net10.0/Circus.Application.Tests.dll
+  Circus.Persistence.Postgres -> /home/thecircus/Projects/thecircus/src/Circus.Persistence.Postgres/bin/Release/net10.0/Circus.Persistence.Postgres.dll
+  Circus.Persistence.Postgres.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/bin/Release/net10.0/Circus.Persistence.Postgres.Tests.dll
+  Circus.Api -> /home/thecircus/Projects/thecircus/src/Circus.Api/bin/Release/net10.0/Circus.Api.dll
+  Circus.Api.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Api.Tests/bin/Release/net10.0/Circus.Api.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:02.45
+dotnet run --project tests/Circus.Persistence.Postgres.Tests -c Release --no-build --no-restore
+[testcontainers.org 00:00:00.27] Connected to Docker:
+  Host: unix:///var/run/docker.sock
+  Server Version: 29.6.2
+  Kernel Version: 6.17.0-19-generic
+  API Version: 1.55
+  Operating System: Linux Mint 22.3
+  Total Memory: 78.45 GB
+[testcontainers.org 00:00:00.62] Docker container 561747e2f7e5 created
+[testcontainers.org 00:00:00.72] Start Docker container 561747e2f7e5
+[testcontainers.org 00:00:00.99] Wait for Docker container 561747e2f7e5 to complete readiness checks
+[testcontainers.org 00:00:02.03] Docker container 561747e2f7e5 ready
+[testcontainers.org 00:00:02.26] Docker container e1a748b10083 created
+[testcontainers.org 00:00:02.27] Start Docker container e1a748b10083
+[testcontainers.org 00:00:02.45] Wait for Docker container e1a748b10083 to complete readiness checks
+[testcontainers.org 00:00:02.46] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container e1a748b10083
+[testcontainers.org 00:00:03.61] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container e1a748b10083
+[testcontainers.org 00:00:04.74] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container e1a748b10083
+[testcontainers.org 00:00:04.85] Docker container e1a748b10083 ready
+[37m[[37m21:17:39 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m21:17:39 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.fresh empty database migrates to canonical state[37m failed in [32m00:00:00.3990000[37m. [36m
+fresh: 000001 recorded. Expected subject string 'System.String[]' to contain substring '000001_event_journal'.
+   at Circus.Persistence.Postgres.Tests.MigrationTests.runMigrationAndAssertions(PostgresFixture fixture, String label, FSharpOption`1 preMigrationSql) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 85
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@238.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 238
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m21:17:39 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.legacy already-applied 000001 public schema is reconciled by 000002 and 000003[37m failed in [32m00:00:00.1820000[37m. [36m
+legacy: 000001 recorded. Expected subject string 'System.String[]' to contain substring '000001_event_journal'.
+   at Circus.Persistence.Postgres.Tests.MigrationTests.runMigrationAndAssertions(PostgresFixture fixture, String label, FSharpOption`1 preMigrationSql) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 85
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@241-1.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 242
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[testcontainers.org 00:00:06.48] Docker container 4a73d27eba10 created
+[0m[1000D[?25h[testcontainers.org 00:00:06.49] Start Docker container 4a73d27eba10
+[0m[1000D[?25h[testcontainers.org 00:00:06.68] Wait for Docker container 4a73d27eba10 to complete readiness checks
+[0m[1000D[?25h[testcontainers.org 00:00:06.68] Execute "pg_isready --host localhost --dbname circus_released_parent_59e1552e76c74ee5b93effa64f0c239d --username postgres" at Docker container 4a73d27eba10
+[0m[1000D[?25h[testcontainers.org 00:00:07.79] Execute "pg_isready --host localhost --dbname circus_released_parent_59e1552e76c74ee5b93effa64f0c239d --username postgres" at Docker container 4a73d27eba10
+[0m[1000D[?25h[testcontainers.org 00:00:08.91] Execute "pg_isready --host localhost --dbname circus_released_parent_59e1552e76c74ee5b93effa64f0c239d --username postgres" at Docker container 4a73d27eba10
+[0m[1000D[?25h[testcontainers.org 00:00:09.04] Docker container 4a73d27eba10 ready
+[0m[1000D[?25h[testcontainers.org 00:00:09.20] Stop Docker container 4a73d27eba10
+[0m[1000D[?25h[37m[[37m21:17:43 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.released-parent 000001+000002 in circus ledger with circus_owner absent is corrected by 000003[37m failed in [32m00:00:03.2370000[37m. [36m
+released-parent: 000001 recorded. Expected subject string 'System.String[]' to contain substring '000001_event_journal'.
+   at Circus.Persistence.Postgres.Tests.MigrationTests.runReleasedParentTest() in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 172
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@246-2.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 246
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[testcontainers.org 00:00:10.27] Docker container ffd5b43a54c8 created
+[0m[1000D[?25h[testcontainers.org 00:00:10.27] Start Docker container ffd5b43a54c8
+[0m[1000D[?25h[testcontainers.org 00:00:10.47] Wait for Docker container ffd5b43a54c8 to complete readiness checks
+[0m[1000D[?25h[testcontainers.org 00:00:10.47] Execute "pg_isready --host localhost --dbname circus_poolsize1_a17107eff6c447968c6307573719e59e --username postgres" at Docker container ffd5b43a54c8
+[0m[1000D[?25h[testcontainers.org 00:00:11.57] Execute "pg_isready --host localhost --dbname circus_poolsize1_a17107eff6c447968c6307573719e59e --username postgres" at Docker container ffd5b43a54c8
+[0m[1000D[?25h[testcontainers.org 00:00:12.69] Execute "pg_isready --host localhost --dbname circus_poolsize1_a17107eff6c447968c6307573719e59e --username postgres" at Docker container ffd5b43a54c8
+[0m[1000D[?25h[testcontainers.org 00:00:12.81] Docker container ffd5b43a54c8 ready
+[0m[1000D[?25h[testcontainers.org 00:00:12.92] Stop Docker container ffd5b43a54c8
+[0m[1000D[?25h[37m[[37m21:17:46 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.migration runs to completion with Maximum Pool Size = 1[37m failed in [32m00:00:03.1330000[37m. [36m
+Pool-size-1 migration recorded 000003. Expected subject string 'System.String[]' to contain substring '000003_runtime_grant_hardening'.
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@394-9.Invoke(NpgsqlDataSource adminDataSource) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 402
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Circus.Persistence.Postgres.Tests.MigrationTests.f@1-15(TestCaseBuilder builder@, PostgreSqlContainer container, Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 392
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@376-8.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 385
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m21:17:47 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.concurrent runner is rejected by the migration advisory lock[37m failed in [32m00:00:00.2670000[37m. [36m
+After lock release, Migration.migrate succeeds and records the full ledger. Expected subject string 'System.String[]' to contain substring '000003_runtime_grant_hardening'.
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@440-12.Invoke(NpgsqlCommand lockCommand) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 494
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Circus.Persistence.Postgres.Tests.MigrationTests.f@1-16(TestCaseBuilder builder@, NpgsqlDataSource adminDataSource', Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 437
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@419-10.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 421[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m21:17:47 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.failed migration is not recorded as applied[37m failed in [32m00:00:00.2090000[37m. [36m
+Failed 000002 is not recorded as applied. String does not match at position 0. Expected char: 'F', but got 'T'.
+[32mexpected[36m: [32mFalse[36m
+[31m  actual[36m: [31mTrue[36m
+   at Circus.Persistence.Postgres.Tests.MigrationTests.f@1-20(TestCaseBuilder builder@, NpgsqlDataSource adminDataSource', Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 561
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@529-15.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 531
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m21:17:48 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.released-parent prefix 000001+000002 is accepted and only 000003 is applied without refresh[37m failed in [32m00:00:00.1550000[37m. [36m
+Prefix test: 000001 is preserved. Expected subject string 'System.String[]' to contain substring '000001_event_journal'.
+   at Circus.Persistence.Postgres.Tests.MigrationTests.f@1-26(PostgresFixture fixture, TestCaseBuilder builder@, NpgsqlDataSource adminDataSource', Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 997
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@963-52.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 965
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[testcontainers.org 00:00:15.02] Docker container 2fc0faa23129 created
+[0m[1000D[?25h[testcontainers.org 00:00:15.02] Start Docker container 2fc0faa23129
+[0m[1000D[?25h[testcontainers.org 00:00:15.20] Wait for Docker container 2fc0faa23129 to complete readiness checks
+[0m[1000D[?25h[testcontainers.org 00:00:15.20] Execute "pg_isready --host localhost --dbname circus_default_privs_0a8f374fbbaf461f9f0db5696fe6440f --username postgres" at Docker container 2fc0faa23129
+[0m[1000D[?25h[testcontainers.org 00:00:16.31] Execute "pg_isready --host localhost --dbname circus_default_privs_0a8f374fbbaf461f9f0db5696fe6440f --username postgres" at Docker container 2fc0faa23129
+[0m[1000D[?25h[testcontainers.org 00:00:17.43] Execute "pg_isready --host localhost --dbname circus_default_privs_0a8f374fbbaf461f9f0db5696fe6440f --username postgres" at Docker container 2fc0faa23129
+[0m[1000D[?25h[testcontainers.org 00:00:17.56] Docker container 2fc0faa23129 ready
+[0m[1000D[?25h[testcontainers.org 00:00:17.67] Stop Docker container 2fc0faa23129
+[0m[1000D[?25h[testcontainers.org 00:00:18.09] Docker container 90d1ce3c26b9 created
+[0m[1000D[?25h[testcontainers.org 00:00:18.09] Start Docker container 90d1ce3c26b9
+[0m[1000D[?25h[testcontainers.org 00:00:18.28] Wait for Docker container 90d1ce3c26b9 to complete readiness checks
+[0m[1000D[?25h[testcontainers.org 00:00:18.28] Execute "pg_isready --host localhost --dbname circus_unlock_succ_cc3cde8dd2c9445a8c563034b0f1be14 --username postgres" at Docker container 90d1ce3c26b9
+[0m[1000D[?25h[testcontainers.org 00:00:19.40] Execute "pg_isready --host localhost --dbname circus_unlock_succ_cc3cde8dd2c9445a8c563034b0f1be14 --username postgres" at Docker container 90d1ce3c26b9
+[0m[1000D[?25h[testcontainers.org 00:00:20.52] Execute "pg_isready --host localhost --dbname circus_unlock_succ_cc3cde8dd2c9445a8c563034b0f1be14 --username postgres" at Docker container 90d1ce3c26b9
+[0m[1000D[?25h[testcontainers.org 00:00:20.65] Docker container 90d1ce3c26b9 ready
+[0m[1000D[?25h[testcontainers.org 00:00:25.72] Stop Docker container 90d1ce3c26b9
+[0m[1000D[?25h[37m[[37m21:17:59 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration unlock-failure cleanup.successful migration with deterministic unlock failure raises typed invariant, runs real ClearPool, ends the stale backend session[37m failed in [32m00:00:08.0310000[37m. [36m
+Locked backend session is no longer in pg_stat_activity after ClearPool (bounded 5s poll). Actual value was true but had expected it to be false.
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.f@1(NpgsqlDataSource adminDataSource, Operations ops, FSharpRef`1 acquiredPid, FSharpRef`1 clearCalls, Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 229
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.tests@158.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 190
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[testcontainers.org 00:00:26.11] Docker container 3567a5ef3699 created
+[0m[1000D[?25h[testcontainers.org 00:00:26.11] Start Docker container 3567a5ef3699
+[0m[1000D[?25h[testcontainers.org 00:00:26.31] Wait for Docker container 3567a5ef3699 to complete readiness checks
+[0m[1000D[?25h[testcontainers.org 00:00:26.31] Execute "pg_isready --host localhost --dbname circus_unlock_fail_b45ba2da502d4c3caec13caa6e5ef521 --username postgres" at Docker container 3567a5ef3699
+[0m[1000D[?25h[testcontainers.org 00:00:27.43] Execute "pg_isready --host localhost --dbname circus_unlock_fail_b45ba2da502d4c3caec13caa6e5ef521 --username postgres" at Docker container 3567a5ef3699
+[0m[1000D[?25h[testcontainers.org 00:00:28.55] Execute "pg_isready --host localhost --dbname circus_unlock_fail_b45ba2da502d4c3caec13caa6e5ef521 --username postgres" at Docker container 3567a5ef3699
+[0m[1000D[?25h[testcontainers.org 00:00:28.68] Docker container 3567a5ef3699 ready
+[0m[1000D[?25h[testcontainers.org 00:00:28.78] Stop Docker container 3567a5ef3699
+[0m[1000D[?25h[37m[[37m21:18:02 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration unlock-failure cleanup.failed 000003 with deterministic unlock failure preserves the migration SQLSTATE and exact invariant message, leaves only 000003 unrecorded[37m failed in [32m00:00:03.0890000[37m. [36m
+Original 000003 failure surfaces as a PostgresException.
+[32mexpected[36m: [32mNpgsql[36m.[32mPostgresException[36m
+[31m  actual[36m: [31mSystem[36m.[31mAggregateException[36m
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.tests@287-7.Invoke(NpgsqlCommand provCmd) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 324
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.f@1-1(NpgsqlDataSource adminDataSource, Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 284
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.tests@270-1.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 272[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[testcontainers.org 00:00:29.20] Docker container a5fe1f3b982d created
+[0m[1000D[?25h[testcontainers.org 00:00:29.20] Start Docker container a5fe1f3b982d
+[0m[1000D[?25h[testcontainers.org 00:00:29.40] Wait for Docker container a5fe1f3b982d to complete readiness checks
+[0m[1000D[?25h[testcontainers.org 00:00:29.40] Execute "pg_isready --host localhost --dbname circus_unlock_recover_d5642073a7124caa99190460cee98ff9 --username postgres" at Docker container a5fe1f3b982d
+[0m[1000D[?25h[testcontainers.org 00:00:30.52] Execute "pg_isready --host localhost --dbname circus_unlock_recover_d5642073a7124caa99190460cee98ff9 --username postgres" at Docker container a5fe1f3b982d
+[0m[1000D[?25h[testcontainers.org 00:00:31.65] Execute "pg_isready --host localhost --dbname circus_unlock_recover_d5642073a7124caa99190460cee98ff9 --username postgres" at Docker container a5fe1f3b982d
+[0m[1000D[?25h[testcontainers.org 00:00:31.77] Docker container a5fe1f3b982d ready
+[0m[1000D[?25h[testcontainers.org 00:00:31.85] Stop Docker container a5fe1f3b982d
+[0m[1000D[?25h[37m[[37m21:18:05 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration unlock-failure cleanup.successful migration with deterministic unlock failure leaves the cluster ready for a follow-up real migrate run[37m failed in [32m00:00:03.0850000[37m. [36m
+Recovery migration records 000003 after the unlock-failure cleanup cleared the pool. Expected subject string 'System.String[]' to contain substring '000003_runtime_grant_hardening'.
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.tests@399-11.Invoke(NpgsqlCommand verifyCmd) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 404
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.f@1-2(NpgsqlDataSource adminDataSource, Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 396
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.tests@375-2.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 377[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[testcontainers.org 00:00:32.28] Docker container cccbef9db474 created
+[0m[1000D[?25h[testcontainers.org 00:00:32.29] Start Docker container cccbef9db474
+[0m[1000D[?25h[testcontainers.org 00:00:32.50] Wait for Docker container cccbef9db474 to complete readiness checks
+[0m[1000D[?25h[testcontainers.org 00:00:32.50] Execute "pg_isready --host localhost --dbname circus_unlock_cleanup_a079d9320325442d8b26ab70e046b195 --username postgres" at Docker container cccbef9db474
+[0m[1000D[?25h[testcontainers.org 00:00:33.63] Execute "pg_isready --host localhost --dbname circus_unlock_cleanup_a079d9320325442d8b26ab70e046b195 --username postgres" at Docker container cccbef9db474
+[0m[1000D[?25h[testcontainers.org 00:00:34.75] Execute "pg_isready --host localhost --dbname circus_unlock_cleanup_a079d9320325442d8b26ab70e046b195 --username postgres" at Docker container cccbef9db474
+[0m[1000D[?25h[testcontainers.org 00:00:34.87] Docker container cccbef9db474 ready
+[0m[1000D[?25h[testcontainers.org 00:00:34.94] Stop Docker container cccbef9db474
+[0m[1000D[?25h[37m[[37m21:18:09 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Concurrent service ingestion.started and finished overlap and converge through the same service reducer[37m errored in [32m00:00:00.0130000[37m [37m<[37mExpecto[37m>[37m
+Npgsql.PostgresException (0x80004005): 40001: could not serialize access due to concurrent update
+[37m   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)[37m
+[37m   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)[37m
+[37m   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)[37m
+  Exception data:
+    Severity: ERROR
+    SqlState: 40001
+    MessageText: could not serialize access due to concurrent update
+    File: nodeModifyTable.c
+    Line: 312
+    Routine: ExecCheckTupleVisible
+[0m[1000D[?25h[1000D[?25h[37m[[37m21:18:09 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Concurrent service ingestion.a projection failure rolls back journal and projection atomically[37m errored in [32m00:00:00.0140000[37m [37m<[37mExpecto[37m>[37m
+Npgsql.PostgresException (0x80004005): P0001: test projection failure
+[37m   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)[37m
+[37m   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)[37m
+[37m   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)[37m
+  Exception data:
+    Severity: ERROR
+    SqlState: P0001
+    MessageText: test projection failure
+    Where: PL/pgSQL function test_fail_projection() line 1 at RAISE
+    File: pl_exec.c
+    Line: 3911
+    Routine: exec_stmt_raise
+[0m[1000D[?25h[1000D[?25h[37m[[37m21:18:09 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Incremental projection equals journal rebuild.started then finished is equal to rebuild[37m failed in [32m00:00:00.1690000[37m. [36m
+Complete projection equals reducer rebuild.
+Record does not match at position 12 for field named `FinishedAt`. Expected field with value: Some 7/15/2026 12:00:00 PM +00:00, but got Some 7/15/2026 12:01:00 PM +00:00.
+[32mexpected[36m:
+{ RunId = RunId c0e5060f-93a5-4660-90cf-f6c36ffba1c2
+  State = Completed
+  StartedEvent = Some (JournalPosition 1L)
+  FinishedEvent = Some (JournalPosition 2L)
+  Repository = Some RepositoryRef "circus-repository"
+  ActId = Some ActId "ACT-TEST"
+  LeamasVersion = Some LeamasVersion "1.0.0"
+  GitRevision = Some "abcdef"
+  StartedBy = Some "test"
+  StartedAt = Some 7/15/2026 12:00:00 PM +00:00
+  Outcome = Some Succeeded
+  FinishedAt = Some 7/15/2026 12:0[32m0[36m:00 PM +00:00
+  DurationMilliseconds = Some 1000L
+  Summary = Some "finished"
+  Checks = Some { Passed = 3
+                  Failed = 1
+                  Skipped = 0 }
+  FirstJournalPosition = JournalPosition 1L
+  LastJournalPosition = JournalPosition 2L
+  ConflictCount = 0
+  Version = 2L }
+[31m  actual[36m:
+{ RunId = RunId c0e5060f-93a5-4660-90cf-f6c36ffba1c2
+  State = Completed
+  StartedEvent = Some (JournalPosition 1L)
+  FinishedEvent = Some (JournalPosition 2L)
+  Repository = Some RepositoryRef "circus-repository"
+  ActId = Some ActId "ACT-TEST"
+  LeamasVersion = Some LeamasVersion "1.0.0"
+  GitRevision = Some "abcdef"
+  StartedBy = Some "test"
+  StartedAt = Some 7/15/2026 12:00:00 PM +00:00
+  Outcome = Some Succeeded
+  FinishedAt = Some 7/15/2026 12:0[31m1[36m:00 PM +00:00
+  DurationMilliseconds = Some 1000L
+  Summary = Some "finished"
+  Checks = Some { Passed = 3
+                  Failed = 1
+                  Skipped = 0 }
+  FirstJournalPosition = JournalPosition 1L
+  LastJournalPosition = JournalPosition 2L
+  ConflictCount = 0
+  Version = 2L }
+   at Circus.Persistence.Postgres.Tests.ProjectionIntegrationTests.tests@28.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/ProjectionIntegrationTests.fs:line 46
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m21:18:09 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Incremental projection equals journal rebuild.finished then started is complete and rebuild-equivalent[37m failed in [32m00:00:00.0380000[37m. [36m
+Order is preserved by both paths.
+Record does not match at position 12 for field named `FinishedAt`. Expected field with value: Some 7/15/2026 12:00:00 PM +00:00, but got Some 7/15/2026 12:01:00 PM +00:00.
+[32mexpected[36m:
+{ RunId = RunId 6268b2ec-d2e9-4943-8aaf-fe1e13d6016d
+  State = Completed
+  StartedEvent = Some (JournalPosition 2L)
+  FinishedEvent = Some (JournalPosition 1L)
+  Repository = Some RepositoryRef "circus-repository"
+  ActId = Some ActId "ACT-TEST"
+  LeamasVersion = Some LeamasVersion "1.0.0"
+  GitRevision = Some "abcdef"
+  StartedBy = Some "test"
+  StartedAt = Some 7/15/2026 12:00:00 PM +00:00
+  Outcome = Some Failed
+  FinishedAt = Some 7/15/2026 12:0[32m0[36m:00 PM +00:00
+  DurationMilliseconds = Some 1000L
+  Summary = Some "finished"
+  Checks = Some { Passed = 3
+                  Failed = 1
+                  Skipped = 0 }
+  FirstJournalPosition = JournalPosition 1L
+  LastJournalPosition = JournalPosition 2L
+  ConflictCount = 0
+  Version = 2L }
+[31m  actual[36m:
+{ RunId = RunId 6268b2ec-d2e9-4943-8aaf-fe1e13d6016d
+  State = Completed
+  StartedEvent = Some (JournalPosition 2L)
+  FinishedEvent = Some (JournalPosition 1L)
+  Repository = Some RepositoryRef "circus-repository"
+  ActId = Some ActId "ACT-TEST"
+  LeamasVersion = Some LeamasVersion "1.0.0"
+  GitRevision = Some "abcdef"
+  StartedBy = Some "test"
+  StartedAt = Some 7/15/2026 12:00:00 PM +00:00
+  Outcome = Some Failed
+  FinishedAt = Some 7/15/2026 12:0[31m1[36m:00 PM +00:00
+  DurationMilliseconds = Some 1000L
+  Summary = Some "finished"
+  Checks = Some { Passed = 3
+                  Failed = 1
+                  Skipped = 0 }
+  FirstJournalPosition = JournalPosition 1L
+  LastJournalPosition = JournalPosition 2L
+  ConflictCount = 0
+  Version = 2L }
+   at Circus.Persistence.Postgres.Tests.ProjectionIntegrationTests.tests@50-1.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/ProjectionIntegrationTests.fs:line 69
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m21:18:09 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Typed AppendFailed rollback path.trigger-thrown atomicity remains adjacent evidence[37m errored in [32m00:00:00.0140000[37m [37m<[37mExpecto[37m>[37m
+Npgsql.PostgresException (0x80004005): P0001: test projection failure
+[37m   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)[37m
+[37m   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)[37m
+[37m   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)[37m
+  Exception data:
+    Severity: ERROR
+    SqlState: P0001
+    MessageText: test projection failure
+    Where: PL/pgSQL function test_fail_projection() line 1 at RAISE
+    File: pl_exec.c
+    Line: 3911
+    Routine: exec_stmt_raise
+[0m[1000D[?25h[1000D[?25h[37m[[37m21:18:09 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Semantic JSON replay across key reordering.compact original followed by reordered top-level keys is idempotent replay[37m errored in [32m00:00:00.0340000[37m [37m<[37mExpecto[37m>[37m
+System.Exception: top-level keys: expected insert/replay, got Success
+  (Inserted (JournalPosition 1L),
+   Some { RunId = RunId 693978a9-f382-47ab-88e4-0fb5b870eb3e
+          State = StartedOnly
+          StartedEvent = Some (JournalPosition 1L)
+          FinishedEvent = None
+          Repository = Some RepositoryRef "circus-repository"
+          ActId = Some ActId "ACT-TEST"
+          LeamasVersion = Some LeamasVersion "1.0.0"
+          GitRevision = Some "abcdef"
+          StartedBy = Some "test"
+          StartedAt = Some 7/15/2026 12:00:00 PM +00:00
+          Outcome = None
+          FinishedAt = None
+          DurationMilliseconds = None
+          Summary = None
+          Checks = None
+          FirstJournalPosition = JournalPosition 1L
+          LastJournalPosition = JournalPosition 1L
+          ConflictCount = 0
+          Version = 1L }) and Success (EventIdentityConflict (JournalPosition 1L), None)
+[37m   at Microsoft.FSharp.Core.PrintfModule.PrintFormatToStringThenFail@1448.Invoke(String message)[37m
+[37m   at Circus.Persistence.Postgres.Tests.SemanticReplayTests.assertReplay(PostgresFixture fixture, String label, ValidatedEvent event, IngestEventRequest first, IngestEventRequest replay) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/SemanticReplayTests.fs:line 66[37m
+[37m   at Circus.Persistence.Postgres.Tests.SemanticReplayTests.tests@80-1.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/SemanticReplayTests.fs:line 84[37m
+[37m   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)[37m
+[37m   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510[37m
+[37m   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m21:18:09 [37mINF[37m] [37mEXPECTO! [36m79[37m tests run in [32m00:00:30.6229591[37m for [36mCircus.Persistence.Postgres.Tests[37m – [36m63[37m passed, [36m0[37m ignored, [36m12[37m failed, [36m4[37m errored. [36m[37m [37m<[37mExpecto[37m>[37m
+[0m[testcontainers.org 00:00:36.22] Stop Docker container e1a748b10083
+make[1]: *** [Makefile:102: test-postgres] Error 3
+make[1]: Leaving directory '/home/thecircus/Projects/thecircus'
+make: *** [Makefile:125: test-backend] Error 2
+GATE_EXIT_CODE=2

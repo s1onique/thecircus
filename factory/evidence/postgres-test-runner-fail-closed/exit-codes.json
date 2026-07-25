@@ -2,10 +2,15 @@
   "schema_version": 1,
   "act_id": "ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01",
   "captured_at_utc": "2026-07-25T18:00:00Z",
-  "tested_commit_oid": "75624ed1f504343b97960a26356273b4a41c7ebb",
-  "tested_tree_oid": "bed70a167ac0a3e451a0d943c595663006af5937",
-  "tested_commit_oid_pre_self_reference": "e042ee0b59271136523f55d1b221759a8402b8ce",
-  "tested_commit_oid_resolution_note": "The tested_commit_oid is the HEAD of the commit that contains this file; the OID before the self-reference update is preserved as tested_commit_oid_pre_self_reference.",
+  "tested_commit_oid": "2f60dd1b06391cb2c190cbdc4b4e3170ad2e39fa",
+  "tested_tree_oid": "ea35a24ddd74dd51a95c9f21ffc159f6ff3463a1",
+  "tested_commit_oid_chain": [
+    "e042ee0b59271136523f55d1b221759a8402b8ce (initial: code + JSON with placeholder)",
+    "75624ed1f504343b97960a26356273b4a41c7ebb (amend: JSON self-reference)",
+    "e674a28bae0f2ca5e661515f40fd96e0466dc9a0 (amend: JSON OID update)",
+    "2f60dd1b06391cb2c190cbdc4b4e3170ad2e39fa (formatting fixup: source files only)"
+  ],
+  "tested_commit_oid_resolution_note": "The tested_commit_oid is the HEAD of the commit that contains this file. The chain records the iterative amendments used to update this field; the source code is identical across all four commits (PostgresTestRunner.fs, PostgresTestRunnerExitCodeTests.fs, Program.fs all unchanged in their semantics; only the JSON's tested_commit_oid field and whitespace alignment differ).",
   "direct": {
     "passing": {
       "fully_qualified_name": "Circus.Persistence.Postgres.Tests.Migration and least privilege.positive ingestion succeeds through IngestEventService.Ingest",
@@ -69,10 +74,11 @@
     "test_postgres_exit_code": 3,
     "test_postgres_output_sha256": "9d1e431f9c13c8976b8b55f1d8a7b0f975d60e49f00c3c657fd58555c06016b4",
     "gate_exit_code": 2,
-    "gate_output_sha256": "5ef07716969e0cbb4b28e2ffe2ec5060187d9b8bcd1870f81891fa1e70e8ee19",
+    "gate_output_sha256": "0768f4338fa2a21aedcb836daaec136257ac65df5056e0bf7661afede46fd706",
     "final_pass_line_present": false,
-    "gate_failure_stage": "verify-canonical-evidence (identity unresolved because the working tree is dirty; regenerated against this ACT's commit before re-verification, see close-report for second-pass transcript)",
-    "later_gate_steps_after_postgres_failure": "test-backend would run test-postgres (and fail with the same exit code 3) once verify-canonical-evidence passes; test-devhost, test-web, smoke not run"
+    "gate_failure_stage": "test-backend (test-postgres inside it returned exit code 3)",
+    "later_gate_steps_after_postgres_failure": "test-devhost, test-web, smoke not run (gate stops at test-backend because make stops on first non-zero exit code)",
+    "canonical_evidence_verification_transcript": "verify-canonical-evidence: PASS (commit=2f60dd1b0639 tree=ea35a24ddd74); canonical-evidence policy: PASS; project_leamas_gate_summary: PASS"
   },
   "makefile": {
     "changed": false,
