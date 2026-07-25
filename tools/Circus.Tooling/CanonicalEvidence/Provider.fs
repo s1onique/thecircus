@@ -260,7 +260,6 @@ let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) : Evid
         Path.Combine(repoRoot, "tools", "Circus.Tooling", "bin", "Release", "net10.0", "circus-tooling.dll")
     let protectedScopeArgs =
         [
-            "dotnet"
             circusToolingDllPath
             "protected-scope"
             "check"
