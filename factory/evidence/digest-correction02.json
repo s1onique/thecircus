@@ -569,7 +569,7 @@ index 5e44a64..372374e 100644
 +
  .PHONY: gate
  gate: factorize format-check test-backend test-devhost test-web smoke
- 	@echo "=== Native gate passed ==="
+    @echo "=== Native gate passed ==="
 
 +
  # =============================================================================
