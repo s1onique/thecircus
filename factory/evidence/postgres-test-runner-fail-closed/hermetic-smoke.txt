@@ -1,59 +1,8 @@
-dotnet tool restore
-Tool 'fantomas' (version '7.0.5') was restored. Available commands: fantomas
-
-Restore was successful.
-dotnet restore Circus.sln --locked-mode
-  Determining projects to restore...
-  Restored /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests.Runner/Circus.Persistence.Postgres.Tests.Runner.fsproj (in 667 ms).
-  Restored /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests.Runner.Smoke/Circus.Persistence.Postgres.Tests.Runner.Smoke.fsproj (in 666 ms).
-  Restored /home/thecircus/Projects/thecircus/src/Circus.Contracts/Circus.Contracts.fsproj (in 663 ms).
-  Restored /home/thecircus/Projects/thecircus/tests/Circus.Contracts.Tests/Circus.Contracts.Tests.fsproj (in 666 ms).
-  Restored /home/thecircus/Projects/thecircus/src/Circus.Domain/Circus.Domain.fsproj (in 669 ms).
-  Restored /home/thecircus/Projects/thecircus/tools/Circus.DevHost/Circus.DevHost.fsproj (in 665 ms).
-  Restored /home/thecircus/Projects/thecircus/tests/Circus.Domain.Tests/Circus.Domain.Tests.fsproj (in 665 ms).
-  Restored /home/thecircus/Projects/thecircus/tests/Circus.DevHost.Tests/Circus.DevHost.Tests.fsproj (in 667 ms).
-  Restored /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/Circus.Persistence.Postgres.Tests.fsproj (in 665 ms).
-  Restored /home/thecircus/Projects/thecircus/src/Circus.Persistence.Postgres/Circus.Persistence.Postgres.fsproj (in 664 ms).
-  Restored /home/thecircus/Projects/thecircus/tests/Circus.Api.Tests/Circus.Api.Tests.fsproj (in 666 ms).
-  Restored /home/thecircus/Projects/thecircus/src/Circus.Api/Circus.Api.fsproj (in 666 ms).
-  Restored /home/thecircus/Projects/thecircus/tests/Circus.Tooling.ProcessTreeFixture/Circus.Tooling.ProcessTreeFixture.fsproj (in 667 ms).
-  Restored /home/thecircus/Projects/thecircus/src/Circus.Application/Circus.Application.fsproj (in 665 ms).
-  Restored /home/thecircus/Projects/thecircus/tests/Circus.Application.Tests/Circus.Application.Tests.fsproj (in 665 ms).
-cd web && npm ci
-
-added 34 packages, and audited 35 packages in 28s
-
-5 packages are looking for funding
-  run `npm fund` for details
-
-found 0 vulnerabilities
-dotnet build Circus.sln -c Release --no-restore
-  Circus.Persistence.Postgres.Tests.Runner -> /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests.Runner/bin/Release/net10.0/Circus.Persistence.Postgres.Tests.Runner.dll
-  Circus.Domain -> /home/thecircus/Projects/thecircus/src/Circus.Domain/bin/Release/net10.0/Circus.Domain.dll
-  Circus.Persistence.Postgres.Tests.Runner.Smoke -> /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests.Runner.Smoke/bin/Release/net10.0/Circus.Persistence.Postgres.Tests.Runner.Smoke.dll
-  Circus.Contracts -> /home/thecircus/Projects/thecircus/src/Circus.Contracts/bin/Release/net10.0/Circus.Contracts.dll
-  Circus.Application -> /home/thecircus/Projects/thecircus/src/Circus.Application/bin/Release/net10.0/Circus.Application.dll
-  Circus.Persistence.Postgres -> /home/thecircus/Projects/thecircus/src/Circus.Persistence.Postgres/bin/Release/net10.0/Circus.Persistence.Postgres.dll
-  Circus.Tooling.ProcessTreeFixture -> /home/thecircus/Projects/thecircus/tests/Circus.Tooling.ProcessTreeFixture/bin/Release/net10.0/circus-process-tree-fixture.dll
-  Circus.Domain.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Domain.Tests/bin/Release/net10.0/Circus.Domain.Tests.dll
-  Circus.Contracts.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Contracts.Tests/bin/Release/net10.0/Circus.Contracts.Tests.dll
-  Circus.Application.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Application.Tests/bin/Release/net10.0/Circus.Application.Tests.dll
-  Circus.Api -> /home/thecircus/Projects/thecircus/src/Circus.Api/bin/Release/net10.0/Circus.Api.dll
-  Circus.Persistence.Postgres.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/bin/Release/net10.0/Circus.Persistence.Postgres.Tests.dll
-  Circus.DevHost -> /home/thecircus/Projects/thecircus/tools/Circus.DevHost/bin/Release/net10.0/linux-x64/circus-dev.dll
-  Circus.Api.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.Api.Tests/bin/Release/net10.0/Circus.Api.Tests.dll
-  Circus.DevHost.Tests -> /home/thecircus/Projects/thecircus/tests/Circus.DevHost.Tests/bin/Release/net10.0/Circus.DevHost.Tests.dll
-
-Build succeeded.
-    0 Warning(s)
-    0 Error(s)
-
-Time Elapsed 00:00:15.62
-dotnet run --project tests/Circus.Persistence.Postgres.Tests.Runner.Smoke -c Release --no-build --no-restore -- --summary --filter-test-list "Postgres test runner exit code"
-[37m[[37m22:58:26 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
-[0m[1000D[?25h[37m[[37m22:58:27 [37mINF[37m] [37mEXPECTO! [36m4[37m tests run in [32m00:00:00.0804922[37m for [36mCircus.Persistence.Postgres.Tests.Runner.Smoke.Postgres test runner exit code[37m – [36m4[37m passed, [36m0[37m ignored, [36m0[37m failed, [36m0[37m errored. [36mSuccess![37m [37m<[37mExpecto[37m>[37m
-[0m[1000D[?25h[37m[[37m22:58:27 [37mINF[37m] [37mEXPECTO?! Summary...
-Passed: [36m 4
+[37m[[37m01:39:47 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m01:39:47 [37mINF[37m] [37mEXPECTO! [36m5[37m tests run in [32m00:00:00.0906258[37m for [36mCircus.Persistence.Postgres.Tests.Runner.Smoke[37m – [36m5[37m passed, [36m0[37m ignored, [36m0[37m failed, [36m0[37m errored. [36mSuccess![37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m01:39:47 [37mINF[37m] [37mEXPECTO?! Summary...
+Passed: [36m 5
+	Circus.Persistence.Postgres.Tests.Runner.Smoke.Postgres runner seam source-inventory.exactly one production runWith definition exists
 	Circus.Persistence.Postgres.Tests.Runner.Smoke.Postgres test runner exit code.arbitrary non-zero runner returns its exact value (37)
 	Circus.Persistence.Postgres.Tests.Runner.Smoke.Postgres test runner exit code.errored runner returns 2
 	Circus.Persistence.Postgres.Tests.Runner.Smoke.Postgres test runner exit code.failed runner returns 1
