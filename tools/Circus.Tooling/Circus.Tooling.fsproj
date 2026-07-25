@@ -69,6 +69,14 @@
          and consume BoundedProcess.run as its single execution authority. -->
     <Compile Include="FSharpDiagnostics\RepairEpisodes\BoundedProcess.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Git.fs" />
+    <!-- Canonical evidence provider (ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION01).
+         Compile order is fixed: Domain must precede Serialization, Validation, Provider, and Cli;
+         the provider must precede the top-level Cli dispatcher. -->
+    <Compile Include="CanonicalEvidence\Domain.fs" />
+    <Compile Include="CanonicalEvidence\Serialization.fs" />
+    <Compile Include="CanonicalEvidence\Validation.fs" />
+    <Compile Include="CanonicalEvidence\Provider.fs" />
+    <Compile Include="CanonicalEvidence\Cli.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Episodes.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Transitions.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Serialization.fs" />

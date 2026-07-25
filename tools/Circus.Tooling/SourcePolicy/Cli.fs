@@ -25,13 +25,14 @@ type Command =
     | GateSummaryRegenerateCmd
     | GateSummaryVerifyCmd
     | GateRunCmd
+    | CanonicalEvidenceCmd of subArgs: string list
     | NoForcePushCmd of subArgs: string list
     | FSharpDiagnosticsCmd of subArgs: string list
     | HelpCmd
     | VersionCmd
 
 let helpText () : string =
-    "circus-tooling — F# implementation policy verifier (source-policy, container-policy, gate-summary)\n"
+    "circus-tooling — F# implementation policy verifier (source-policy, container-policy, gate-summary, canonical-evidence)\n"
     + "\n"
     + "Usage:\n"
     + "  circus-tooling source-policy verify [--format human|json]\n"
@@ -39,6 +40,7 @@ let helpText () : string =
     + "  circus-tooling gate-summary regenerate\n"
     + "  circus-tooling gate-summary verify\n"
     + "  circus-tooling gate run\n"
+    + "  circus-tooling canonical-evidence regenerate|verify\n"
     + "  circus-tooling help\n"
     + "  circus-tooling version\n"
 
@@ -66,9 +68,10 @@ let parseTopLevel (argv: string list) : Result<Command, string> =
     | "gate-summary" :: "regenerate" :: [] -> Ok GateSummaryRegenerateCmd
     | "gate-summary" :: "verify" :: [] -> Ok GateSummaryVerifyCmd
     | "gate" :: "run" :: [] -> Ok GateRunCmd
+    | "canonical-evidence" :: rest -> Ok(CanonicalEvidenceCmd rest)
     | "no-force-push" :: rest -> Ok(NoForcePushCmd rest)
     | "fsharp-diagnostics" :: rest -> Ok(FSharpDiagnosticsCmd rest)
-    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|no-force-push|fsharp-diagnostics|help|version}"
+    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|canonical-evidence|no-force-push|fsharp-diagnostics|help|version}"
 
 /// Legacy parser for backward compatibility (delegates to top-level).
 let parse (argv: string list) : Result<Command, string> =

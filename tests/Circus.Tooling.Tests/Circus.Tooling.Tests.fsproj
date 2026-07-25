@@ -56,6 +56,13 @@
     <Compile Include="FSharpDiagnostics/RepairEpisodes/BoundedProcessTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/GitAdapterTests.fs" />
 
+    <!-- Canonical evidence provider tests (ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION01).
+         Compile order: Domain tests => Execution tests => Writer tests => CLI tests. -->
+    <Compile Include="CanonicalEvidence/DomainTests.fs" />
+    <Compile Include="CanonicalEvidence/ExecutionTests.fs" />
+    <Compile Include="CanonicalEvidence/WriterTests.fs" />
+    <Compile Include="CanonicalEvidence/CliTests.fs" />
+
     <Compile Include="Program.fs" />
   </ItemGroup>
 

@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "schema_name": "canonical-evidence-v1",
+  "provider": "circus-canonical-evidence",
+  "description": "Production canonical evidence schema emitted by the canonical-evidence provider.",
+  "wire_format": {
+    "encoding": "UTF-8 without BOM",
+    "line_ending": "LF",
+    "terminator": "exactly one terminal LF",
+    "property_naming": "snake_case",
+    "property_order": "deterministic",
+    "field_count": "append-only; any new field is rejected pre-publication"
+  },
+  "required_fields": [
+    "schema_version",
+    "provider_name",
+    "provider_version",
+    "tested_commit_oid",
+    "tested_tree_oid",
+    "object_format",
+    "checks",
+    "overall_status",
+    "semantic_sha256"
+  ],
+  "field_semantics": {
+    "schema_version": "integer; must equal 1",
+    "provider_name": "string; must equal circuit-canonical-evidence",
+    "provider_version": "string; SemVer releasing the artifact",
+    "tested_commit_oid": "string; full-width SHA-1 or SHA-256 hex of the tested commit",
+    "tested_tree_oid": "string; full-width SHA-1 or SHA-256 hex of the tested tree",
+    "object_format": "string; must be 'sha1' or 'sha256'",
+    "checks": [
+      {
+        "id": "string; from the supported catalog",
+        "command_argv": "string array; full executable and arguments",
+        "working_directory": "string; absolute path",
+        "duration_ms": "integer; elapsed milliseconds",
+        "exit_code": "integer or null",
+        "status": "string; 'pass', 'fail', or 'unavailable'",
+        "stdout_sha256": "string or null",
+        "stderr_sha256": "string or null",
+        "failure_kind": "string or null"
+      }
+    ],
+    "overall_status": "string; 'pass', 'fail', or 'unavailable'",
+    "semantic_sha256": "string; lowercase hex SHA-256 of the canonicalisation form"
+  },
+  "forbidden_fields": [
+    "tag_object_oid",
+    "tag_target_oid",
+    "tag_target_tree_oid",
+    "tag_peeled_commit_oid",
+    "tag_peeled_tree_oid",
+    "remote_tag_object_oid",
+    "push_target_oid",
+    "publication_oid",
+    "transcript_blob_oid",
+    "correction02_commit_oid",
+    "correction02_tree_oid",
+    "final_head_oid",
+    "origin_main_oid"
+  ],
+  "supported_check_ids": [
+    "tooling-build",
+    "tooling-tests-build",
+    "bounded-process-tests",
+    "git-adapter-tests",
+    "repair-episodes-tests",
+    "fsharp-diagnostics-tests",
+    "repair-episodes-gate",
+    "committed-range-diff-check",
+    "protected-scope"
+  ]
+}

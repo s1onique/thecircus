@@ -41,6 +41,8 @@ let main (argv: string[]) : int =
             match resolveRepoRoot () with
             | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
             | Ok repoRoot -> runGate repoRoot
+        | CanonicalEvidenceCmd subArgs ->
+            Circus.Tooling.CanonicalEvidence.Cli.run subArgs
         | NoForcePushCmd subArgs ->
             Circus.Tooling.NoForcePush.Cli.run subArgs
         | FSharpDiagnosticsCmd subArgs ->

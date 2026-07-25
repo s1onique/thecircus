@@ -257,9 +257,30 @@ test-source-policy: build-source-policy
 # Native gate
 # =============================================================================
 
+# Canonical evidence provider (ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION01)
+# =============================================================================
+
+CIRCUS_CANONICAL_EVIDENCE_DLL := tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll
+CANONICAL_EVIDENCE_BASELINE_COMMIT ?= 5f1f7f99d57aaa133e76679c8bb6aa90620ebc1e
+CANONICAL_EVIDENCE_OUTPUT := .factory/gate-summary.json
+
+.PHONY: canonical-evidence
+canonical-evidence: build-source-policy
+	$(DOTNET) $(CIRCUS_CANONICAL_EVIDENCE_DLL) canonical-evidence regenerate \
+		--repo-root . \
+		--output $(CANONICAL_EVIDENCE_OUTPUT) \
+		--baseline-commit $(CANONICAL_EVIDENCE_BASELINE_COMMIT)
+
+.PHONY: verify-canonical-evidence
+verify-canonical-evidence: build-source-policy
+	$(DOTNET) $(CIRCUS_CANONICAL_EVIDENCE_DLL) canonical-evidence verify \
+		--repo-root . \
+		--input $(CANONICAL_EVIDENCE_OUTPUT)
+
 .PHONY: gate
 gate: factorize format-check test-backend test-devhost test-web smoke
 	@echo "=== Native gate passed ==="
+
 
 # =============================================================================
 # Linux development environment (ACT-CIRCUS-LINUX-DEV-HOST-BOOTSTRAP01)
