@@ -275,6 +275,11 @@ git_adapter_successor:
   final_adapter_commit:
     560de20: docs: ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01 close report
     20f167b: FSharpDiagnostics: bounded Git adapter over BoundedProcess.run
+  correction01:
+    implementation_commit_oid: a6b0e626c8c5c9f99f1d89ce214b6449d538a212
+    implementation_tree_oid: ecaa7bcc7d39d7b8671364315bb512aa70b632be
+    tested_status: pass
+    closure_evidence_status: superseded_by_correction02
 
 bounded_process_authority_to_git_adapter_handoff:
   bounded_process:
@@ -295,6 +300,6 @@ history_preservation:
   - CORRECTION01 added precompiled fixture and registration race
   - CORRECTION02 blocked Git adapter on registration race
   - ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01 closed at 38 tests
-  - ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01-CORRECTION01 in progress
+  - ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01-CORRECTION01 closed at 36 GitAdapter tests and 191 RepairEpisodes tests
+  - ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01-CORRECTION02 in progress
 ```
-
