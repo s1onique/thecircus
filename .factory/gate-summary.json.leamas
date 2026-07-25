@@ -1,0 +1,222 @@
+{
+  "canonical_artifact_sha256": "937bf24fc15160bf3ac63c8ddd80378ce39556329f579747f194f3fcc55490a6",
+  "checks": [
+    {
+      "duration_seconds": 30.024,
+      "evidence": {
+        "command_argv": [
+          "dotnet",
+          "run",
+          "--project",
+          "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj",
+          "-c",
+          "Release",
+          "--no-build",
+          "--no-restore",
+          "--",
+          "--summary",
+          "--filter-test-list",
+          "FSharpDiagnostics.RepairEpisodes.BoundedProcess"
+        ],
+        "exit_code": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "a9c67fc8a737a4fe7edfdbbc4227d09388eb0cfc6554abe56a4a946f580e2af8"
+      },
+      "exit_code": 0,
+      "id": "bounded-process-tests",
+      "name": "bounded-process-tests",
+      "status": "passed"
+    },
+    {
+      "duration_seconds": 0.007,
+      "evidence": {
+        "command_argv": [
+          "git",
+          "diff",
+          "--check",
+          "5f1f7f99d57aaa133e76679c8bb6aa90620ebc1e..HEAD"
+        ],
+        "exit_code": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "exit_code": 0,
+      "id": "committed-range-diff-check",
+      "name": "committed-range-diff-check",
+      "status": "passed"
+    },
+    {
+      "duration_seconds": 32.901,
+      "evidence": {
+        "command_argv": [
+          "dotnet",
+          "run",
+          "--project",
+          "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj",
+          "-c",
+          "Release",
+          "--no-build",
+          "--no-restore",
+          "--",
+          "--summary",
+          "--filter-test-list",
+          "FSharpDiagnostics"
+        ],
+        "exit_code": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "d3fd9559f4d7c61faa69acd7940c66c9ed6fb281103b31ee5192ba1fe0c22025"
+      },
+      "exit_code": 0,
+      "id": "fsharp-diagnostics-tests",
+      "name": "fsharp-diagnostics-tests",
+      "status": "passed"
+    },
+    {
+      "duration_seconds": 4.869,
+      "evidence": {
+        "command_argv": [
+          "dotnet",
+          "run",
+          "--project",
+          "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj",
+          "-c",
+          "Release",
+          "--no-build",
+          "--no-restore",
+          "--",
+          "--summary",
+          "--filter-test-list",
+          "FSharpDiagnostics.RepairEpisodes.GitAdapter"
+        ],
+        "exit_code": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "c808f47f586bd8c6263bdc72b4c9d6affb98deea5cb26d92a43f7261dc6900b4"
+      },
+      "exit_code": 0,
+      "id": "git-adapter-tests",
+      "name": "git-adapter-tests",
+      "status": "passed"
+    },
+    {
+      "duration_seconds": 0.002,
+      "evidence": {
+        "command_argv": [
+          "git",
+          "diff",
+          "--quiet",
+          "--exit-code",
+          "5f1f7f99d57aaa133e76679c8bb6aa90620ebc1e..HEAD",
+          "--",
+          "tools/Circus.Tooling/NoForcePush/",
+          "src/Circus.Persistence.Postgres/",
+          "tests/Circus.Persistence.Postgres.Tests/",
+          "factory/evidence/fsharp-diagnostics/corpus/raw/"
+        ],
+        "exit_code": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "exit_code": 0,
+      "id": "protected-scope",
+      "name": "protected-scope",
+      "status": "passed"
+    },
+    {
+      "duration_seconds": 35.889,
+      "evidence": {
+        "command_argv": [
+          "make",
+          "gate-fsharp-repair-episodes"
+        ],
+        "exit_code": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "82e0e44c026146abe9e3521217b2ab5d03dcb938897cf80b708b6ca2fe617cb3"
+      },
+      "exit_code": 0,
+      "id": "repair-episodes-gate",
+      "name": "repair-episodes-gate",
+      "status": "passed"
+    },
+    {
+      "duration_seconds": 33.373,
+      "evidence": {
+        "command_argv": [
+          "dotnet",
+          "run",
+          "--project",
+          "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj",
+          "-c",
+          "Release",
+          "--no-build",
+          "--no-restore",
+          "--",
+          "--summary",
+          "--filter-test-list",
+          "FSharpDiagnostics.RepairEpisodes"
+        ],
+        "exit_code": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "423f3b1469e297521ecd520b87301567fc575727ff3cd118ba70338b64973bbf"
+      },
+      "exit_code": 0,
+      "id": "repair-episodes-tests",
+      "name": "repair-episodes-tests",
+      "status": "passed"
+    },
+    {
+      "duration_seconds": 16.509,
+      "evidence": {
+        "command_argv": [
+          "dotnet",
+          "build",
+          "tools/Circus.Tooling/Circus.Tooling.fsproj",
+          "-c",
+          "Release",
+          "--no-restore"
+        ],
+        "exit_code": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "13986586fb38980ee7f30fc54e29af73f080703ca86d3d24829b5f35dbfc2cfa"
+      },
+      "exit_code": 0,
+      "id": "tooling-build",
+      "name": "tooling-build",
+      "status": "passed"
+    },
+    {
+      "duration_seconds": 16.321,
+      "evidence": {
+        "command_argv": [
+          "dotnet",
+          "build",
+          "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj",
+          "-c",
+          "Release",
+          "--no-restore"
+        ],
+        "exit_code": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "9ccb4dc0247dab570c46da467f2d97cb69d1376ff70f41e6c57a9fee65cf9950"
+      },
+      "exit_code": 0,
+      "id": "tooling-tests-build",
+      "name": "tooling-tests-build",
+      "status": "passed"
+    }
+  ],
+  "checks_failed": 0,
+  "checks_passed": 9,
+  "checks_total": 9,
+  "checks_unavailable": 0,
+  "doctrine": "ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01",
+  "gate_id": "circus-canonical-evidence",
+  "generated_at": "2026-07-25T08:41:57.445244+00:00",
+  "generated_by": "circus-canonical-evidence/1.0.0+leamas-projection+circus-canonical-evidence",
+  "object_format": "sha1",
+  "overall_status": "green",
+  "schema_version": 1,
+  "source": ".factory/gate-summary.json",
+  "source_status": "present",
+  "tested_commit_oid": "48e671894dc8f11f675f533f22c6e07cb1b7954f",
+  "tested_tree_oid": "ce4b909b20f8a0afe0df8dbadc7cd4efeab791db"
+}
