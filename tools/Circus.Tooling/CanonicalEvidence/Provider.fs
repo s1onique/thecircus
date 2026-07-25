@@ -353,7 +353,7 @@ let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) : Evid
         }
         {
             Id = "protected-scope"
-            Executable = "git"
+            Executable = "dotnet"
             Arguments = protectedScopeArgs
             WorkingDirectory = workDir
             Required = true
