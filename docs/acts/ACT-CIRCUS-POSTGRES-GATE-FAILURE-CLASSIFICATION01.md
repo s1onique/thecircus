@@ -215,4 +215,3 @@ Historical claims that are now invalidated:
   P0001) and 1 product-decision record.
 - "working tree clean while evidence is untracked" → corrected by
   the S commit in this correction.
-

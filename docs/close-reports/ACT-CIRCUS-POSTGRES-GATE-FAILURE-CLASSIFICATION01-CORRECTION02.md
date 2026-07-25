@@ -289,13 +289,41 @@ canonical evidence has not been re-verified at the S commit yet
 | `ACT-CIRCUS-POSTGRES-PERSISTENCE-CONTRACT-REPAIR01` | 3 records across 2 production-side clusters (retry on 40001 and typed P0001 classification). |
 | `ACT-CIRCUS-EVENT-REPLAY-IDENTITY-DECISION01` | Product decision on the replay identity contract. |
 
-## Verdict
+## Verdict (final, post-S)
 
-`PARTIAL_CHECKPOINT`. The corrections are committed-ready. The
-evidence validator passes. The 9 untracked entries are the intended
-evidence set. The S commit and the canonical evidence
-re-verification are the only remaining steps. The four disputed
-clusters are now properly marked as `owner: unresolved` with
-`repair_authorized: false`. No production fix was introduced; no
-test was skipped or weakened; no timeout was raised; no publication
-step was attempted.
+```yaml
+verdict: PARTIAL_CHECKPOINT
+
+subject_commit_oid: 5ef2bffcd3a94d6ba5a8c83cc5ded48a0fea7a8b
+subject_tree_oid: e84a603acfe51da21dc233d2403834ebd1d02a42
+
+classification_evidence:
+  committed: true
+  files_added: 61
+  working_tree_after_subject_commit: clean
+
+postgres_gate:
+  nonpassing_tests: 16
+  runner_exit_behavior: fail_open
+  gate_green: false
+
+publication:
+  attempted: false
+  tag_created: false
+```
+
+The verdict is `PARTIAL_CHECKPOINT` because the PostgreSQL runner and
+its 12 failed / 4 errored tests are intentionally still red; this
+correction only makes the classification checkpoint itself
+authoritative and internally consistent. The next successor
+ACT must repair the underlying defects (see the successor ACTs
+listed below) before `make gate` can return to green.
+
+Historical-chronology note: the **pre-S** state of this document
+(committed at `5ef2bffc` with tree `e84a603a`) recorded the
+intended evidence set as untracked and the verdict as
+"committed-ready" with the S commit pending; those statements
+were accurate at the pre-S state and are now superseded by the
+post-S verdict above. The pre-S body of this report is preserved
+unchanged for historical reference.
+
