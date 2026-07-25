@@ -16,6 +16,8 @@
     <Compile Include="RetryCompositionTests.fs" />
     <Compile Include="SemanticReplayTests.fs" />
     <Compile Include="ProjectionInvariantTests.fs" />
+    <Compile Include="PostgresTestRunner.fs" />
+    <Compile Include="PostgresTestRunnerExitCodeTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

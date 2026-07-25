@@ -1,0 +1,17 @@
+=== make gate ===
+dotnet build tools/Circus.Tooling/Circus.Tooling.fsproj -c Release
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Circus.Tooling -> /home/thecircus/Projects/thecircus/tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:20.14
+dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll canonical-evidence verify \
+	--repo-root . \
+	--input .factory/canonical-evidence.json
+canonical-evidence verify: FAIL (identity unresolved: identity_failure:working tree is dirty (regeneration requires a clean tree)) commit=9247ebca947c tree=e2c4c4b229b8 path=.factory/canonical-evidence.json
+make: *** [Makefile:290: verify-canonical-evidence] Error 1
+MAKE_EXIT_CODE=2

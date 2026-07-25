@@ -1,0 +1,35 @@
+[testcontainers.org 00:00:00.29] Connected to Docker:
+  Host: unix:///var/run/docker.sock
+  Server Version: 29.6.2
+  Kernel Version: 6.17.0-19-generic
+  API Version: 1.55
+  Operating System: Linux Mint 22.3
+  Total Memory: 78.45 GB
+[testcontainers.org 00:00:00.69] Docker container 951895d671dd created
+[testcontainers.org 00:00:00.77] Start Docker container 951895d671dd
+[testcontainers.org 00:00:01.05] Wait for Docker container 951895d671dd to complete readiness checks
+[testcontainers.org 00:00:02.08] Docker container 951895d671dd ready
+[testcontainers.org 00:00:02.32] Docker container 7452d5f1f18b created
+[testcontainers.org 00:00:02.33] Start Docker container 7452d5f1f18b
+[testcontainers.org 00:00:02.53] Wait for Docker container 7452d5f1f18b to complete readiness checks
+[testcontainers.org 00:00:02.54] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 7452d5f1f18b
+[testcontainers.org 00:00:03.69] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 7452d5f1f18b
+[testcontainers.org 00:00:04.82] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 7452d5f1f18b
+[testcontainers.org 00:00:04.94] Docker container 7452d5f1f18b ready
+[37m[[37m20:57:18 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m20:57:19 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.fresh empty database migrates to canonical state[37m failed in [32m00:00:00.3700000[37m. [36m
+fresh: 000001 recorded. Expected subject string 'System.String[]' to contain substring '000001_event_journal'.
+   at Circus.Persistence.Postgres.Tests.MigrationTests.runMigrationAndAssertions(PostgresFixture fixture, String label, FSharpOption`1 preMigrationSql) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 85
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@238.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 238
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m20:57:19 [37mINF[37m] [37mEXPECTO! [36m1[37m tests run in [32m00:00:00.4645434[37m for [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.fresh empty database migrates to canonical state[37m – [36m0[37m passed, [36m0[37m ignored, [36m1[37m failed, [36m0[37m errored. [36m[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m20:57:19 [37mINF[37m] [37mEXPECTO?! Summary...
+Passed: [36m 0[37m
+Ignored: [36m0[37m
+Failed: [36m 1
+	Circus.Persistence.Postgres.Tests.Migration and least privilege.fresh empty database migrates to canonical state[37m
+Errored: [36m0[37m [37m<[37mExpecto[37m>[37m
+[0m[testcontainers.org 00:00:06.18] Stop Docker container 7452d5f1f18b
+EXIT_CODE=1

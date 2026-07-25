@@ -1,0 +1,30 @@
+[testcontainers.org 00:00:00.27] Connected to Docker:
+  Host: unix:///var/run/docker.sock
+  Server Version: 29.6.2
+  Kernel Version: 6.17.0-19-generic
+  API Version: 1.55
+  Operating System: Linux Mint 22.3
+  Total Memory: 78.45 GB
+[testcontainers.org 00:00:00.69] Docker container b970efcf15ba created
+[testcontainers.org 00:00:00.77] Start Docker container b970efcf15ba
+[testcontainers.org 00:00:01.01] Wait for Docker container b970efcf15ba to complete readiness checks
+[testcontainers.org 00:00:02.04] Docker container b970efcf15ba ready
+[testcontainers.org 00:00:02.26] Docker container 39d38ff0292e created
+[testcontainers.org 00:00:02.26] Start Docker container 39d38ff0292e
+[testcontainers.org 00:00:02.46] Wait for Docker container 39d38ff0292e to complete readiness checks
+[testcontainers.org 00:00:02.47] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 39d38ff0292e
+[testcontainers.org 00:00:03.63] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 39d38ff0292e
+[testcontainers.org 00:00:04.75] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 39d38ff0292e
+[testcontainers.org 00:00:04.88] Docker container 39d38ff0292e ready
+[37m[[37m20:56:08 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m20:56:08 [37mINF[37m] [37mEXPECTO! [36m4[37m tests run in [32m00:00:00.0930991[37m for [36mCircus.Persistence.Postgres.Tests.Postgres test runner exit code[37m – [36m4[37m passed, [36m0[37m ignored, [36m0[37m failed, [36m0[37m errored. [36mSuccess![37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m20:56:08 [37mINF[37m] [37mEXPECTO?! Summary...
+Passed: [36m 4
+	Circus.Persistence.Postgres.Tests.Postgres test runner exit code.arbitrary non-zero runner returns its exact value (37)
+	Circus.Persistence.Postgres.Tests.Postgres test runner exit code.errored runner returns 2
+	Circus.Persistence.Postgres.Tests.Postgres test runner exit code.failed runner returns 1
+	Circus.Persistence.Postgres.Tests.Postgres test runner exit code.passing runner returns 0[37m
+Ignored: [36m0[37m
+Failed: [36m 0[37m
+Errored: [36m0[37m [37m<[37mExpecto[37m>[37m
+[0m[testcontainers.org 00:00:05.78] Stop Docker container 39d38ff0292e
