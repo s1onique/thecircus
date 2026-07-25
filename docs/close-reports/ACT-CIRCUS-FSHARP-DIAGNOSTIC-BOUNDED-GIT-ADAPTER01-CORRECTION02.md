@@ -49,8 +49,8 @@ tested_commit_oid:                   a6b0e626c8c5c9f99f1d89ce214b6449d538a212
 tested_tree_oid:                     ecaa7bcc7d39d7b8671364315bb512aa70b632be
 previous_documentation_commit_oid:   5f1f7f99d57aaa133e76679c8bb6aa90620ebc1e
 previous_documentation_tree_oid:     3a3a892e4924e343ea3cf83638c48ace9b7ad26f
-correction02_commit_oid:             <bind through final tag/transcript>
-correction02_tree_oid:               <bind through final tag/transcript>
+correction02_commit_oid:             130d2efaf92de2a5d17edcc421140bc7f4f3605a
+correction02_tree_oid:               094f8386521ac5379abb6e436ce7057a3e2e4d91
 ```
 
 The implementation, tested, and documentation commits are
@@ -250,13 +250,13 @@ OIDs.
 
 ```yaml
 correction_tag_name:           act/circus-fsharp-diagnostic-bounded-git-adapter01-correction02-v1
-correction_tag_object_oid:     <resolved at tag creation>
-correction_tag_target_oid:     <resolved at tag creation>
-correction_tag_target_tree_oid: <resolved at tag creation>
-remote_tag_object_oid:         <resolved after push>
-remote_tag_target_oid:         <resolved after push>
-tag_peeled_commit_oid:         <resolved after push>
-tag_peeled_tree_oid:           <resolved after push>
+correction_tag_object_oid:     7cec97f9ee6210f446aa5d4a47221bd502886c05
+correction_tag_target_oid:     130d2efaf92de2a5d17edcc421140bc7f4f3605a
+correction_tag_target_tree_oid: 094f8386521ac5379abb6e436ce7057a3e2e4d91
+remote_tag_object_oid:         7cec97f9ee6210f446aa5d4a47221bd502886c05
+remote_tag_target_oid:         130d2efaf92de2a5d17edcc421140bc7f4f3605a
+tag_peeled_commit_oid:         130d2efaf92de2a5d17edcc421140bc7f4f3605a
+tag_peeled_tree_oid:           094f8386521ac5379abb6e436ce7057a3e2e4d91
 
 verification_commands:
   - git cat-file -t refs/tags/$TAG
