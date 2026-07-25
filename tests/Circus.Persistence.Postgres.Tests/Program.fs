@@ -1,6 +1,25 @@
 module Circus.Persistence.Postgres.Tests.Program
 
-open System
+// =============================================================================
+// Production test entry point
+//
+// ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02
+//
+// The production entry point delegates to the SHARED runner seam
+// ``Circus.Persistence.Postgres.Tests.Runner.PostgresTestRunner.runWith``.
+// There is no local copy of ``runWith`` in this project; the
+// authoritative seam lives in
+// ``tests/Circus.Persistence.Postgres.Tests.Runner/PostgresTestRunner.fs``
+// and is referenced through the project reference recorded in
+// ``Circus.Persistence.Postgres.Tests.fsproj``.
+//
+// The fixture-owned test list is still constructed here because the
+// production entry point owns the shared PostgresFixture lifecycle.
+// The seam itself never touches the fixture, so the production
+// entry point and the hermetic smoke entry point both call the
+// same compiled function.
+// =============================================================================
+
 open Expecto
 open Circus.Persistence.Postgres.Tests.PostgresFixture
 open Circus.Persistence.Postgres.Tests.MigrationTests
@@ -12,8 +31,7 @@ open Circus.Persistence.Postgres.Tests.RetryCompositionTests
 open Circus.Persistence.Postgres.Tests.SemanticReplayTests
 open Circus.Persistence.Postgres.Tests.ProjectionInvariantTests
 open Circus.Persistence.Postgres.Tests.UnlockFailureTests
-open Circus.Persistence.Postgres.Tests.PostgresTestRunner
-open Circus.Persistence.Postgres.Tests.PostgresTestRunnerExitCodeTests
+open Circus.Persistence.Postgres.Tests.Runner
 
 [<EntryPoint>]
 let main (args: string[]) =
@@ -22,13 +40,13 @@ let main (args: string[]) =
     // and tests interact with the same database, the same roles, and
     // the same trigger / privilege state.  Expecto's default execution
     // runs tests in parallel; that would interleave truncate / grant
-    // / trigger operations across tests and produce flakes.  The outer
+    // trigger operations across tests and produce flakes.  The outer
     // testSequenced serialises the top-level groups; each inner group
     // is also wrapped in testSequenced so that every test in the suite
     // runs one-at-a-time.
     //
-    // `use` disposes the fixture as soon as the entry point's scope
-    // ends, which is after `runWith` returns.  The seam itself does
+    // ``use`` disposes the fixture as soon as the entry point's scope
+    // ends, which is after ``runWith`` returns.  The seam itself does
     // not touch the fixture; disposal remains an entry-point concern
     // so that the seam can be exercised hermetically.
     use fixture = new PostgresFixture()
@@ -45,8 +63,6 @@ let main (args: string[]) =
                   testSequenced (AppendFailedRollbackTests.tests fixture)
                   testSequenced (RetryCompositionTests.tests fixture)
                   testSequenced (SemanticReplayTests.tests fixture)
-                  testSequenced (ProjectionInvariantTests.tests)
-                  testSequenced PostgresTestRunnerExitCodeTests.tests ]
+                  testSequenced (ProjectionInvariantTests.tests) ]
         )
-
     PostgresTestRunner.runWith Tests.runTestsWithCLIArgs args allTests

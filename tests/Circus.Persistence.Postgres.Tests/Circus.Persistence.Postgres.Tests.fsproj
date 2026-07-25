@@ -1,9 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
     <RootNamespace>Circus.Persistence.Postgres.Tests</RootNamespace>
     <OutputType>Exe</OutputType>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
+
   <ItemGroup>
     <Compile Include="PostgresFixture.fs" />
     <Compile Include="Support.fs" />
@@ -16,22 +18,25 @@
     <Compile Include="RetryCompositionTests.fs" />
     <Compile Include="SemanticReplayTests.fs" />
     <Compile Include="ProjectionInvariantTests.fs" />
-    <Compile Include="PostgresTestRunner.fs" />
-    <Compile Include="PostgresTestRunnerExitCodeTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Expecto" />
     <PackageReference Include="Testcontainers.PostgreSql" />
   </ItemGroup>
+
   <ItemGroup>
+    <ProjectReference Include="..\Circus.Persistence.Postgres.Tests.Runner\Circus.Persistence.Postgres.Tests.Runner.fsproj" />
     <ProjectReference Include="..\..\src\Circus.Persistence.Postgres\Circus.Persistence.Postgres.fsproj" />
     <ProjectReference Include="..\..\src\Circus.Application\Circus.Application.fsproj" />
     <ProjectReference Include="..\..\src\Circus.Domain\Circus.Domain.fsproj" />
     <ProjectReference Include="..\..\src\Circus.Contracts\Circus.Contracts.fsproj" />
   </ItemGroup>
+
   <ItemGroup>
     <EmbeddedResource Include="..\..\tests\fixtures\migrations\000000_pre_closure.sql" />
     <EmbeddedResource Include="..\..\tests\fixtures\migrations\000001_released_parent.sql" />
   </ItemGroup>
+
 </Project>

@@ -162,6 +162,12 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "circus.persistence.postgres.tests.runner": {
+        "type": "Project",
+        "dependencies": {
+          "Expecto": "[11.1.0, )"
+        }
+      },
       "FSharp.Core": {
         "type": "CentralTransitive",
         "requested": "[7.0.200, )",

@@ -35,7 +35,7 @@ let private fakeRunner (result: int) : CLIArguments seq -> string array -> Test 
         Expect.equal argv [| "alpha"; "beta" |] "seam passes argv through to runner"
         result
 
-let tests =
+let exitCodeTests =
     testList
         "Postgres test runner exit code"
         [ test "passing runner returns 0" {

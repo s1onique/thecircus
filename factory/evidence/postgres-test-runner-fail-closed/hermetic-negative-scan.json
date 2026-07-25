@@ -1,0 +1,19 @@
+{
+  "captured_at": "2026-07-25T19:58:57Z",
+  "act_id": "ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02",
+  "hermetic_executable": "tests/Circus.Persistence.Postgres.Tests.Runner.Smoke/bin/Release/net10.0/Circus.Persistence.Postgres.Tests.Runner.Smoke.dll",
+  "tests": 5,
+  "passed": 5,
+  "failed": 0,
+  "errored": 0,
+  "exit_code": 0,
+  "testcontainers_log_lines": 0,
+  "docker_log_lines": 0,
+  "pg_isready_invocations": 0,
+  "docker_dotnet_assemblies": 0,
+  "testcontainers_assemblies": 0,
+  "npgsql_assemblies": 0,
+  "container_lifecycle_attempts": 0,
+  "testcontainers_postgresql_invocations": 0,
+  "hermetic_executable_db_dependencies": 0
+}
