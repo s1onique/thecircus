@@ -51,6 +51,7 @@ open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 open Circus.Tooling.CanonicalEvidence.Domain
 open Circus.Tooling.CanonicalEvidence.Provider
 open Circus.Tooling.CanonicalEvidence.Cli
+open Circus.Tooling.ScopeAuthority.Domain
 
 // -----------------------------------------------------------------------------
 // Capture stdout and stderr around a thunk.
@@ -186,6 +187,45 @@ let private hermeticDependencies () : CanonicalEvidenceDependencies =
                     Result.Ok(resolveIdentityViaGit repoRoot)
             with ex ->
                 Result.Error(evidenceFailure "identity_failure" ex.Message)
+
+      ResolveScopeBinding =
+        fun repoRoot evaluatedCommit declarationPath _baseline ->
+            try
+                let identity = resolveIdentityViaGit repoRoot
+                let path = defaultArg declarationPath "scope.json"
+                let pointerBlob = String.replicate 40 "a"
+                let declarationBlob = String.replicate 40 "b"
+                let pointer: ActiveScopePointer =
+                    { SchemaVersion = 1
+                      ActId = "ACT-TEST"
+                      DeclarationPath = path
+                      DeclarationBlobOid = declarationBlob
+                      BaselineCommitOid = identity.CommitOid }
+                let declaration: ScopeDeclaration =
+                    { SchemaVersion = 1
+                      ActId = "ACT-TEST"
+                      ActClassification = "P0"
+                      BaselineCommitOid = identity.CommitOid
+                      Purpose = "hermetic canonical evidence fixture"
+                      GloballyProtected = []
+                      ActOwned = []
+                      PrefixQualifications = []
+                      RejectUndeclaredChanges = true
+                      DoNotAuthorizeProductionOrMigrationPaths = true }
+
+                Result.Ok
+                    { EvaluatedCommitOid = evaluatedCommit
+                      EvaluatedTreeOid = identity.TreeOid
+                      PointerPath = ActiveScopePointerPath
+                      PointerBlobOid = pointerBlob
+                      DeclarationPath = path
+                      DeclarationBlobOid = declarationBlob
+                      BaselineCommitOid = identity.CommitOid
+                      ActId = "ACT-TEST"
+                      Pointer = pointer
+                      Declaration = declaration }
+            with ex ->
+                Result.Error(evidenceFailure "scope_failure" ex.Message)
 
       ReadWorkingTreeState =
         fun repoRoot ->
