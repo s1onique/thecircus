@@ -56,11 +56,10 @@ open Circus.Tooling.CanonicalEvidence.Cli
 // Capture stdout and stderr around a thunk.
 // -----------------------------------------------------------------------------
 
-type private CapturedIO = {
-    Stdout: string
-    Stderr: string
-    ExitCode: int
-}
+type private CapturedIO =
+    { Stdout: string
+      Stderr: string
+      ExitCode: int }
 
 let private captureIO (thunk: unit -> int) : CapturedIO =
     let originalOut = Console.Out
@@ -69,17 +68,17 @@ let private captureIO (thunk: unit -> int) : CapturedIO =
     let stderrBuilder = StringBuilder()
     let stdoutWriter = new StringWriter(stdoutBuilder)
     let stderrWriter = new StringWriter(stderrBuilder)
+
     try
         Console.SetOut(stdoutWriter)
         Console.SetError(stderrWriter)
         let exitCode = thunk ()
         stdoutWriter.Flush()
         stderrWriter.Flush()
-        {
-            Stdout = stdoutBuilder.ToString()
-            Stderr = stderrBuilder.ToString()
-            ExitCode = exitCode
-        }
+
+        { Stdout = stdoutBuilder.ToString()
+          Stderr = stderrBuilder.ToString()
+          ExitCode = exitCode }
     finally
         Console.SetOut(originalOut)
         Console.SetError(originalErr)
@@ -96,9 +95,8 @@ let private captureIO (thunk: unit -> int) : CapturedIO =
 
 let private fixtureTempDir (label: string) : string =
     let dir =
-        Path.Combine(
-            Path.GetTempPath(),
-            label + "-" + Guid.NewGuid().ToString("N"))
+        Path.Combine(Path.GetTempPath(), label + "-" + Guid.NewGuid().ToString("N"))
+
     Directory.CreateDirectory dir |> ignore
     dir
 
@@ -106,7 +104,8 @@ let private cleanup (dir: string) : unit =
     try
         if Directory.Exists dir then
             Directory.Delete(dir, true)
-    with _ -> ()
+    with _ ->
+        ()
 
 let private runShellArgs (repoRoot: string) (args: string list) : int =
     let psi = ProcessStartInfo()
@@ -115,8 +114,10 @@ let private runShellArgs (repoRoot: string) (args: string list) : int =
     psi.UseShellExecute <- false
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
+
     for a in args do
         psi.ArgumentList.Add a
+
     let p = Process.Start psi
     p.WaitForExit() |> ignore
     p.ExitCode
@@ -151,15 +152,23 @@ let private resolveIdentityViaGit (repoRoot: string) : RepositoryIdentity =
         psi.UseShellExecute <- false
         psi.RedirectStandardOutput <- true
         psi.RedirectStandardError <- true
+
         for a in args do
             psi.ArgumentList.Add a
+
         let p = Process.Start psi
         p.WaitForExit() |> ignore
         p.StandardOutput.ReadToEnd().Trim()
-    let commit = runOnce [ "rev-parse"; "--verify"; "--end-of-options"; "HEAD^{commit}" ]
+
+    let commit =
+        runOnce [ "rev-parse"; "--verify"; "--end-of-options"; "HEAD^{commit}" ]
+
     let tree = runOnce [ "rev-parse"; "--verify"; "--end-of-options"; "HEAD^{tree}" ]
     let fmt = runOnce [ "rev-parse"; "--show-object-format=storage" ]
-    { CommitOid = commit; TreeOid = tree; ObjectFormat = fmt }
+
+    { CommitOid = commit
+      TreeOid = tree
+      ObjectFormat = fmt }
 
 /// Build a fake ``CanonicalEvidenceDependencies`` record whose check
 /// execution runs the production ``BoundedProcess.run`` (the bounded
@@ -168,8 +177,8 @@ let private resolveIdentityViaGit (repoRoot: string) : RepositoryIdentity =
 /// the bounded Git adapter (so the mutable executable cell is not
 /// touched); check execution uses ``BoundedProcess.run`` directly.
 let private hermeticDependencies () : CanonicalEvidenceDependencies =
-    {
-        ResolveRepositoryIdentity = fun repoRoot ->
+    { ResolveRepositoryIdentity =
+        fun repoRoot ->
             try
                 if String.IsNullOrWhiteSpace repoRoot || not (Directory.Exists repoRoot) then
                     Result.Error(evidenceFailure "repository_not_found" repoRoot)
@@ -178,7 +187,8 @@ let private hermeticDependencies () : CanonicalEvidenceDependencies =
             with ex ->
                 Result.Error(evidenceFailure "identity_failure" ex.Message)
 
-        ReadWorkingTreeState = fun repoRoot ->
+      ReadWorkingTreeState =
+        fun repoRoot ->
             if String.IsNullOrWhiteSpace repoRoot || not (Directory.Exists repoRoot) then
                 Result.Error(evidenceFailure "repository_not_found" repoRoot)
             else
@@ -193,86 +203,111 @@ let private hermeticDependencies () : CanonicalEvidenceDependencies =
                 let p = Process.Start psi
                 p.WaitForExit() |> ignore
                 let stdout = p.StandardOutput.ReadToEnd().Trim()
+
                 if p.ExitCode <> 0 then
-                    Result.Error(evidenceFailure "git_failure"
-                        (sprintf "status exit %d" p.ExitCode))
+                    Result.Error(evidenceFailure "git_failure" (sprintf "status exit %d" p.ExitCode))
                 else
                     Result.Ok { Dirty = not (String.IsNullOrEmpty stdout) }
 
-        // The hermetic test path does NOT execute the real check
-        // commands. The real checks (dotnet build, make gate, git diff)
-        // are scoped to the actual repository and would either time out
-        // or fail in a CI sandbox. Instead, ``RunCheck`` returns a
-        // synthetic passing result whose identity is taken from the
-        // definition. This is the canonical hermetic test surface:
-        // production dispatch + production orchestration + production
-        // serialisation + production verification, but with synthetic
-        // check results.
-        RunCheck = fun def _cancellationToken ->
-            let stdoutHash = Circus.Tooling.FSharpDiagnostics.Hashing.sha256OfUtf8 ("hermetic-stdout-" + def.Id)
-            let stderrHash = Circus.Tooling.FSharpDiagnostics.Hashing.sha256OfUtf8 ("hermetic-stderr-" + def.Id)
-            Result.Ok {
-                Id = def.Id
-                CommandArgv = def.Executable :: def.Arguments
-                WorkingDirectory = def.WorkingDirectory
-                DurationMilliseconds = 0L
-                ExitCode = Some 0
-                Status = Pass
-                StdoutSha256 = Some stdoutHash
-                StderrSha256 = Some stderrHash
-                FailureKind = None
-            }
+      // The hermetic test path does NOT execute the real check
+      // commands. The real checks (dotnet build, make gate, git diff)
+      // are scoped to the actual repository and would either time out
+      // or fail in a CI sandbox. Instead, ``RunCheck`` returns a
+      // synthetic passing result whose identity is taken from the
+      // definition. This is the canonical hermetic test surface:
+      // production dispatch + production orchestration + production
+      // serialisation + production verification, but with synthetic
+      // check results.
+      RunCheck =
+        fun def _cancellationToken ->
+            let stdoutHash =
+                Circus.Tooling.FSharpDiagnostics.Hashing.sha256OfUtf8 ("hermetic-stdout-" + def.Id)
 
-        ReadArtifact = fun path ->
+            let stderrHash =
+                Circus.Tooling.FSharpDiagnostics.Hashing.sha256OfUtf8 ("hermetic-stderr-" + def.Id)
+
+            Result.Ok
+                { Id = def.Id
+                  CommandArgv = def.Executable :: def.Arguments
+                  WorkingDirectory = def.WorkingDirectory
+                  DurationMilliseconds = 0L
+                  ExitCode = Some 0
+                  Status = Pass
+                  StdoutSha256 = Some stdoutHash
+                  StderrSha256 = Some stderrHash
+                  FailureKind = None }
+
+      ReadArtifact =
+        fun path ->
             if not (File.Exists path) then
                 Result.Error(evidenceFailure "artifact_not_found" (sprintf "file not found: %s" path))
             else
-                try Result.Ok(File.ReadAllBytes path)
+                try
+                    Result.Ok(File.ReadAllBytes path)
                 with ex ->
-                    Result.Error(evidenceFailure "artifact_read_failed"
-                        (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
+                    Result.Error(
+                        evidenceFailure "artifact_read_failed" (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+                    )
 
-        WriteArtifactAtomically = fun path content ->
+      WriteArtifactAtomically =
+        fun path content ->
             let dir = Path.GetDirectoryName path
             let filename = Path.GetFileName path
-            let attempt : Result<string, string> =
+
+            let attempt: Result<string, string> =
                 try
                     if not (String.IsNullOrEmpty dir) && not (Directory.Exists dir) then
                         Directory.CreateDirectory dir |> ignore
+
                     let tmp =
                         let guid = Guid.NewGuid().ToString("n")
                         Path.Combine(dir, filename + ".tmp." + guid)
+
                     File.WriteAllBytes(tmp, content)
                     let _ = File.ReadAllBytes tmp
                     Ok tmp
                 with ex ->
-                    Error (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+                    Error(sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+
             match attempt with
             | Error msg -> Result.Error(evidenceFailure "artifact_write_failed" msg)
             | Ok tmp ->
                 try
                     if File.Exists path then
                         let backup = path + ".bak"
-                        if File.Exists backup then File.Delete backup
+
+                        if File.Exists backup then
+                            File.Delete backup
+
                         File.Move(path, backup)
+
                         try
                             File.Move(tmp, path)
                             File.Delete backup
                         with ex ->
                             if File.Exists backup then
-                                if File.Exists path then File.Delete path
+                                if File.Exists path then
+                                    File.Delete path
+
                                 File.Move(backup, path)
-                            try if File.Exists tmp then File.Delete tmp with _ -> ()
+
+                            try
+                                if File.Exists tmp then
+                                    File.Delete tmp
+                            with _ ->
+                                ()
+
                             failwithf "%s: %s" (ex.GetType().Name) ex.Message
                     else
                         File.Move(tmp, path)
-                    Result.Ok ()
-                with ex ->
-                    Result.Error(evidenceFailure "artifact_write_failed"
-                        (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
 
-        GetUtcNow = fun () -> DateTimeOffset.UtcNow
-    }
+                    Result.Ok()
+                with ex ->
+                    Result.Error(
+                        evidenceFailure "artifact_write_failed" (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+                    )
+
+      GetUtcNow = fun () -> DateTimeOffset.UtcNow }
 
 // -----------------------------------------------------------------------------
 // Test list
@@ -284,7 +319,8 @@ let tests =
         "CanonicalEvidence.Cli"
         [
           // 39. Unknown verb fails
-          testSequenced <| test "unknown verb fails" {
+          testSequenced
+          <| test "unknown verb fails" {
               let deps = hermeticDependencies ()
               let captured = captureIO (fun () -> runCliWithDependencies deps [ "unknown" ])
               Expect.notEqual captured.ExitCode 0 "unknown verb fails"
@@ -293,19 +329,21 @@ let tests =
           }
 
           // 39b. Unrecognised argument inside a valid verb
-          testSequenced <| test "unrecognised argument inside regenerate fails" {
+          testSequenced
+          <| test "unrecognised argument inside regenerate fails" {
               let deps = hermeticDependencies ()
+
               let captured =
-                  captureIO (fun () ->
-                      runCliWithDependencies deps
-                          [ "regenerate"; "--no-such-flag" ])
+                  captureIO (fun () -> runCliWithDependencies deps [ "regenerate"; "--no-such-flag" ])
+
               Expect.notEqual captured.ExitCode 0 "unrecognised flag fails"
               Expect.stringContains captured.Stderr "unrecognised" "stderr mentions unrecognised"
               Expect.isFalse (captured.Stdout.Contains "PASS") "no PASS line on failure"
           }
 
           // 40. Missing required argument fails
-          testSequenced <| test "missing required argument fails" {
+          testSequenced
+          <| test "missing required argument fails" {
               let deps = hermeticDependencies ()
               let captured = captureIO (fun () -> runCliWithDependencies deps [ "regenerate" ])
               Expect.notEqual captured.ExitCode 0 "missing arg fails"
@@ -316,17 +354,24 @@ let tests =
           // 41. Regenerate succeeds with valid inputs (HERMETIC).
           // Uses the dependency-driven runner so the bounded Git
           // adapter's mutable executable cell is never touched.
-          testSequenced <| test "regenerate succeeds with valid inputs (hermetic)" {
+          testSequenced
+          <| test "regenerate succeeds with valid inputs (hermetic)" {
               let dir = initRepoWithCommit ()
               let deps = hermeticDependencies ()
               let output = Path.Combine(dir, "evidence.json")
+
               let captured =
                   captureIO (fun () ->
-                      runCliWithDependencies deps
+                      runCliWithDependencies
+                          deps
                           [ "regenerate"
-                            "--repo-root"; dir
-                            "--output"; output
-                            "--baseline-commit"; "HEAD" ])
+                            "--repo-root"
+                            dir
+                            "--output"
+                            output
+                            "--baseline-commit"
+                            "HEAD" ])
+
               try
                   Expect.equal captured.ExitCode 0 "regenerate returns 0"
                   Expect.isTrue (File.Exists output) "evidence.json exists"
@@ -337,24 +382,29 @@ let tests =
           }
 
           // 42. Verify succeeds for current valid evidence (HERMETIC).
-          testSequenced <| test "verify succeeds for current valid evidence (hermetic)" {
+          testSequenced
+          <| test "verify succeeds for current valid evidence (hermetic)" {
               let dir = initRepoWithCommit ()
               let deps = hermeticDependencies ()
               let output = Path.Combine(dir, "evidence.json")
+
               let regen =
                   captureIO (fun () ->
-                      runCliWithDependencies deps
+                      runCliWithDependencies
+                          deps
                           [ "regenerate"
-                            "--repo-root"; dir
-                            "--output"; output
-                            "--baseline-commit"; "HEAD" ])
+                            "--repo-root"
+                            dir
+                            "--output"
+                            output
+                            "--baseline-commit"
+                            "HEAD" ])
+
               Expect.equal regen.ExitCode 0 "regenerate ok"
+
               let verify =
-                  captureIO (fun () ->
-                      runCliWithDependencies deps
-                          [ "verify"
-                            "--repo-root"; dir
-                            "--input"; output ])
+                  captureIO (fun () -> runCliWithDependencies deps [ "verify"; "--repo-root"; dir; "--input"; output ])
+
               try
                   Expect.equal verify.ExitCode 0 "verify ok"
                   Expect.stringContains verify.Stdout "PASS" "PASS line emitted"
@@ -363,25 +413,30 @@ let tests =
           }
 
           // 43. Verify fails for stale evidence (HERMETIC).
-          testSequenced <| test "verify fails for stale evidence (hermetic)" {
+          testSequenced
+          <| test "verify fails for stale evidence (hermetic)" {
               let dir = initRepoWithCommit ()
               let deps = hermeticDependencies ()
               let output = Path.Combine(dir, "evidence.json")
+
               let regen =
                   captureIO (fun () ->
-                      runCliWithDependencies deps
+                      runCliWithDependencies
+                          deps
                           [ "regenerate"
-                            "--repo-root"; dir
-                            "--output"; output
-                            "--baseline-commit"; "HEAD" ])
+                            "--repo-root"
+                            dir
+                            "--output"
+                            output
+                            "--baseline-commit"
+                            "HEAD" ])
+
               Expect.equal regen.ExitCode 0 "regenerate ok"
               appendCommit dir "second"
+
               let verify =
-                  captureIO (fun () ->
-                      runCliWithDependencies deps
-                          [ "verify"
-                            "--repo-root"; dir
-                            "--input"; output ])
+                  captureIO (fun () -> runCliWithDependencies deps [ "verify"; "--repo-root"; dir; "--input"; output ])
+
               try
                   Expect.notEqual verify.ExitCode 0 "verify fails on stale evidence"
                   Expect.stringContains verify.Stderr "identity" "identity mismatch reported"
@@ -391,42 +446,46 @@ let tests =
           }
 
           // 44. All failures return non-zero without a PASS line (HERMETIC).
-          testSequenced <| test "missing repo-root returns non-zero without a PASS line (hermetic)" {
+          testSequenced
+          <| test "missing repo-root returns non-zero without a PASS line (hermetic)" {
               let deps = hermeticDependencies ()
+
               let captured =
                   captureIO (fun () ->
-                      runCliWithDependencies deps
-                          [ "regenerate"
-                            "--output"; "/tmp/x"
-                            "--baseline-commit"; "HEAD" ])
+                      runCliWithDependencies deps [ "regenerate"; "--output"; "/tmp/x"; "--baseline-commit"; "HEAD" ])
+
               Expect.notEqual captured.ExitCode 0 "non-zero exit"
               Expect.isFalse (captured.Stdout.Contains "PASS") "no PASS line on failure"
           }
 
           // 45. Verify mutates a tampered artifact (HERMETIC).
-          testSequenced <| test "verify fails for mutated evidence (hermetic)" {
+          testSequenced
+          <| test "verify fails for mutated evidence (hermetic)" {
               let dir = initRepoWithCommit ()
               let deps = hermeticDependencies ()
               let output = Path.Combine(dir, "evidence.json")
+
               let regen =
                   captureIO (fun () ->
-                      runCliWithDependencies deps
+                      runCliWithDependencies
+                          deps
                           [ "regenerate"
-                            "--repo-root"; dir
-                            "--output"; output
-                            "--baseline-commit"; "HEAD" ])
+                            "--repo-root"
+                            dir
+                            "--output"
+                            output
+                            "--baseline-commit"
+                            "HEAD" ])
+
               Expect.equal regen.ExitCode 0 "regenerate ok"
               // Tamper with a byte.
               let bytes = File.ReadAllBytes output
-              let tampered =
-                  bytes |> Array.mapi (fun i b -> if i = 50 then (b ^^^ 0xFFuy) else b)
+              let tampered = bytes |> Array.mapi (fun i b -> if i = 50 then (b ^^^ 0xFFuy) else b)
               File.WriteAllBytes(output, tampered)
+
               let verify =
-                  captureIO (fun () ->
-                      runCliWithDependencies deps
-                          [ "verify"
-                            "--repo-root"; dir
-                            "--input"; output ])
+                  captureIO (fun () -> runCliWithDependencies deps [ "verify"; "--repo-root"; dir; "--input"; output ])
+
               try
                   Expect.notEqual verify.ExitCode 0 "verify fails on mutated evidence"
                   Expect.isFalse (verify.Stdout.Contains "PASS") "no PASS line on mutation"
@@ -435,15 +494,17 @@ let tests =
           }
 
           // 46. Verify fails when the input file does not exist (HERMETIC).
-          testSequenced <| test "verify fails when input does not exist (hermetic)" {
+          testSequenced
+          <| test "verify fails when input does not exist (hermetic)" {
               let dir = initRepoWithCommit ()
               let deps = hermeticDependencies ()
+
               let captured =
                   captureIO (fun () ->
-                      runCliWithDependencies deps
-                          [ "verify"
-                            "--repo-root"; dir
-                            "--input"; "/nonexistent/evidence.json" ])
+                      runCliWithDependencies
+                          deps
+                          [ "verify"; "--repo-root"; dir; "--input"; "/nonexistent/evidence.json" ])
+
               try
                   Expect.notEqual captured.ExitCode 0 "verify on missing input fails"
                   Expect.isFalse (captured.Stdout.Contains "PASS") "no PASS line on missing input"
@@ -452,16 +513,17 @@ let tests =
           }
 
           // 47. Unknown verb (long form) fails (HERMETIC).
-          testSequenced <| test "unknown verb (long form) fails (hermetic)" {
+          testSequenced
+          <| test "unknown verb (long form) fails (hermetic)" {
               let deps = hermeticDependencies ()
-              let captured =
-                  captureIO (fun () -> runCliWithDependencies deps [ "frobnicate" ])
+              let captured = captureIO (fun () -> runCliWithDependencies deps [ "frobnicate" ])
               Expect.notEqual captured.ExitCode 0 "unknown verb fails"
               Expect.isFalse (captured.Stdout.Contains "PASS") "no PASS line on failure"
           }
 
           // 48. Empty argv yields help (HERMETIC).
-          testSequenced <| test "empty argv prints help and exits pass (hermetic)" {
+          testSequenced
+          <| test "empty argv prints help and exits pass (hermetic)" {
               let deps = hermeticDependencies ()
               let captured = captureIO (fun () -> runCliWithDependencies deps [])
               Expect.equal captured.ExitCode 0 "help exits 0"
@@ -469,7 +531,8 @@ let tests =
           }
 
           // 49. Help verb prints usage (HERMETIC).
-          testSequenced <| test "help verb prints usage (hermetic)" {
+          testSequenced
+          <| test "help verb prints usage (hermetic)" {
               let deps = hermeticDependencies ()
               let captured = captureIO (fun () -> runCliWithDependencies deps [ "help" ])
               Expect.equal captured.ExitCode 0 "help exits 0"
@@ -477,19 +540,26 @@ let tests =
           }
 
           // 50. Regenerate fails on a dirty working tree (HERMETIC).
-          testSequenced <| test "regenerate fails on dirty working tree (hermetic)" {
+          testSequenced
+          <| test "regenerate fails on dirty working tree (hermetic)" {
               let dir = initRepoWithCommit ()
               let deps = hermeticDependencies ()
               let output = Path.Combine(dir, "evidence.json")
               // Make the working tree dirty before regenerate.
               File.WriteAllText(Path.Combine(dir, "README.md"), "dirty")
+
               let captured =
                   captureIO (fun () ->
-                      runCliWithDependencies deps
+                      runCliWithDependencies
+                          deps
                           [ "regenerate"
-                            "--repo-root"; dir
-                            "--output"; output
-                            "--baseline-commit"; "HEAD" ])
+                            "--repo-root"
+                            dir
+                            "--output"
+                            output
+                            "--baseline-commit"
+                            "HEAD" ])
+
               try
                   Expect.notEqual captured.ExitCode 0 "regenerate fails on dirty repo"
                   Expect.stringContains captured.Stderr "dirty" "dirty reported"
@@ -499,18 +569,19 @@ let tests =
           }
 
           // 51. Verify fails when repo does not exist (HERMETIC).
-          testSequenced <| test "verify fails when repo root does not exist (hermetic)" {
+          testSequenced
+          <| test "verify fails when repo root does not exist (hermetic)" {
               let deps = hermeticDependencies ()
+
               let captured =
                   captureIO (fun () ->
-                      runCliWithDependencies deps
-                          [ "verify"
-                            "--repo-root"; "/nonexistent/repo"
-                            "--input"; "/tmp/some.json" ])
+                      runCliWithDependencies
+                          deps
+                          [ "verify"; "--repo-root"; "/nonexistent/repo"; "--input"; "/tmp/some.json" ])
+
               Expect.notEqual captured.ExitCode 0 "missing repo fails"
               Expect.isFalse (captured.Stdout.Contains "PASS") "no PASS line"
-          }
-        ]
+          } ]
 
 // -----------------------------------------------------------------------------
 // Git executable seam regression
@@ -524,37 +595,47 @@ let tests =
 let seamRegressionTests =
     testList
         "CanonicalEvidence.Cli.SeamRegression"
-        [
-          testSequenced <| test "git executable seam unchanged across CLI tests" {
+        [ testSequenced
+          <| test "git executable seam unchanged across CLI tests" {
               let deps = hermeticDependencies ()
               // Run the entire CLI dispatch path twice with different
               // argv vectors, asserting the bounded Git adapter's
               // mutable executable cell is never touched.
               let dir1 = initRepoWithCommit ()
               let dir2 = initRepoWithCommit ()
+
               let captured1 =
                   captureIO (fun () ->
-                      runCliWithDependencies deps
+                      runCliWithDependencies
+                          deps
                           [ "regenerate"
-                            "--repo-root"; dir1
-                            "--output"; (Path.Combine(dir1, "evidence.json"))
-                            "--baseline-commit"; "HEAD" ])
+                            "--repo-root"
+                            dir1
+                            "--output"
+                            (Path.Combine(dir1, "evidence.json"))
+                            "--baseline-commit"
+                            "HEAD" ])
+
               let captured2 =
                   captureIO (fun () ->
-                      runCliWithDependencies deps
+                      runCliWithDependencies
+                          deps
                           [ "regenerate"
-                            "--repo-root"; dir2
-                            "--output"; (Path.Combine(dir2, "evidence.json"))
-                            "--baseline-commit"; "HEAD" ])
+                            "--repo-root"
+                            dir2
+                            "--output"
+                            (Path.Combine(dir2, "evidence.json"))
+                            "--baseline-commit"
+                            "HEAD" ])
+
               try
                   Expect.equal captured1.ExitCode 0 "first regenerate ok"
                   Expect.equal captured2.ExitCode 0 "second regenerate ok"
-                  // The bounded Git adapter's executable cell is private
-                  // to the production module; we never call its mutating
-                  // helpers from the test seam, so the cell remains at
-                  // its module-init default of "git".
+              // The bounded Git adapter's executable cell is private
+              // to the production module; we never call its mutating
+              // helpers from the test seam, so the cell remains at
+              // its module-init default of "git".
               finally
                   cleanup dir1
                   cleanup dir2
-          }
-        ]
+          } ]
