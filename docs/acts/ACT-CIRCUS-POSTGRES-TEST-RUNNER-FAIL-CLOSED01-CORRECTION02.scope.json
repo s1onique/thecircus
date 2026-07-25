@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "act_id": "ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02",
+  "act_classification": "P0",
+  "baseline_commit_oid": "da92e0d6573a95148c0a41240849bc5921c6fcfa",
+  "subject_commit_oid": "2f60dd1b06391cb2c190cbdc4b4e3170ad2e39fa",
+  "subject_tree_oid": "ea35a24ddd74dd51a95c9f21ffc159f6ff3463a1",
+  "purpose": "CORRECTION02 — shared runner authority, strict scope declaration, and committed evidence binding. P0-3: no literal ACT ID or scope filename in the provider. P0-4: exact ownership. P0-5: strict scope parser. P0-6: bind exact committed bytes. P0-7: dedicated executable tests. P0-8: final identity sequence.",
+  "globally_protected": [
+    "tools/Circus.Tooling/NoForcePush/",
+    "src/Circus.Persistence.Postgres/",
+    "db/migrations/",
+    "factory/evidence/fsharp-diagnostics/corpus/raw/"
+  ],
+  "act_owned": [
+    "tools/Circus.Tooling/EvidenceValidator/",
+    "tools/Circus.Tooling/ProtectedScope/",
+    "tools/Circus.Tooling/ScopeAuthority/",
+    "tools/Circus.Tooling/CanonicalEvidence/Provider.fs",
+    "tools/Circus.Tooling/CanonicalEvidence/Cli.fs",
+    "tools/Circus.Tooling/Circus.Tooling.fsproj",
+    "tools/Circus.Tooling/Program.fs",
+    "tools/Circus.Tooling/SourcePolicy/Cli.fs",
+    "tests/Circus.Persistence.Postgres.Tests.Runner.Smoke/PostgresTestRunnerExitCodeTests.fs",
+    "tests/Circus.Persistence.Postgres.Tests.Runner.Smoke/SourceInventory.fs",
+    "tests/Circus.Persistence.Postgres.Tests.Runner.Smoke/Program.fs",
+    "tests/Circus.Persistence.Postgres.Tests.Runner.Smoke/Circus.Persistence.Postgres.Tests.Runner.Smoke.fsproj",
+    "tests/Circus.Persistence.Postgres.Tests/Circus.Persistence.Postgres.Tests.fsproj",
+    "tests/Circus.Persistence.Postgres.Tests/Program.fs",
+    "docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02.scope.json",
+    "docs/close-reports/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02.md",
+    "factory/evidence/postgres-test-runner-fail-closed/hermetic-smoke.txt",
+    "factory/evidence/postgres-test-runner-fail-closed/hermetic-bin-inventory.txt",
+    "factory/evidence/postgres-test-runner-fail-closed/hermetic-dependency-inventory.txt",
+    "factory/evidence/postgres-test-runner-fail-closed/hermetic-negative-scan.json",
+    "factory/evidence/postgres-test-runner-fail-closed/evidence.sha256",
+    ".factory/active-scope.json",
+    "Circus.sln",
+    "Makefile"
+  ],
+  "reject_undeclared_changes": true,
+  "do_not_authorize_production_or_migration_paths": true
+}

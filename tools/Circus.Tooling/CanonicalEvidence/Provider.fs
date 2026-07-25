@@ -241,7 +241,7 @@ let runAllChecks (defs: EvidenceCheckDefinition list) : EvidenceCheckResult list
 /// ``committed-range-diff-check`` and ``protected-scope`` ranges.
 /// -----------------------------------------------------------------------------
 
-let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) : EvidenceCheckDefinition list =
+let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) (scopeDeclarationPath: string) : EvidenceCheckDefinition list =
     let workDir = repoRoot
     let longTimeout = TimeSpan.FromMinutes(60.0)
     let shortTimeout = TimeSpan.FromMinutes(15.0)
@@ -251,11 +251,17 @@ let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) : Evid
 
     // The protected-scope check is delegated to the ACT-scope
     // authority: ``circus-tooling protected-scope check``, which
-    // reads the ACT's declaration, derives the ACT's own baseline,
-    // and categorises every change against the declaration's
-    // globally_protected and act_owned lists.  The previous glob
-    // list is replaced by the ACT-scope declaration mechanism
-    // (ACT-CIRCUS-CANONICAL-EVIDENCE-PROTECTED-SCOPE-AUTHORITY01).
+    // reads the ACT's declaration and categorises every change
+    // against its globally_protected and act_owned lists.
+    //
+    // ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02
+    // --------------------------------------------------------------
+    // The declaration path is supplied by the caller (canonical-evidence
+    // CLI) and is NEVER hardcoded here.  The provider does not contain
+    // a literal ACT ID, a literal scope-declaration filename, or any
+    // other ACT-specific path.  The protected-scope check's
+    // ``command_argv`` includes the supplied path so the artifact
+    // records exactly which declaration was consulted.
     let circusToolingDllPath =
         Path.Combine(repoRoot, "tools", "Circus.Tooling", "bin", "Release", "net10.0", "circus-tooling.dll")
     let protectedScopeArgs =
@@ -266,7 +272,7 @@ let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) : Evid
             "--repo-root"
             "."
             "--declaration"
-            (Path.Combine(repoRoot, "docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION01.scope.json"))
+            scopeDeclarationPath
         ]
 
     [
@@ -411,11 +417,12 @@ let runCanonicalChecks (defs: EvidenceCheckDefinition list) : Result<EvidenceChe
 let generate
     (repoRoot: string)
     (baselineCommit: string)
+    (scopeDeclarationPath: string)
     : Result<CanonicalEvidence, GenerateFailure> =
     match resolveIdentity repoRoot with
     | Result.Error err -> Result.Error(IdentityFailure err)
     | Result.Ok identity ->
-        let defs = CanonicalCheckDefinitions repoRoot baselineCommit
+        let defs = CanonicalCheckDefinitions repoRoot baselineCommit scopeDeclarationPath
         match runCanonicalChecks defs with
         | Result.Error err -> Result.Error err
         | Result.Ok checks -> Result.Ok(buildCanonicalEvidence identity checks)
@@ -1008,6 +1015,7 @@ let internal regenerateWithDependencies
     (deps: CanonicalEvidenceDependencies)
     (repoRoot: string)
     (baselineCommit: string)
+    (scopeDeclarationPath: string)
     : Result<CanonicalEvidence, RegenerateFailure> =
     match deps.ResolveRepositoryIdentity repoRoot with
     | Result.Error e -> Result.Error(DependencyIdentityFailure e)
@@ -1018,7 +1026,7 @@ let internal regenerateWithDependencies
             if state.Dirty then
                 Result.Error DependencyWorkingTreeDirty
             else
-                let defs = CanonicalCheckDefinitions repoRoot baselineCommit
+                let defs = CanonicalCheckDefinitions repoRoot baselineCommit scopeDeclarationPath
                 match executeChecksWithDependencies deps defs with
                 | Result.Error f -> Result.Error f
                 | Result.Ok checks -> Result.Ok(assembleCanonicalEvidence identity checks)

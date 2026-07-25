@@ -4,7 +4,7 @@ module Circus.Tooling.CanonicalEvidence.Cli
 // Canonical evidence – CLI dispatcher
 //
 // ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION01
-// ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION02
+// ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02
 //
 // Slice 7: CLI verb and registration.
 //
@@ -13,11 +13,19 @@ module Circus.Tooling.CanonicalEvidence.Cli
 //   circus-tooling canonical-evidence regenerate \
 //     --repo-root <path> \
 //     --output <path> \
-//     --baseline-commit <oid>
+//     --baseline-commit <oid> \
+//     [--scope-declaration <path>]
 //
 //   circus-tooling canonical-evidence verify \
 //     --repo-root <path> \
-//     --input <path>
+//     --input <path> \
+//     [--scope-declaration <path>]
+//
+// CORRECTION02 introduces a --scope-declaration CLI argument that
+// supplies the active ACT's scope declaration path.  When omitted,
+// the CLI falls back to the tracked repository pointer
+// ``.factory/active-scope.json`` which is required to exist.  The
+// pointer's ``declaration_path`` field is consumed verbatim.
 //
 // The CLI exposes the two verbs the task requires. Exit codes:
 //
@@ -27,13 +35,6 @@ module Circus.Tooling.CanonicalEvidence.Cli
 //
 // On any failure path the CLI prints a diagnostic line to stderr
 // and NEVER prints a PASS line.
-//
-// CORRECTION02 adds an internal ``runCliWithDependencies`` entry
-// point that accepts an explicit ``CanonicalEvidenceDependencies``
-// record so hermetic tests can exercise the full CLI dispatch path
-// without depending on the bounded Git adapter's per-process
-// mutable ``gitExecutableCell``. The production CLI path always
-// constructs the dependency record through ``productionDependencies``.
 // =============================================================================
 
 open System
@@ -50,8 +51,8 @@ module ExitCode =
     let operationalError = 2
 
 type Command =
-    | RegenerateCmd of repoRoot: string * outputPath: string * baselineCommit: string
-    | VerifyCmd of repoRoot: string * inputPath: string
+    | RegenerateCmd of repoRoot: string * outputPath: string * baselineCommit: string * scopeDeclaration: string option
+    | VerifyCmd of repoRoot: string * inputPath: string * scopeDeclaration: string option
     | HelpCmd
 
 let helpText () : string =
@@ -59,15 +60,53 @@ let helpText () : string =
     + "\n"
     + "Usage:\n"
     + "  circus-tooling canonical-evidence regenerate \\\n"
-    + "    --repo-root <path> --output <path> --baseline-commit <oid>\n"
+    + "    --repo-root <path> --output <path> --baseline-commit <oid> [--scope-declaration <path>]\n"
     + "  circus-tooling canonical-evidence verify \\\n"
-    + "    --repo-root <path> --input <path>\n"
+    + "    --repo-root <path> --input <path> [--scope-declaration <path>]\n"
     + "  circus-tooling canonical-evidence help\n"
 
 let private consumeFlag (flag: string) (args: string list) : Result<string * string list, string> =
     match args with
     | v :: rest -> Ok (v, rest)
     | _ -> Error (sprintf "missing value for %s" flag)
+
+/// Resolve the active scope declaration path.  Preference order:
+///
+///   1. The ``--scope-declaration <path>`` CLI argument.
+///
+///   2. The tracked repository pointer ``<repoRoot>/.factory/active-scope.json``.
+///
+/// If neither source is present, the protected-scope check is
+/// unavailable and the canonical evidence regeneration must fail
+/// closed; the empty string is returned and the caller must treat
+/// that as a missing declaration.
+let private resolveScopeDeclaration (repoRoot: string) (scopeDeclaration: string option) : string =
+    match scopeDeclaration with
+    | Some s when not (String.IsNullOrWhiteSpace s) -> s
+    | _ ->
+        let pointerPath = Path.Combine(repoRoot, ".factory", "active-scope.json")
+        if File.Exists pointerPath then
+            // Simple line-based parser: the active-scope.json is a
+            // strict JSON object with a single "declaration_path"
+            // string field.  The full F# validator lives in the
+            // tooling tests; this minimal parser is sufficient for
+            // the CLI's fallback path.
+            let lines = File.ReadAllLines(pointerPath)
+            let mutable declPath = ""
+            for line in lines do
+                let trimmed = line.Trim().TrimEnd(',')
+                if trimmed.StartsWith("\"declaration_path\"") then
+                    let colonIdx = trimmed.IndexOf(':')
+                    if colonIdx > 0 then
+                        let afterColon = trimmed.Substring(colonIdx + 1).Trim()
+                        if afterColon.StartsWith("\"") then
+                            let startIdx = 1
+                            let endIdx = afterColon.LastIndexOf("\"")
+                            if endIdx > startIdx then
+                                declPath <- afterColon.Substring(startIdx, endIdx - startIdx)
+            declPath
+        else
+            ""
 
 let private parse (argv: string list) : Result<Command, string> =
     match argv with
@@ -80,6 +119,7 @@ let private parse (argv: string list) : Result<Command, string> =
         let mutable repoRoot : string option = None
         let mutable outputPath : string option = None
         let mutable baselineCommit : string option = None
+        let mutable scopeDecl : string option = None
         let mutable remaining = rest
         let mutable bad = false
         while not bad && not (List.isEmpty remaining) do
@@ -96,6 +136,10 @@ let private parse (argv: string list) : Result<Command, string> =
                 match consumeFlag "--baseline-commit" t with
                 | Ok (v, r) -> baselineCommit <- Some v; remaining <- r
                 | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+            | "--scope-declaration" :: t ->
+                match consumeFlag "--scope-declaration" t with
+                | Ok (v, r) -> scopeDecl <- Some v; remaining <- r
+                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
             | unknown :: _ ->
                 bad <- true
                 stderr.WriteLine(sprintf "error: unrecognised argument: %s" unknown)
@@ -104,11 +148,12 @@ let private parse (argv: string list) : Result<Command, string> =
         if bad then Error "argument parse failed"
         else
             match repoRoot, outputPath, baselineCommit with
-            | Some r, Some o, Some b -> Ok(RegenerateCmd (r, o, b))
+            | Some r, Some o, Some b -> Ok(RegenerateCmd (r, o, b, scopeDecl))
             | _ -> Error "regenerate requires --repo-root, --output, and --baseline-commit"
     | "verify" :: rest ->
         let mutable repoRoot : string option = None
         let mutable inputPath : string option = None
+        let mutable scopeDecl : string option = None
         let mutable remaining = rest
         let mutable bad = false
         while not bad && not (List.isEmpty remaining) do
@@ -121,6 +166,10 @@ let private parse (argv: string list) : Result<Command, string> =
                 match consumeFlag "--input" t with
                 | Ok (v, r) -> inputPath <- Some v; remaining <- r
                 | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+            | "--scope-declaration" :: t ->
+                match consumeFlag "--scope-declaration" t with
+                | Ok (v, r) -> scopeDecl <- Some v; remaining <- r
+                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
             | unknown :: _ ->
                 bad <- true
                 stderr.WriteLine(sprintf "error: unrecognised argument: %s" unknown)
@@ -129,7 +178,7 @@ let private parse (argv: string list) : Result<Command, string> =
         if bad then Error "argument parse failed"
         else
             match repoRoot, inputPath with
-            | Some r, Some i -> Ok(VerifyCmd (r, i))
+            | Some r, Some i -> Ok(VerifyCmd (r, i, scopeDecl))
             | _ -> Error "verify requires --repo-root and --input"
     | _ ->
         Error "usage: canonical-evidence {regenerate|verify|help}"
@@ -209,36 +258,41 @@ let private renderDependencyVerifySummary (r: DependencyVerifyOutcome) : string 
 // seam; production callers use these wrappers.
 // -----------------------------------------------------------------------------
 
-let runRegenerate (repoRoot: string) (outputPath: string) (baselineCommit: string) : int =
-    match generate repoRoot baselineCommit with
-    | Result.Error failure ->
-        stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (generateFailureToString failure))
+let runRegenerate (repoRoot: string) (outputPath: string) (baselineCommit: string) (scopeDeclaration: string option) : int =
+    let effectiveScope = resolveScopeDeclaration repoRoot scopeDeclaration
+    if String.IsNullOrEmpty effectiveScope then
+        stderr.WriteLine "canonical-evidence regenerate: FAIL (no scope declaration; supply --scope-declaration or create .factory/active-scope.json)"
         ExitCode.operationalError
-    | Result.Ok evidence ->
-        let outcome = tryWriteAtomic outputPath evidence
-        if not outcome.Success then
-            let reason =
-                match outcome.Failure with
-                | Some f -> writeFailureToString f
-                | None -> "unknown"
-            stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" reason)
+    else
+        match generate repoRoot baselineCommit effectiveScope with
+        | Result.Error failure ->
+            stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (generateFailureToString failure))
             ExitCode.operationalError
-        else
-            let overall = statusToken evidence.OverallStatus
-            let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
-            stdout.WriteLine(renderRegenerateSummary evidence outputPath outcome.CanonicalSha256)
-            // Re-verify the freshly written bytes to confirm the
-            // artifact on disk is what the producer intended.
-            let verifyOutcome = verify outputPath repoRoot
-            match verifyOutcome.Failure with
-            | Some f ->
-                stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (verifyFailureToString f))
+        | Result.Ok evidence ->
+            let outcome = tryWriteAtomic outputPath evidence
+            if not outcome.Success then
+                let reason =
+                    match outcome.Failure with
+                    | Some f -> writeFailureToString f
+                    | None -> "unknown"
+                stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" reason)
                 ExitCode.operationalError
-            | None ->
-                if overall = "pass" then ExitCode.pass
-                else ExitCode.policyFailure
+            else
+                let overall = statusToken evidence.OverallStatus
+                let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
+                stdout.WriteLine(renderRegenerateSummary evidence outputPath outcome.CanonicalSha256)
+                // Re-verify the freshly written bytes to confirm the
+                // artifact on disk is what the producer intended.
+                let verifyOutcome = verify outputPath repoRoot
+                match verifyOutcome.Failure with
+                | Some f ->
+                    stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (verifyFailureToString f))
+                    ExitCode.operationalError
+                | None ->
+                    if overall = "pass" then ExitCode.pass
+                    else ExitCode.policyFailure
 
-let runVerify (repoRoot: string) (inputPath: string) : int =
+let runVerify (repoRoot: string) (inputPath: string) (_scopeDeclaration: string option) : int =
     let result = verify inputPath repoRoot
     let verdict =
         match result.Failure with
@@ -252,12 +306,6 @@ let runVerify (repoRoot: string) (inputPath: string) : int =
 
 // -----------------------------------------------------------------------------
 // Dependency-driven runners
-//
-// ``runRegenerateWithDependencies`` and ``runVerifyWithDependencies``
-// take an explicit dependency record. Production callers should use
-// the legacy ``runRegenerate`` / ``runVerify`` (which use the proven
-// bounded authorities directly); the dependency-driven runners exist
-// for the hermetic CLI test surface required by CORRECTION02.
 // -----------------------------------------------------------------------------
 
 let internal runRegenerateWithDependencies
@@ -265,39 +313,44 @@ let internal runRegenerateWithDependencies
     (repoRoot: string)
     (outputPath: string)
     (baselineCommit: string)
+    (scopeDeclaration: string option)
     : int =
-    match regenerateWithDependencies deps repoRoot baselineCommit with
-    | Result.Error failure ->
-        stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (regenerateFailureToString failure))
+    let effectiveScope = resolveScopeDeclaration repoRoot scopeDeclaration
+    if String.IsNullOrEmpty effectiveScope then
+        stderr.WriteLine "canonical-evidence regenerate: FAIL (no scope declaration; supply --scope-declaration or create .factory/active-scope.json)"
         ExitCode.operationalError
-    | Result.Ok evidence ->
-        let writeOutcome = writeArtifactWithDependencies deps outputPath evidence
-        if not writeOutcome.Success then
-            let reason =
-                match writeOutcome.Failure with
-                | Some f -> sprintf "%s:%s" f.Reason f.Detail
-                | None -> "unknown"
-            stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" reason)
+    else
+        match regenerateWithDependencies deps repoRoot baselineCommit effectiveScope with
+        | Result.Error failure ->
+            stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (regenerateFailureToString failure))
             ExitCode.operationalError
-        else
-            let overall = statusToken evidence.OverallStatus
-            let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
-            stdout.WriteLine(renderRegenerateSummary evidence outputPath writeOutcome.CanonicalSha256)
-            // Re-verify the freshly written bytes to confirm the
-            // artifact on disk is what the producer intended.
-            let verifyOutcome = verifyWithDependencies deps outputPath repoRoot
-            match verifyOutcome.Failure with
-            | Some f ->
-                stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (dependencyVerifyFailureToString f))
+        | Result.Ok evidence ->
+            let writeOutcome = writeArtifactWithDependencies deps outputPath evidence
+            if not writeOutcome.Success then
+                let reason =
+                    match writeOutcome.Failure with
+                    | Some f -> sprintf "%s:%s" f.Reason f.Detail
+                    | None -> "unknown"
+                stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" reason)
                 ExitCode.operationalError
-            | None ->
-                if overall = "pass" then ExitCode.pass
-                else ExitCode.policyFailure
+            else
+                let overall = statusToken evidence.OverallStatus
+                let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
+                stdout.WriteLine(renderRegenerateSummary evidence outputPath writeOutcome.CanonicalSha256)
+                let verifyOutcome = verifyWithDependencies deps outputPath repoRoot
+                match verifyOutcome.Failure with
+                | Some f ->
+                    stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (dependencyVerifyFailureToString f))
+                    ExitCode.operationalError
+                | None ->
+                    if overall = "pass" then ExitCode.pass
+                    else ExitCode.policyFailure
 
 let internal runVerifyWithDependencies
     (deps: CanonicalEvidenceDependencies)
     (repoRoot: string)
     (inputPath: string)
+    (scopeDeclaration: string option)
     : int =
     let result = verifyWithDependencies deps inputPath repoRoot
     let verdict =
@@ -312,16 +365,6 @@ let internal runVerifyWithDependencies
 
 // -----------------------------------------------------------------------------
 // Dependency-driven CLI dispatcher
-//
-// ``runCliWithDependencies`` parses ``argv`` through the SAME
-// production ``parse`` function used by the top-level CLI, then
-// dispatches the parsed command to the dependency-driven runners.
-// This guarantees the hermetic test path exercises the same parse,
-// arg-validation, and verb-dispatch logic as the production binary.
-//
-// Tests construct isolated fake ``CanonicalEvidenceDependencies``
-// records per test and assert the exit code, stdout, and stderr
-// produced by this dispatcher.
 // -----------------------------------------------------------------------------
 
 let internal runCliWithDependencies
@@ -332,10 +375,10 @@ let internal runCliWithDependencies
     | Ok HelpCmd ->
         stdout.WriteLine(helpText ())
         ExitCode.pass
-    | Ok(RegenerateCmd (repoRoot, outputPath, baselineCommit)) ->
-        runRegenerateWithDependencies deps repoRoot outputPath baselineCommit
-    | Ok(VerifyCmd (repoRoot, inputPath)) ->
-        runVerifyWithDependencies deps repoRoot inputPath
+    | Ok(RegenerateCmd (repoRoot, outputPath, baselineCommit, scopeDeclaration)) ->
+        runRegenerateWithDependencies deps repoRoot outputPath baselineCommit scopeDeclaration
+    | Ok(VerifyCmd (repoRoot, inputPath, scopeDeclaration)) ->
+        runVerifyWithDependencies deps repoRoot inputPath scopeDeclaration
     | Result.Error msg ->
         stderr.WriteLine(sprintf "error: %s" msg)
         stderr.WriteLine(helpText ())
