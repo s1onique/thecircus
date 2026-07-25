@@ -3,6 +3,6 @@
   "act_id": "ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02",
   "act_classification": "P0",
   "declaration_path": "docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02.scope.json",
-  "declaration_blob_oid": "31b043f04b959eb08006d6503d2af524a6b39c18",
+  "declaration_blob_oid": "0ff7ee211f13bd5f2bd837efd0b69433c86e50d3",
   "baseline_commit_oid": "da92e0d6573a95148c0a41240849bc5921c6fcfa"
 }
