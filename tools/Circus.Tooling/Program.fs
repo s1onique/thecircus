@@ -47,3 +47,7 @@ let main (argv: string[]) : int =
             Circus.Tooling.NoForcePush.Cli.run subArgs
         | FSharpDiagnosticsCmd subArgs ->
             Circus.Tooling.FSharpDiagnostics.Cli.run subArgs
+        | EvidenceValidateCmd subArgs ->
+            Circus.Tooling.EvidenceValidator.Cli.run subArgs
+        | ProtectedScopeCmd subArgs ->
+            Circus.Tooling.ProtectedScope.Cli.run subArgs

@@ -249,17 +249,26 @@ let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) : Evid
     let stdOut = 32 * 1024 * 1024
     let stdErr = 32 * 1024 * 1024
 
-    let protectedScopePaths =
-        [
-            "tools/Circus.Tooling/NoForcePush/"
-            "src/Circus.Persistence.Postgres/"
-            "tests/Circus.Persistence.Postgres.Tests/"
-            "factory/evidence/fsharp-diagnostics/corpus/raw/"
-        ]
-
+    // The protected-scope check is delegated to the ACT-scope
+    // authority: ``circus-tooling protected-scope check``, which
+    // reads the ACT's declaration, derives the ACT's own baseline,
+    // and categorises every change against the declaration's
+    // globally_protected and act_owned lists.  The previous glob
+    // list is replaced by the ACT-scope declaration mechanism
+    // (ACT-CIRCUS-CANONICAL-EVIDENCE-PROTECTED-SCOPE-AUTHORITY01).
+    let circusToolingDllPath =
+        Path.Combine(repoRoot, "tools", "Circus.Tooling", "bin", "Release", "net10.0", "circus-tooling.dll")
     let protectedScopeArgs =
-        let prefix = [ "diff"; "--quiet"; "--exit-code"; baselineCommit + "..HEAD"; "--" ]
-        prefix @ protectedScopePaths
+        [
+            "dotnet"
+            circusToolingDllPath
+            "protected-scope"
+            "check"
+            "--repo-root"
+            "."
+            "--declaration"
+            (Path.Combine(repoRoot, "docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION01.scope.json"))
+        ]
 
     [
         {

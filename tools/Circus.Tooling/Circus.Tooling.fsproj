@@ -77,6 +77,16 @@
     <Compile Include="CanonicalEvidence\Validation.fs" />
     <Compile Include="CanonicalEvidence\Provider.fs" />
     <Compile Include="CanonicalEvidence\Cli.fs" />
+    <!-- Evidence validator (ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION01).
+         Compile order: Domain must precede Validation; Validation must precede Cli. -->
+    <Compile Include="EvidenceValidator\Domain.fs" />
+    <Compile Include="EvidenceValidator\Validation.fs" />
+    <Compile Include="EvidenceValidator\Cli.fs" />
+    <!-- Protected-scope authority (ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION01).
+         Compile order: Domain must precede Check; Check must precede Cli. -->
+    <Compile Include="ProtectedScope\Domain.fs" />
+    <Compile Include="ProtectedScope\Check.fs" />
+    <Compile Include="ProtectedScope\Cli.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Episodes.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Transitions.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Serialization.fs" />

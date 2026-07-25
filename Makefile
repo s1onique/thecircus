@@ -109,6 +109,17 @@ test-postgres: build-backend
 	fi
 	$(DOTNET) run --project tests/Circus.Persistence.Postgres.Tests -c Release --no-build --no-restore
 
+# Hermetic PostgreSQL test runner seam regression (ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION01)
+# ----------------------------------------------------------------------
+# This target runs ONLY the four pure tests in the
+# ``Circus.Persistence.Postgres.Tests.Runner.Smoke`` executable.  It
+# does NOT require Docker or PostgreSQL.  The executable references
+# only the small ``Runner`` support library and never instantiates
+# ``PostgresFixture`` or touches ``Testcontainers.PostgreSql``.
+.PHONY: test-postgres-runner-smoke
+test-postgres-runner-smoke: build-backend
+	$(DOTNET) run --project tests/Circus.Persistence.Postgres.Tests.Runner.Smoke -c Release --no-build --no-restore -- --summary --filter-test-list "Postgres test runner exit code"
+
 .PHONY: test-api
 test-api: build-backend
 	$(DOTNET) run --project tests/Circus.Api.Tests -c Release --no-build --no-restore

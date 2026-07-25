@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Circus.Persistence.Postgres.Tests.Runner.Smoke</RootNamespace>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="PostgresTestRunnerExitCodeTests.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Expecto" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Circus.Persistence.Postgres.Tests.Runner\Circus.Persistence.Postgres.Tests.Runner.fsproj" />
+  </ItemGroup>
+
+</Project>

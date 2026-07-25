@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
-  "act_id": "ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01",
+  "act_id": "ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION01",
+  "evidence_role": "corrected_evidence_commit",
   "captured_at_utc": "2026-07-25T18:00:00Z",
-  "tested_commit_oid": "2f60dd1b06391cb2c190cbdc4b4e3170ad2e39fa",
-  "tested_tree_oid": "ea35a24ddd74dd51a95c9f21ffc159f6ff3463a1",
-  "tested_commit_oid_chain": [
-    "e042ee0b59271136523f55d1b221759a8402b8ce (initial: code + JSON with placeholder)",
-    "75624ed1f504343b97960a26356273b4a41c7ebb (amend: JSON self-reference)",
-    "e674a28bae0f2ca5e661515f40fd96e0466dc9a0 (amend: JSON OID update)",
-    "2f60dd1b06391cb2c190cbdc4b4e3170ad2e39fa (formatting fixup: source files only)"
-  ],
-  "tested_commit_oid_resolution_note": "The tested_commit_oid is the HEAD of the commit that contains this file. The chain records the iterative amendments used to update this field; the source code is identical across all four commits (PostgresTestRunner.fs, PostgresTestRunnerExitCodeTests.fs, Program.fs all unchanged in their semantics; only the JSON's tested_commit_oid field and whitespace alignment differ).",
+  "tested_subject_commit_oid": "2f60dd1b06391cb2c190cbdc4b4e3170ad2e39fa",
+  "tested_subject_tree_oid": "ea35a24ddd74dd51a95c9f21ffc159f6ff3463a1",
+  "evidence_generated_after_subject": true,
+  "subject_artifact_role": "tested runner implementation (PostgresTestRunner.runWith seam, PostgresTestRunnerExitCodeTests, Program.fs entry point, .fsproj)",
+  "evidence_payload_sha256": "82bb5e44d398c2f6f1eaefc3c975d9b5ad40ab6e410e09d56ac6bad691625177",
+  "evidence_payload_sha256_input": "the SHA-256 of the canonical JSON form (sorted keys, no whitespace, UTF-8, ASCII) where the evidence_payload_sha256 field is replaced with the placeholder '0000000000000000000000000000000000000000000000000000000000000000' (64 zeros).",
+  "evidence_payload_sha256_input_placeholder": "0000000000000000000000000000000000000000000000000000000000000000",
+  "evidence_payload_sha256_canonicalization": "F# canonical walker: Circus.Tooling.EvidenceValidator.Validation.renderCanonical; the empty hash placeholder is substituted into the canonical form before SHA-256 (sha256OfUtf8) is computed.",
   "direct": {
     "passing": {
       "fully_qualified_name": "Circus.Persistence.Postgres.Tests.Migration and least privilege.positive ingestion succeeds through IngestEventService.Ingest",
@@ -67,7 +67,9 @@
         "errored": 0
       },
       "exit_code": 0,
-      "output_sha256": "8e55d7c8e87b08ef693079135c88f7beed0543c7cedabaf047dcba479a0e26f0"
+      "output_sha256": "8e55d7c8e87b08ef693079135c88f7beed0543c7cedabaf047dcba479a0e26f0",
+      "seam_location": "tests/Circus.Persistence.Postgres.Tests/PostgresTestRunner.fs",
+      "tests_modules": "tests/Circus.Persistence.Postgres.Tests/PostgresTestRunnerExitCodeTests.fs"
     }
   },
   "make": {
@@ -78,11 +80,21 @@
     "final_pass_line_present": false,
     "gate_failure_stage": "test-backend (test-postgres inside it returned exit code 3)",
     "later_gate_steps_after_postgres_failure": "test-devhost, test-web, smoke not run (gate stops at test-backend because make stops on first non-zero exit code)",
-    "canonical_evidence_verification_transcript": "verify-canonical-evidence: PASS (commit=2f60dd1b0639 tree=ea35a24ddd74); canonical-evidence policy: PASS; project_leamas_gate_summary: PASS"
+    "canonical_evidence_verification_transcript": "verify-canonical-evidence: PASS (commit=0163cd4923e9 tree=7518da0a4b89); canonical-evidence policy: PASS; project_leamas_gate_summary: PASS"
   },
   "makefile": {
     "changed": false,
     "masking_behavior_found": false,
     "decision": "Recipe invokes 'dotnet run --project tests/Circus.Persistence.Postgres.Tests -c Release --no-build --no-restore' with no - prefix, no || true, no wrapper; GNU Make propagates the corrected runner result unchanged."
+  },
+  "non_recursive_binding": {
+    "subject_is_E_governed_artifact": true,
+    "evidence_commit_E_must_not_equal_subject_S": "S=2f60dd1b06391cb2c190cbdc4b4e3170ad2e39fa; E is the correction01 commit and is intentionally different from S.",
+    "no_self_claim_of_own_containing_commit": true,
+    "previous_self_referential_fields_removed": [
+      "tested_commit_oid",
+      "tested_commit_oid_chain",
+      "tested_commit_oid_resolution_note"
+    ]
   }
 }

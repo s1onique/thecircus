@@ -28,6 +28,8 @@ type Command =
     | CanonicalEvidenceCmd of subArgs: string list
     | NoForcePushCmd of subArgs: string list
     | FSharpDiagnosticsCmd of subArgs: string list
+    | EvidenceValidateCmd of subArgs: string list
+    | ProtectedScopeCmd of subArgs: string list
     | HelpCmd
     | VersionCmd
 
@@ -71,7 +73,9 @@ let parseTopLevel (argv: string list) : Result<Command, string> =
     | "canonical-evidence" :: rest -> Ok(CanonicalEvidenceCmd rest)
     | "no-force-push" :: rest -> Ok(NoForcePushCmd rest)
     | "fsharp-diagnostics" :: rest -> Ok(FSharpDiagnosticsCmd rest)
-    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|canonical-evidence|no-force-push|fsharp-diagnostics|help|version}"
+    | "evidence-validate" :: rest -> Ok(EvidenceValidateCmd rest)
+    | "protected-scope" :: rest -> Ok(ProtectedScopeCmd rest)
+    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|canonical-evidence|no-force-push|fsharp-diagnostics|evidence-validate|protected-scope|help|version}"
 
 /// Legacy parser for backward compatibility (delegates to top-level).
 let parse (argv: string list) : Result<Command, string> =
