@@ -1,233 +1,318 @@
 #!/usr/bin/env python3
+"""Generate or verify the strict Leamas v1 projection of canonical evidence.
+
+The repository-owned provider writes its native, deterministic artifact to
+``.factory/canonical-evidence.json``.  Leamas has a fixed consumer path,
+``.factory/gate-summary.json``; this program is the only writer of that path.
+The projection carries the native semantic hash in every evidence reference,
+which keeps one authority and one derived representation.
+
+ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION03
 """
-Generate a Leamas-compatible gate-summary projection.
 
-The canonical evidence provider emits .factory/gate-summary.json in
-the "canonical-evidence-v1" wire format. The Leamas targeted digest
-reader expects a different schema (the "gate-summary v1" schema from
-an older doctrine contract). This script is the authority-preserving
-compatibility projection: it reads the canonical artifact, validates
-every required field is present, binds the projection to the
-canonical artifact's semantic hash, and emits a Leamas-compatible
-artifact at .factory/gate-summary.json.leamas.
+from __future__ import annotations
 
-The projection is GENERATED, NEVER HAND-AUTHORED. A new projection
-must be produced by this script every time the canonical artifact
-changes. The script fails closed if any required source field is
-absent.
-
-ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION02
-"""
 import argparse
 import hashlib
 import json
+import os
+import re
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NoReturn
 
-# Mapping from canonical-evidence-v1 status to Leamas gate-summary v1 status.
-STATUS_MAP = {
-    "pass": "passed",
-    "fail": "failed",
-    "unavailable": "unavailable",
+PROVIDER_NAME = "circus-canonical-evidence"
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+OID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+STATUS_MAP = {"pass": "pass", "fail": "fail", "unavailable": "unavailable"}
+CANONICAL_FIELDS = {
+    "schema_version",
+    "provider_name",
+    "provider_version",
+    "tested_commit_oid",
+    "tested_tree_oid",
+    "object_format",
+    "checks",
+    "overall_status",
+    "semantic_sha256",
 }
+CHECK_FIELDS = {
+    "id",
+    "command_argv",
+    "working_directory",
+    "duration_ms",
+    "exit_code",
+    "status",
+    "stdout_sha256",
+    "stderr_sha256",
+    "failure_kind",
+}
+PROJECTION_FIELDS = {"schema_version", "generated_at", "tool", "overall_status", "checks"}
+PROJECTED_CHECK_FIELDS = {"name", "status", "duration_ms", "evidence"}
 
 
-def fail_closed(message: str) -> None:
-    """Surface a missing field as a non-zero exit."""
-    sys.stderr.write(f"project_leamas_gate_summary: FAIL ({message})\n")
-    sys.exit(2)
+def fail(message: str) -> NoReturn:
+    print(f"project_leamas_gate_summary: FAIL ({message})", file=sys.stderr)
+    raise SystemExit(2)
 
 
-def read_canonical(path: Path) -> dict:
-    if not path.exists():
-        fail_closed(f"canonical artifact not found: {path}")
+def read_object(path: Path, label: str) -> dict:
+    if not path.is_file():
+        fail(f"{label} not found: {path}")
     try:
-        with path.open("r", encoding="utf-8") as fp:
-            return json.load(fp)
-    except json.JSONDecodeError as exc:
-        fail_closed(f"canonical artifact not parseable: {exc}")
-    return {}
-
-
-def require_str(doc: dict, key: str) -> str:
-    value = doc.get(key)
-    if not isinstance(value, str) or not value:
-        fail_closed(f"canonical artifact missing required field: {key}")
+        raw = path.read_bytes()
+    except OSError as exc:
+        fail(f"cannot read {label}: {exc}")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"{label} is not strict UTF-8 JSON: {exc}")
+    if not isinstance(value, dict):
+        fail(f"{label} root is not an object")
     return value
 
 
-def require_int(doc: dict, key: str) -> int:
-    value = doc.get(key)
-    if not isinstance(value, int):
-        fail_closed(f"canonical artifact missing required integer field: {key}")
+def exact_fields(value: dict, expected: set[str], label: str) -> None:
+    actual = set(value)
+    missing = sorted(expected - actual)
+    unknown = sorted(actual - expected)
+    if missing:
+        fail(f"{label} missing fields: {', '.join(missing)}")
+    if unknown:
+        fail(f"{label} unknown fields: {', '.join(unknown)}")
+
+
+def required_string(value: dict, key: str, label: str) -> str:
+    result = value.get(key)
+    if not isinstance(result, str) or not result.strip():
+        fail(f"{label}.{key} must be a non-empty string")
+    return result
+
+
+def required_integer(value: dict, key: str, label: str) -> int:
+    result = value.get(key)
+    if isinstance(result, bool) or not isinstance(result, int):
+        fail(f"{label}.{key} must be an integer")
+    return result
+
+
+def nullable_sha(value: object, label: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+        fail(f"{label} must be null or a lowercase SHA-256")
     return value
 
 
-def require_list(doc: dict, key: str) -> list:
-    value = doc.get(key)
-    if not isinstance(value, list):
-        fail_closed(f"canonical artifact missing required list field: {key}")
-    return value
+def canonical_form(canonical: dict) -> bytes:
+    body = {key: canonical[key] for key in canonical if key != "semantic_sha256"}
+    return json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def map_status(token: str) -> str:
-    if token not in STATUS_MAP:
-        fail_closed(f"canonical artifact has unknown status token: {token}")
-    return STATUS_MAP[token]
-
-
-def project(canonical: dict) -> dict:
-    schema_version = require_int(canonical, "schema_version")
-    if schema_version != 1:
-        fail_closed(f"canonical schema_version mismatch: expected 1, got {schema_version}")
-    provider_name = require_str(canonical, "provider_name")
-    provider_version = require_str(canonical, "provider_version")
-    tested_commit_oid = require_str(canonical, "tested_commit_oid")
-    tested_tree_oid = require_str(canonical, "tested_tree_oid")
-    object_format = require_str(canonical, "object_format")
-    semantic_sha256 = require_str(canonical, "semantic_sha256")
-    overall_status_token = require_str(canonical, "overall_status")
-    overall_status = map_status(overall_status_token)
-    checks = require_list(canonical, "checks")
-
-    projected_checks = []
-    for idx, check in enumerate(checks):
+def validate_canonical(canonical: dict) -> None:
+    exact_fields(canonical, CANONICAL_FIELDS, "canonical artifact")
+    if required_integer(canonical, "schema_version", "canonical artifact") != 1:
+        fail("canonical artifact schema_version must equal 1")
+    if required_string(canonical, "provider_name", "canonical artifact") != PROVIDER_NAME:
+        fail(f"canonical artifact provider_name must equal {PROVIDER_NAME}")
+    required_string(canonical, "provider_version", "canonical artifact")
+    object_format = required_string(canonical, "object_format", "canonical artifact")
+    if object_format not in {"sha1", "sha256"}:
+        fail("canonical artifact object_format must be sha1 or sha256")
+    expected_width = 40 if object_format == "sha1" else 64
+    for field in ("tested_commit_oid", "tested_tree_oid"):
+        oid = required_string(canonical, field, "canonical artifact")
+        if len(oid) != expected_width or not OID_RE.fullmatch(oid):
+            fail(f"canonical artifact {field} is not a full {object_format} OID")
+    semantic_sha = required_string(canonical, "semantic_sha256", "canonical artifact")
+    if not SHA256_RE.fullmatch(semantic_sha):
+        fail("canonical artifact semantic_sha256 is not lowercase SHA-256")
+    recomputed = hashlib.sha256(canonical_form(canonical)).hexdigest()
+    if semantic_sha != recomputed:
+        fail(f"canonical artifact semantic hash mismatch: expected {recomputed}, got {semantic_sha}")
+    overall = required_string(canonical, "overall_status", "canonical artifact")
+    if overall not in STATUS_MAP:
+        fail(f"canonical artifact has unknown overall_status: {overall}")
+    checks = canonical.get("checks")
+    if not isinstance(checks, list) or not checks:
+        fail("canonical artifact checks must be a non-empty array")
+    names: set[str] = set()
+    derived = "pass"
+    for index, check in enumerate(checks):
+        label = f"canonical artifact checks[{index}]"
         if not isinstance(check, dict):
-            fail_closed(f"check[{idx}] is not an object")
-        check_id = require_str(check, "id")
-        # Required: duration_ms and command_argv must be present so we
-        # can populate duration_seconds and label. We do NOT
-        # reinterpret missing fields as successful empty values; we
-        # fail closed instead.
-        duration_ms = require_int(check, "duration_ms")
-        argv = require_list(check, "command_argv")
-        status_token = require_str(check, "status")
-        status = map_status(status_token)
-        stdout_sha = check.get("stdout_sha256")
-        stderr_sha = check.get("stderr_sha256")
+            fail(f"{label} is not an object")
+        exact_fields(check, CHECK_FIELDS, label)
+        name = required_string(check, "id", label)
+        if name in names:
+            fail(f"canonical artifact has duplicate check name: {name}")
+        names.add(name)
+        argv = check.get("command_argv")
+        if not isinstance(argv, list) or not argv or any(not isinstance(item, str) or not item for item in argv):
+            fail(f"{label}.command_argv must be a non-empty string array")
+        required_string(check, "working_directory", label)
+        duration = required_integer(check, "duration_ms", label)
+        if duration < 0:
+            fail(f"{label}.duration_ms must be non-negative")
+        status = required_string(check, "status", label)
+        if status not in STATUS_MAP:
+            fail(f"{label}.status is unknown: {status}")
         exit_code = check.get("exit_code")
-        evidence = {
-            "stdout_sha256": stdout_sha,
-            "stderr_sha256": stderr_sha,
-            "exit_code": exit_code,
-            "command_argv": argv,
-        }
-        projected_checks.append({
-            "id": check_id,
-            "name": check_id,
-            "status": status,
-            "duration_seconds": round(duration_ms / 1000.0, 6),
-            "exit_code": exit_code if exit_code is not None else 0,
-            "evidence": evidence,
-        })
+        if exit_code is not None and (isinstance(exit_code, bool) or not isinstance(exit_code, int)):
+            fail(f"{label}.exit_code must be an integer or null")
+        stdout_sha = nullable_sha(check.get("stdout_sha256"), f"{label}.stdout_sha256")
+        stderr_sha = nullable_sha(check.get("stderr_sha256"), f"{label}.stderr_sha256")
+        if status == "pass" and (exit_code != 0 or not stdout_sha or not stderr_sha):
+            fail(f"{label} passing evidence must contain exit_code 0 and both output hashes")
+        if status != "pass":
+            derived = "fail"
+    if overall != derived:
+        fail(f"canonical artifact overall_status mismatch: expected {derived}, got {overall}")
 
-    checks_passed = sum(1 for c in projected_checks if c["status"] == "passed")
-    checks_failed = sum(1 for c in projected_checks if c["status"] == "failed")
-    checks_unavailable = sum(
-        1 for c in projected_checks if c["status"] == "unavailable"
+
+def evidence_reference(canonical: dict, check: dict) -> str:
+    stdout_sha = check.get("stdout_sha256") or EMPTY_SHA256
+    stderr_sha = check.get("stderr_sha256") or EMPTY_SHA256
+    exit_code = "null" if check.get("exit_code") is None else str(check["exit_code"])
+    return (
+        "canonical=.factory/canonical-evidence.json"
+        f";semantic_sha256={canonical['semantic_sha256']}"
+        f";stdout_sha256={stdout_sha};stderr_sha256={stderr_sha};exit_code={exit_code}"
+        f";tested_commit_oid={canonical['tested_commit_oid']}"
+        f";tested_tree_oid={canonical['tested_tree_oid']}"
     )
 
-    projection = {
+
+def project(canonical: dict, generated_at: str) -> dict:
+    validate_canonical(canonical)
+    return {
         "schema_version": 1,
-        "gate_id": "circus-canonical-evidence",
-        "doctrine": "ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "generated_by": (
-            f"circus-canonical-evidence/{provider_version}+"
-            f"leamas-projection+{provider_name}"
+        "generated_at": generated_at,
+        "tool": (
+            f"{PROVIDER_NAME}/{canonical['provider_version']}"
+            f";canonical=.factory/canonical-evidence.json"
+            f";semantic_sha256={canonical['semantic_sha256']}"
+            f";tested_commit_oid={canonical['tested_commit_oid']}"
+            f";tested_tree_oid={canonical['tested_tree_oid']}"
         ),
-        "source": ".factory/gate-summary.json",
-        "source_status": "present",
-        "tested_commit_oid": tested_commit_oid,
-        "tested_tree_oid": tested_tree_oid,
-        "object_format": object_format,
-        "canonical_artifact_sha256": semantic_sha256,
-        "overall_status": "green" if overall_status == "passed" else (
-            "red" if overall_status == "failed" else "unavailable"
-        ),
-        "checks_total": len(projected_checks),
-        "checks_passed": checks_passed,
-        "checks_failed": checks_failed,
-        "checks_unavailable": checks_unavailable,
-        "checks": projected_checks,
+        "overall_status": STATUS_MAP[canonical["overall_status"]],
+        "checks": [
+            {
+                "name": check["id"],
+                "status": STATUS_MAP[check["status"]],
+                "duration_ms": check["duration_ms"],
+                "evidence": evidence_reference(canonical, check),
+            }
+            for check in canonical["checks"]
+        ],
     }
-    return projection
 
 
-def bind_semantic_hash(projection: dict, semantic_sha256: str) -> dict:
-    """Bind the projection to the canonical artifact's semantic hash.
-
-    The Leamas contract requires the projection to carry a stable
-    identifier that ties it back to the canonical artifact. We embed
-    the canonical semantic hash in a ``canonical_artifact_sha256``
-    field that the canonical provider can re-verify on demand.
-    """
-    projection["canonical_artifact_sha256"] = semantic_sha256
-    return projection
-
-
-def verify(projection: dict, canonical_path: Path) -> bool:
-    """Re-read the canonical artifact and confirm the projection is bound
-    to its current semantic hash. This is the canonical provider's
-    compatibility verification.
-    """
-    canonical = read_canonical(canonical_path)
-    expected = canonical.get("semantic_sha256")
-    actual = projection.get("canonical_artifact_sha256")
-    return bool(expected) and bool(actual) and expected == actual
-
-
-def main(argv: list) -> int:
-    parser = argparse.ArgumentParser(
-        description="Generate a Leamas-compatible gate-summary projection."
+def validate_projection(projection: dict, canonical: dict) -> None:
+    exact_fields(projection, PROJECTION_FIELDS, "projection")
+    if required_integer(projection, "schema_version", "projection") != 1:
+        fail("projection schema_version must equal 1")
+    generated_at = required_string(projection, "generated_at", "projection")
+    try:
+        datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except ValueError:
+        fail("projection generated_at is not RFC 3339")
+    tool = required_string(projection, "tool", "projection")
+    required_tokens = (
+        PROVIDER_NAME,
+        canonical["semantic_sha256"],
+        canonical["tested_commit_oid"],
+        canonical["tested_tree_oid"],
     )
-    parser.add_argument(
-        "--canonical",
-        default=".factory/gate-summary.json",
-        help="Path to the canonical-evidence artifact",
-    )
-    parser.add_argument(
-        "--output",
-        default=".factory/gate-summary.json.leamas",
-        help="Path to write the Leamas projection",
-    )
-    parser.add_argument(
-        "--verify",
-        action="store_true",
-        help="Re-verify the projection against the canonical artifact's "
-             "current semantic hash after writing",
-    )
+    if any(token not in tool for token in required_tokens):
+        fail("projection tool binding is stale or incomplete")
+    if projection.get("overall_status") != canonical["overall_status"]:
+        fail("projection overall_status does not match canonical artifact")
+    projected_checks = projection.get("checks")
+    canonical_checks = canonical["checks"]
+    if not isinstance(projected_checks, list) or len(projected_checks) != len(canonical_checks):
+        fail("projection check count does not match canonical artifact")
+    names: set[str] = set()
+    for index, (actual, source) in enumerate(zip(projected_checks, canonical_checks)):
+        label = f"projection checks[{index}]"
+        if not isinstance(actual, dict):
+            fail(f"{label} is not an object")
+        exact_fields(actual, PROJECTED_CHECK_FIELDS, label)
+        name = required_string(actual, "name", label)
+        if name in names:
+            fail(f"projection has duplicate check name: {name}")
+        names.add(name)
+        if name != source["id"]:
+            fail(f"{label}.name does not match canonical check")
+        if actual.get("status") != source["status"]:
+            fail(f"{label}.status does not match canonical check")
+        if required_integer(actual, "duration_ms", label) != source["duration_ms"]:
+            fail(f"{label}.duration_ms does not match canonical check")
+        evidence = required_string(actual, "evidence", label)
+        expected = evidence_reference(canonical, source)
+        if evidence != expected:
+            fail(f"{label}.evidence semantic binding mismatch")
+
+
+def atomic_write(path: Path, body: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".tmp.", dir=path.parent)
+    temp_path = Path(temporary)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def default_timestamp(canonical_path: Path) -> str:
+    return datetime.fromtimestamp(canonical_path.stat().st_mtime, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--canonical", default=".factory/canonical-evidence.json")
+    parser.add_argument("--output", default=".factory/gate-summary.json")
+    parser.add_argument("--generated-at", help="RFC 3339 timestamp; defaults to canonical artifact mtime")
+    parser.add_argument("--verify-only", action="store_true", help="verify the existing projection without writing")
     args = parser.parse_args(argv)
 
     canonical_path = Path(args.canonical)
-    canonical = read_canonical(canonical_path)
-    semantic_sha256 = require_str(canonical, "semantic_sha256")
-    projection = project(canonical)
-    projection = bind_semantic_hash(projection, semantic_sha256)
-
     output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    body = json.dumps(projection, indent=2, sort_keys=True) + "\n"
-    output_path.write_text(body, encoding="utf-8")
+    canonical = read_object(canonical_path, "canonical artifact")
+    validate_canonical(canonical)
 
-    if args.verify:
-        if not verify(projection, canonical_path):
-            fail_closed(
-                "projection is not bound to the canonical artifact's "
-                "current semantic hash"
-            )
+    if args.verify_only:
+        projection = read_object(output_path, "projection")
+        validate_projection(projection, canonical)
+        print(
+            "project_leamas_gate_summary: PASS "
+            f"canonical={canonical_path} projection={output_path} "
+            f"checks={len(projection['checks'])} semantic_sha256={canonical['semantic_sha256']}"
+        )
+        return 0
 
-    stdout = (
-        f"project_leamas_gate_summary: written={output_path} "
-        f"checks={projection['checks_total']} "
-        f"passed={projection['checks_passed']} "
-        f"failed={projection['checks_failed']} "
-        f"canonical_sha256={semantic_sha256}"
+    generated_at = args.generated_at or default_timestamp(canonical_path)
+    projection = project(canonical, generated_at)
+    validate_projection(projection, canonical)
+    body = (json.dumps(projection, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    atomic_write(output_path, body)
+    persisted = read_object(output_path, "persisted projection")
+    validate_projection(persisted, canonical)
+    print(
+        "project_leamas_gate_summary: written="
+        f"{output_path} source={canonical_path} checks={len(projection['checks'])} "
+        f"semantic_sha256={canonical['semantic_sha256']}"
     )
-    sys.stdout.write(stdout + "\n")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    raise SystemExit(main(sys.argv[1:]))

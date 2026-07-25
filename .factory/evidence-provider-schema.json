@@ -24,7 +24,7 @@
   ],
   "field_semantics": {
     "schema_version": "integer; must equal 1",
-    "provider_name": "string; must equal circuit-canonical-evidence",
+    "provider_name": "string; must equal circus-canonical-evidence",
     "provider_version": "string; SemVer releasing the artifact",
     "tested_commit_oid": "string; full-width SHA-1 or SHA-256 hex of the tested commit",
     "tested_tree_oid": "string; full-width SHA-1 or SHA-256 hex of the tested tree",

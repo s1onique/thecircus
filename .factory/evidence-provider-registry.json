@@ -6,7 +6,12 @@
   "command": "dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll canonical-evidence regenerate --repo-root <repo-root> --output <output> --baseline-commit <baseline-commit>",
   "validator_command": "dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll canonical-evidence verify --repo-root <repo-root> --input <input>",
   "schema_path": ".factory/evidence-provider-schema.json",
-  "output_path": ".factory/gate-summary.json",
+  "output_path": ".factory/canonical-evidence.json",
+  "compatibility_projection_path": ".factory/gate-summary.json",
+  "projection_command": "python3 scripts/project_leamas_gate_summary.py --canonical .factory/canonical-evidence.json --output .factory/gate-summary.json",
+  "projection_validator_command": "python3 scripts/project_leamas_gate_summary.py --canonical .factory/canonical-evidence.json --output .factory/gate-summary.json --verify-only",
+  "projection_binding": "Each projected evidence value carries the canonical semantic_sha256, tested commit/tree OIDs, and check output hashes; verification requires exact derived equality.",
+  "consumer": "leamas factory digest reads .factory/gate-summary.json",
   "required_gate": true,
   "ownership": "circus-tooling",
   "checks": [
@@ -20,5 +25,5 @@
     "committed-range-diff-check",
     "protected-scope"
   ],
-  "act_source": "ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION01"
+  "act_source": "ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION03"
 }

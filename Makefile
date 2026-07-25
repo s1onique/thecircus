@@ -262,23 +262,42 @@ test-source-policy: build-source-policy
 
 CIRCUS_CANONICAL_EVIDENCE_DLL := tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll
 CANONICAL_EVIDENCE_BASELINE_COMMIT ?= 5f1f7f99d57aaa133e76679c8bb6aa90620ebc1e
-CANONICAL_EVIDENCE_OUTPUT := .factory/gate-summary.json
+CANONICAL_EVIDENCE_NATIVE := .factory/canonical-evidence.json
+CANONICAL_EVIDENCE_LEAMAS := .factory/gate-summary.json
+CANONICAL_EVIDENCE_PROJECTION := scripts/project_leamas_gate_summary.py
+CANONICAL_EVIDENCE_POLICY := scripts/verify_canonical_evidence_policy.py
 
+# Regeneration is an explicit pre-commit operation. The provider writes its
+# native artifact first; the strict projection then writes the fixed path that
+# the installed Leamas consumer reads. Nothing under `gate` regenerates either
+# representation.
 .PHONY: canonical-evidence
 canonical-evidence: build-source-policy
 	$(DOTNET) $(CIRCUS_CANONICAL_EVIDENCE_DLL) canonical-evidence regenerate \
 		--repo-root . \
-		--output $(CANONICAL_EVIDENCE_OUTPUT) \
+		--output $(CANONICAL_EVIDENCE_NATIVE) \
 		--baseline-commit $(CANONICAL_EVIDENCE_BASELINE_COMMIT)
+	python3 $(CANONICAL_EVIDENCE_PROJECTION) \
+		--canonical $(CANONICAL_EVIDENCE_NATIVE) \
+		--output $(CANONICAL_EVIDENCE_LEAMAS)
 
+# Verification is deliberately non-mutating and ordered before the final native
+# gate PASS line. It checks provider semantics and current commit/tree binding,
+# registry/schema/provider agreement, gate wiring (including its mutation
+# control), and the projection's semantic binding to the native artifact.
 .PHONY: verify-canonical-evidence
 verify-canonical-evidence: build-source-policy
 	$(DOTNET) $(CIRCUS_CANONICAL_EVIDENCE_DLL) canonical-evidence verify \
 		--repo-root . \
-		--input $(CANONICAL_EVIDENCE_OUTPUT)
+		--input $(CANONICAL_EVIDENCE_NATIVE)
+	python3 $(CANONICAL_EVIDENCE_POLICY) --repo-root .
+	python3 $(CANONICAL_EVIDENCE_PROJECTION) \
+		--canonical $(CANONICAL_EVIDENCE_NATIVE) \
+		--output $(CANONICAL_EVIDENCE_LEAMAS) \
+		--verify-only
 
 .PHONY: gate
-gate: factorize format-check test-backend test-devhost test-web smoke
+gate: verify-canonical-evidence factorize format-check test-backend test-devhost test-web smoke
 	@echo "=== Native gate passed ==="
 
 

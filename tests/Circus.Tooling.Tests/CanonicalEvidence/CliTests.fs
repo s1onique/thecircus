@@ -13,12 +13,14 @@ module Circus.Tooling.Tests.CanonicalEvidence.CliTests
 // per-process executable cell and so they cannot poison subsequent
 // tests through shared mutable state.
 //
-// Each test asserts:
+// The executable-seam criterion is deliberately narrow and observable:
+// CanonicalEvidence tests do not invoke the Git executable mutators.
+// A static inventory test rejects references to ``setGitExecutable``,
+// ``resetGitExecutable``, and ``gitExecutableCell`` from the complete
+// production CanonicalEvidence source inventory. Isolated concurrent CLI
+// tests separately prove that dependency injection shares no mutable state.
 //
-//   * ``process_global_git_seam_modified: false`` — the bounded Git
-//     adapter's mutable ``gitExecutableCell`` is unchanged before
-//     and after the test body. The fake dependency bypasses the
-//     adapter entirely, so the seam is never touched.
+// Each test also asserts:
 //
 //   * ``production_dispatch_path_exercised: true`` — the production
 //     ``parse`` function is the single entry point for argv; the
@@ -36,9 +38,6 @@ module Circus.Tooling.Tests.CanonicalEvidence.CliTests
 //     a failure (exit code != 0), it explicitly checks that stdout
 //     does NOT contain a PASS line.
 //
-// All tests in this file are sequenced via ``testSequenced`` so the
-// global ``gitExecutableCell`` is sampled deterministically before
-// the first test and after the last test.
 // =============================================================================
 
 open System
@@ -516,9 +515,7 @@ let tests =
 // -----------------------------------------------------------------------------
 // Git executable seam regression
 //
-// This test list records the bounded Git adapter's
-// ``gitExecutableCell`` value before and after all CanonicalEvidence
-// CLI tests, and requires the value to be unchanged. The dependency
+// This list proves dependency isolation and concurrent CLI safety. The dependency
 // fakes in ``hermeticDependencies`` never invoke ``setGitExecutable``
 // or ``resetGitExecutable``, so the seam is never touched.
 // -----------------------------------------------------------------------------

@@ -43,4 +43,5 @@ project.lock.json
 # would create a self-reference (the file would carry the hash of the tree
 # that contains itself) and would invalidate the tree-OID binding.
 .factory/gate-summary.json
+.factory/canonical-evidence.json
 .factory/CORRECTION07_TODO.md

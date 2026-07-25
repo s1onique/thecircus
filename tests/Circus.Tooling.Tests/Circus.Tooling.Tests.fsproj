@@ -62,6 +62,7 @@
     <Compile Include="CanonicalEvidence/ExecutionTests.fs" />
     <Compile Include="CanonicalEvidence/WriterTests.fs" />
     <Compile Include="CanonicalEvidence/CliTests.fs" />
+    <Compile Include="CanonicalEvidence/IntegrationTests.fs" />
 
     <Compile Include="Program.fs" />
   </ItemGroup>
