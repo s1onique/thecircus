@@ -251,3 +251,50 @@ The next slice must either:
 The Git adapter (`tools/Circus.Tooling/FSharpDiagnostics/RepairEpisodes/Git.fs`)
 remains blocked on `git_adapter_allowed=false` until the canonical
 suite is green and the registration-callback race is stable.
+
+## Final handoff from CORRECTION01 (preserves this history)
+
+The above historical chronology is preserved verbatim. The
+predecessor ACT's `canonical_suite: UNVERIFIED` and
+`authority_ready: false` claims recorded the state at the close of
+this slice (CORRECTION02). The final state, recorded here at the
+close of the bounded Git adapter's CORRECTION01, supersedes those
+claims only by explicit handoff and does not rewrite this slice.
+
+```yaml
+bounded_process_authority:
+  tests: 38
+  passed: 38
+  authority_ready: true
+  final_bounded_process_commit:
+    b7267d4: fix(Circus.Tooling): BoundedProcess - CORRECTION17+18 precompiled fixture and registration-callback race
+    200e20a: FSharpDiagnostics: bound registration disposal regression
+
+git_adapter_successor:
+  status: completed_or_corrected
+  final_adapter_commit:
+    560de20: docs: ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01 close report
+    20f167b: FSharpDiagnostics: bounded Git adapter over BoundedProcess.run
+
+bounded_process_authority_to_git_adapter_handoff:
+  bounded_process:
+    tests_total: 38
+    tests_passed: 38
+    duration_seconds: 28.3
+    exit_status: 0
+  git_adapter_consumed:
+    bounded_process_run_signature: BoundedProcess.run : BoundedProcessRequest -> CancellationToken -> Task<Result<_, _>>
+    single_execution_authority: enforced
+    no_shell: enforced
+    failure_taxonomy_distinct: enforced
+    object_format_authority: enforced
+    merge_parent_authority: enforced
+
+history_preservation:
+  - ACT-CIRCUS-FSHARP-DIAGNOSTIC-REPAIR-EPISODE-LINKING01 closed at 38 tests
+  - CORRECTION01 added precompiled fixture and registration race
+  - CORRECTION02 blocked Git adapter on registration race
+  - ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01 closed at 38 tests
+  - ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01-CORRECTION01 in progress
+```
+

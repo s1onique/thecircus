@@ -2,6 +2,7 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Git
 
 // =============================================================================
 // Bounded Git adapter -- ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01
+//                            --CORRECTION01
 // =============================================================================
 //
 // This module is the single, bounded, typed adapter for executing the Git
@@ -9,6 +10,22 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Git
 // through ``BoundedProcess.run``; no ``Process.Start`` call, no shell, no
 // concatenated command line, and no repo-controlled data interpolation
 // happens anywhere in the production path.
+//
+// CORRECTION01 surfaces:
+//
+// * ``runGitTyped`` accepts an explicit ``cancellationToken``.
+// * ``runGitChecked`` is the strict command surface: a non-zero exit is
+//   surfaced as ``GitExitFailure`` carrying the exact argument vector,
+//   exit code, stdout, and stderr.
+// * ``parseGitBytesOrProtocol`` is a deterministic parser entry point
+//   that proves the ``GitProtocolFailure`` branch is reachable.
+// * ``translateBoundedError`` is exposed as ``internal`` so the test
+//   assembly can drive the I/O, wait, and kill translation branches
+//   directly with synthetic ``BoundedProcessFailure`` values.
+// * ``resolveGitIdentityWithParent`` requires
+//   ``beforeCommitInput = explicitParent`` so the before-tree and the
+//   commit-range baseline are guaranteed to be the same historical
+//   point; any other combination fails closed.
 //
 // Contract highlights:
 //
@@ -29,7 +46,7 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Git
 //       GitStdoutOverflowFailure
 //       GitStderrOverflowFailure
 //       GitIoFailure
-//       GitExitFailure (retains argv, exit_code, stdout, stderr)
+//       GitExitFailure (argv, exit_code, stdout, stderr)
 //       GitProtocolFailure
 //     plus a merge-parent ambiguity failure carrying candidate parents.
 //   * Object-format authority: storage format is detected once per
@@ -44,19 +61,23 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Git
 //     has more than one parent, the adapter raises
 //     ``GitMergeAmbiguityFailure`` listing the candidate parent OIDs.
 //     Callers may pass an explicit parent via
-//     ``resolveGitIdentityWithParent``.
+//     ``resolveGitIdentityWithParent``, in which case the supplied
+//     parent must equal the declared before commit so the before-tree
+//     and the commit-range baseline coincide.
 //   * Deterministic decoding: only contractually irrelevant line
 //     endings are normalised (\r\n / bare \r -> \n); UTF-8 path bytes
 //     are preserved, malformed records are rejected, missing required
 //     fields fail closed, extra ambiguous records fail closed.
 //
-// A completed child run is surfaced as ``Ok`` even when its exit code
-// is non-zero: the exit code, stdout, and stderr are part of the
-// success payload, and callers (for example ``verifyOne``) inspect
-// ``ExitCode`` to decide whether to raise a domain exception such as
-// ``GitIdentityFailure``. Only catastrophic bounded-process failures
-// (launch, timeout, cancellation, output overflow, I/O, protocol)
-// become ``Error``. This keeps the failure taxonomy distinct: timeout,
+// A completed child run is surfaced as ``Ok`` from the raw surface even
+// when its exit code is non-zero: the exit code, stdout, and stderr are
+// part of the success payload, and callers (for example
+// ``verifyOne``) inspect ``ExitCode`` to decide whether to raise a
+// domain exception such as ``GitIdentityFailure``. The strict surface
+// ``runGitChecked`` converts any non-zero exit into ``GitExitFailure``.
+// Only catastrophic bounded-process failures (launch, timeout,
+// cancellation, output overflow, I/O, protocol) become ``Error`` from
+// the raw surface. This keeps the failure taxonomy distinct: timeout,
 // cancellation, overflow, and launch failures are NEVER collapsed into
 // a generic non-zero exit with empty streams.
 //
@@ -221,14 +242,15 @@ let private runBoundedSync
     |> Async.AwaitTask
     |> Async.RunSynchronously
 
-let private translateBoundedError
+/// ``translateBoundedError`` is exposed as ``internal`` so the
+/// Circus.Tooling.Tests assembly can drive the I/O, wait, kill, and
+/// termination-cleanup translation branches directly with synthetic
+/// ``BoundedProcessFailure`` values. The production code calls it via
+/// the typed ``runGitTypedWithCancellation`` adapter below.
+let internal translateBoundedError
     (failure: BoundedProcessFailure)
     (argv: string list)
     : GitRunError =
-    // ``NonZeroExit`` is filtered out by ``runGitTyped`` before reaching
-    // here, so the only branch that can match it would be unreachable
-    // in practice. Keep the explicit case anyway so the compiler can
-    // warn when ``BoundedProcessFailure`` adds a new failure kind.
     match failure with
     | NonZeroExit (exitCode, stdout, stderr) ->
         GitRunError.ExitFailure
@@ -320,24 +342,41 @@ let private translateTypedToException (error: GitRunError) : exn =
         GitProtocolFailure detail
 
 // -----------------------------------------------------------------------------
+// Deterministic parser entry point for ProtocolFailure
+// -----------------------------------------------------------------------------
+
+/// ``parseGitBytesOrProtocol`` drives the ``ProtocolFailure`` branch
+/// deterministically: given a parser that returns ``Ok`` or a parse
+/// error string, it returns ``Ok`` or ``ProtocolFailure`` accordingly.
+/// Tests use this entry point to prove the protocol-failure branch is
+/// reachable through production translation logic.
+let parseGitBytesOrProtocol<'a>
+    (parser: byte array -> Result<'a, string>)
+    (bytes: byte array)
+    : Result<'a, GitRunError> =
+    match parser bytes with
+    | Ok v -> Ok v
+    | Error detail -> Error (GitRunError.ProtocolFailure detail)
+
+// -----------------------------------------------------------------------------
 // Single execution authority: every Git command flows through here.
 // -----------------------------------------------------------------------------
 
-/// Run Git with the canonical bounded profile and return a typed
-/// result. This is the primary, exception-free adapter surface used
-/// by the adapter tests and by any future caller that wants to handle
-/// failures as values.
+/// Run Git with the canonical bounded profile and an explicit
+/// ``CancellationToken``. This is the primary, exception-free, raw
+/// adapter surface used by the adapter tests and by any future caller
+/// that wants to handle failures as values. A completed child run is
+/// ALWAYS surfaced as ``Ok`` even when its exit code is non-zero; only
+/// catastrophic bounded-process failures (launch, timeout,
+/// cancellation, output overflow, I/O, protocol) become ``Error``.
 ///
-/// A completed child run is ALWAYS surfaced as ``Ok`` even when its
-/// exit code is non-zero: the exit code, stdout, and stderr are part
-/// of the success payload, and callers (for example ``verifyOne``)
-/// inspect ``ExitCode`` to decide whether to raise a domain
-/// exception such as ``GitIdentityFailure``. Only catastrophic
-/// bounded-process failures (launch, timeout, cancellation, output
-/// overflow, I/O, protocol) become ``Error``.
-let runGitTyped
+/// ``runGitTyped`` is preserved as an alias that uses
+/// ``CancellationToken.None`` so existing callers continue to compile
+/// unchanged.
+let runGitTypedWithCancellation
     (repoPath: string)
     (options: GitRunOptions)
+    (cancellationToken: CancellationToken)
     (args: string list)
     : Result<GitRunSuccess, GitRunError> =
     if String.IsNullOrWhiteSpace repoPath then
@@ -348,7 +387,7 @@ let runGitTyped
                 (sprintf "git: repository path does not exist: %s" repoPath))
     else
         let request = toBoundedRequest repoPath options args
-        match runBoundedSync request with
+        match run request cancellationToken |> Async.AwaitTask |> Async.RunSynchronously with
         | Ok success ->
             Ok {
                 ExitCode = success.ExitCode
@@ -373,10 +412,45 @@ let runGitTyped
             | _ ->
                 Error (translateBoundedError failure args)
 
+/// Raw-surface alias for callers that do not need cancellation.
+let runGitTyped
+    (repoPath: string)
+    (options: GitRunOptions)
+    (args: string list)
+    : Result<GitRunSuccess, GitRunError> =
+    runGitTypedWithCancellation repoPath options CancellationToken.None args
+
+/// Strict command surface. A non-zero exit code is surfaced as
+/// ``GitExitFailure`` carrying the exact argument vector, exit code,
+/// stdout, and stderr. The eight bounded-process failure modes are
+/// surfaced as their dedicated exceptions. This is the surface
+/// production callers use when a non-zero exit must fail closed
+/// rather than be inspected as data.
+let runGitChecked
+    (repoPath: string)
+    (options: GitRunOptions)
+    (args: string list)
+    : GitRunResult =
+    match runGitTypedWithCancellation repoPath options CancellationToken.None args with
+    | Ok success ->
+        if success.ExitCode <> 0 then
+            raise (GitExitFailure
+                    (success.Argv,
+                     success.ExitCode,
+                     success.Stdout,
+                     success.Stderr))
+        { ExitCode = success.ExitCode
+          Stdout = success.Stdout
+          Stderr = success.Stderr
+          Argv = success.Argv }
+    | Error error -> raise (translateTypedToException error)
+
 /// Legacy exception-raising adapter. Kept for ``Engine.fs`` and the
 /// existing ``GitIdentityTests``; internally it forwards to
 /// ``runGitTyped`` and translates every typed error into the matching
-/// dedicated exception.
+/// dedicated exception. Non-zero exits are surfaced as ``Ok`` so
+/// callers (``verifyOne``, ``isAncestor``) can inspect the exit code
+/// and raise a domain exception such as ``GitIdentityFailure``.
 let runGit
     (repoPath: string)
     (options: GitRunOptions)
@@ -598,13 +672,17 @@ let resolveGitIdentity
         ObjectFormat = fmt
     }
 
-/// Same contract as ``resolveGitIdentity`` but accepts an explicit
-/// parent OID. The supplied parent must be one of ``after``'s parents;
-/// the ancestry path is then computed from the explicit parent to
-/// ``after`` so the caller selects the intended change set. The
-/// change set itself (the tree-to-tree diff) is independent of the
-/// parent selection because we compare ``beforeTree`` and ``afterTree``
-/// directly.
+/// Resolve a complete repair-episode Git identity using an explicit
+/// merge parent. The CORRECTION01 contract is that the before-tree and
+/// the commit-range baseline MUST be the same historical point: the
+/// supplied ``explicitParent`` must equal ``beforeCommitInput``, and
+/// ``explicitParent`` must be one of ``afterCommit``'s parents. The
+/// change-set is the tree-to-tree diff between
+/// ``tree(explicitParent)`` and ``tree(afterCommit)``.
+///
+/// A mismatch between ``beforeCommitInput`` and ``explicitParent``
+/// raises ``GitIdentityFailure`` so the adapter never combines a
+/// before-tree from one parent with a commit range rooted at another.
 let resolveGitIdentityWithParent
     (repoRoot: string)
     (options: GitRunOptions)
@@ -616,6 +694,14 @@ let resolveGitIdentityWithParent
     ensureValidInputOid fmt "before" beforeCommitInput
     ensureValidInputOid fmt "after" afterCommitInput
     ensureValidInputOid fmt "explicit parent" explicitParent
+    if beforeCommitInput <> explicitParent then
+        raise
+            (GitIdentityFailure
+                (sprintf
+                    "git: explicit parent %s must equal before-commit %s \
+                     so the before-tree and the commit-range baseline \
+                     coincide"
+                    explicitParent beforeCommitInput))
     let beforeCommit, beforeTree =
         resolveCommitAndTree repoRoot options beforeCommitInput
     let afterCommit, afterTree =

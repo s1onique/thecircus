@@ -2,22 +2,27 @@ module Circus.Tooling.Tests.FSharpDiagnostics.RepairEpisodes.GitAdapterTests
 
 // =============================================================================
 // Bounded Git adapter tests -- ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01
+//                            --CORRECTION01
 // =============================================================================
 //
 // These tests cover the bounded Git adapter contract:
 //
-//   * Working-directory authority: repoPath is honoured even when the test
-//     process current directory is elsewhere.
+//   * Working-directory authority: repoPath is honoured even when the
+//     test process current directory is elsewhere.
 //   * Argument authority: spaces and shell metacharacters stay literal;
 //     no shell participates in command execution.
 //   * Canonical execution profile: 60s timeout, 32 MiB stdout/stderr.
 //   * Distinct failure taxonomy: launch, timeout, cancellation, stdout
-//     overflow, stderr overflow, I/O, exit, protocol failures are each
-//     surfaced as their own typed outcome.
-//   * Object-format authority: SHA-1 / SHA-256 detection; full-width hex
-//     only; unknown formats fail closed.
+//     overflow, stderr overflow, I/O, exit, and protocol failures are
+//     each surfaced through the actual adapter — none is reachable
+//     only through the typed DU without production translation logic.
+//   * Object-format authority: SHA-1 / SHA-256 detection; full-width
+//     hex only; unknown formats fail closed.
 //   * Merge-parent authority: implicit parent selection fails closed;
-//     explicit parent evidence selects the intended change set.
+//     explicit parent evidence requires the before-commit and the
+//     explicit parent to coincide so the before-tree and the
+//     commit-range baseline are the same historical point. Each parent
+//     of an asymmetric merge produces a distinct change set.
 //   * Deterministic regeneration: change-set identity is byte-identical
 //     across runs.
 
@@ -28,6 +33,7 @@ open System.Text
 open System.Threading
 open System.Threading.Tasks
 open Expecto
+open Circus.Tooling.FSharpDiagnostics.Hashing
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.BoundedProcess
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Git
@@ -53,7 +59,7 @@ let private resolveFixturePath () : string =
 let private newTempDir (label: string) : string =
     let dir =
         Path.Combine(
-            (Path.GetTempPath()),
+            Path.GetTempPath(),
             label + "-" + Guid.NewGuid().ToString("N"))
     Directory.CreateDirectory dir |> ignore
     dir
@@ -106,7 +112,11 @@ let private lastCommit (dir: string) : string =
     runGit dir defaultGitRunOptions [ "rev-parse"; "HEAD" ]
     |> fun r -> r.Stdout.Trim()
 
-/// Safe scope for ``withGitExecutable``: restores the seam on dispose
+let private treeOid (dir: string) (commitOid: string) : string =
+    runGit dir defaultGitRunOptions [ "rev-parse"; commitOid + "^{tree}" ]
+    |> fun r -> r.Stdout.Trim()
+
+/// Safe scope for ``setGitExecutable``: restores the seam on dispose
 /// even when the test body raises.
 let private withGitExecutableScope (path: string) : IDisposable =
     setGitExecutable path
@@ -155,7 +165,7 @@ let workingDirectoryTests =
                   runShellIgnore repoDir [ "commit"; "-q"; "-m"; "marker" ]
                   let expected = lastCommit repoDir
                   // CWD is set to a totally unrelated directory.
-                  let unrelated = (Path.GetTempPath())
+                  let unrelated = Path.GetTempPath()
                   use _ = withCwdScope unrelated
                   let result =
                       runGit repoDir canonicalLimits [ "rev-parse"; "HEAD" ]
@@ -215,10 +225,6 @@ let argumentAuthorityTests =
                             "-1"
                             "--pretty=%H $(echo injected) `echo injected` >/dev/null && echo \"quoted arg\"" ]
                   Expect.equal result.ExitCode 0 "log returned success"
-                  // The first token in the pretty-format output must be the
-                  // literal string "$ (echo injected) `echo injected`"
-                  // followed by a redirection marker. The string must NOT
-                  // contain the word "injected" (no command substitution).
                   let line =
                       result.Stdout.Trim().Split('\n').[0]
                   Expect.stringContains line "injected"
@@ -297,7 +303,6 @@ let completionAndFailureTests =
               Expect.equal result.ExitCode 0 "exit code 0"
               Expect.equal (result.Stdout.Length) 5 "stdout bytes"
               Expect.equal (result.Stderr.Length) 7 "stderr bytes"
-              // stdout bytes are a..z cycle
               for i in 0 .. 4 do
                   Expect.equal (result.Stdout.[i]) (char (97 + (i % 26)))
                       "stdout byte ordering"
@@ -309,7 +314,6 @@ let completionAndFailureTests =
           testSequenced <| test "non-zero exit retains exit code and both bounded streams" {
               use _ = withGitExecutableScope "dotnet"
               let fixture = resolveFixturePath ()
-              // First invocation goes through the legacy exception-raising surface.
               let result =
                   runGit
                       (Path.GetTempPath())
@@ -318,7 +322,6 @@ let completionAndFailureTests =
               Expect.equal result.ExitCode 42 "exit code 42 retained"
               Expect.equal (result.Stdout.Length) 3 "stdout length preserved"
               Expect.equal (result.Stderr.Length) 4 "stderr length preserved"
-              // Second invocation goes through the typed surface.
               let typedResult =
                   runGitTyped
                       (Path.GetTempPath())
@@ -357,40 +360,25 @@ let completionAndFailureTests =
               | Ok _ -> failwithf "expected TimeoutFailure, got Ok"
           }
 
-          testSequenced <| test "external cancellation produces GitRunError.CancellationFailure" {
-              // The adapter accepts an optional cancellation token. A
-              // pre-cancelled token is observed before the launch step
-              // and surfaces as a typed CancellationFailure. The
-              // bounded process never starts.
+          testSequenced <| test "cancellation through the adapter produces GitRunError.CancellationFailure" {
+              // The cancellation entry point is exercised through the
+              // adapter, not through BoundedProcess directly. A
+              // pre-cancelled token is observed before launch, so the
+              // adapter maps the bounded-process Cancelled cause to
+              // GitRunError.CancellationFailure through production
+              // translation logic.
               use _ = withGitExecutableScope "dotnet"
               let fixture = resolveFixturePath ()
               let cts = new CancellationTokenSource()
               cts.Cancel()
-              let request = {
-                  Executable = "dotnet"
-                  WorkingDirectory = (Path.GetTempPath())
-                  Arguments = [ fixture; "sleep"; "10000" ]
-                  Environment = []
-                  Limits = {
-                      Timeout = canonicalLimits.Timeout
-                      StdoutLimitBytes =
-                          int canonicalLimits.MaxStdoutBytes
-                      StderrLimitBytes =
-                          int canonicalLimits.MaxStderrBytes
-                  }
-              }
-              let result =
-                  run request cts.Token
-                  |> Async.AwaitTask
-                  |> Async.RunSynchronously
-              match result with
-              | Error Cancelled ->
-                  // Confirms the BoundedProcess-level cause; the Git
-                  // adapter's translation maps this to
-                  // GitRunError.CancellationFailure.
-                  ()
-              | Error e -> failwithf "expected Cancelled, got %A" e
-              | Ok _ -> failwithf "expected Cancelled, got Ok"
+              match runGitTypedWithCancellation
+                        (Path.GetTempPath())
+                        canonicalLimits
+                        cts.Token
+                        [ fixture; "sleep"; "10000" ] with
+              | Error (CancellationFailure _) -> ()
+              | Error e -> failwithf "expected CancellationFailure, got %A" e
+              | Ok _ -> failwithf "expected CancellationFailure, got Ok"
           }
 
           testSequenced <| test "stdout limit at exact boundary succeeds" {
@@ -450,11 +438,7 @@ let completionAndFailureTests =
           testSequenced <| test "stdout limit zero with zero bytes succeeds" {
               use _ = withGitExecutableScope "dotnet"
               let fixture = resolveFixturePath ()
-              let opts = {
-                  canonicalLimits with
-                      MaxStdoutBytes = 0L
-                      MaxStderrBytes = 1024L
-              }
+              let opts = { canonicalLimits with MaxStdoutBytes = 0L; MaxStderrBytes = 1024L }
               match runGitTyped
                         (Path.GetTempPath())
                         opts
@@ -477,40 +461,79 @@ let completionAndFailureTests =
               | Ok _ -> failwithf "expected overflow, got Ok"
           }
 
-          testSequenced <| test "stream/read failure remains distinct from non-zero exit" {
-              // A reader-failure path through BoundedProcess maps to
-              // GitRunError.IoFailure, NOT to ExitFailure. We exercise
-              // the translation function directly so the adapter's
-              // type-level distinction is observable even though the
-              // BoundedProcess authority test already proves the
-              // underlying behaviour.
-              let request = {
-                  Executable = "dotnet"
-                  WorkingDirectory = (Path.GetTempPath())
-                  Arguments = [ resolveFixturePath (); "sleep"; "10000" ]
-                  Environment = []
-                  Limits = {
-                      Timeout = TimeSpan.FromMilliseconds 100.0
-                      StdoutLimitBytes = 1024
-                      StderrLimitBytes = 1024
-                  }
-              }
-              let cts = new CancellationTokenSource()
-              cts.Cancel()
+          testSequenced <| test "I/O failure is reachable through the production translator" {
+              // ``translateBoundedError`` is the production translator
+              // from ``BoundedProcessFailure`` to ``GitRunError``. The
+              // I/O branch must be reachable through this production
+              // path, not merely declared in the typed DU. We drive
+              // every I/O-related ``BoundedProcessFailure`` shape and
+              // confirm it surfaces as ``IoFailure``.
+              let argv = [ "rev-parse"; "HEAD" ]
+              let cases : (BoundedProcessFailure * string) list = [
+                  StdoutReaderFailed "synthetic stdout read failure",
+                  "stdout reader"
+                  StderrReaderFailed "synthetic stderr read failure",
+                  "stderr reader"
+                  WaitFailed "synthetic wait failure",
+                  "wait"
+                  KillFailed "synthetic kill failure",
+                  "kill"
+                  IncompleteOutput (false, true),
+                  "incomplete output"
+              ]
+              for failure, label in cases do
+                  match translateBoundedError failure argv with
+                  | IoFailure _ -> ()
+                  | actual ->
+                      failwithf
+                          "expected IoFailure for %s, got %A"
+                          label actual
+          }
+
+          testSequenced <| test "protocol failure is reachable through the parser entry point" {
+              // ``parseGitBytesOrProtocol`` is the deterministic
+              // parser seam. A parser that returns ``Error`` for any
+              // input is exercised here; the adapter must surface
+              // ``ProtocolFailure`` deterministically.
+              let failingParser : byte array -> Result<int, string> =
+                  fun _ -> Error "synthetic protocol error"
+              match parseGitBytesOrProtocol failingParser [||] with
+              | Error (ProtocolFailure detail) ->
+                  Expect.equal detail "synthetic protocol error"
+                      "protocol failure detail preserved"
+              | Error e -> failwithf "expected ProtocolFailure, got %A" e
+              | Ok _ -> failwithf "expected ProtocolFailure, got Ok"
+          }
+
+          testSequenced <| test "checked-command surface raises GitExitFailure on non-zero exit" {
+              use _ = withGitExecutableScope "dotnet"
+              let fixture = resolveFixturePath ()
+              let argv = [ fixture; "exit-with-both"; "3"; "4"; "42" ]
+              let mutable captured = false
+              try
+                  runGitChecked (Path.GetTempPath()) canonicalLimits argv
+                  |> ignore
+              with
+              | GitExitFailure (capturedArgv, exitCode, stdout, stderr) ->
+                  captured <- true
+                  Expect.equal exitCode 42 "exit code preserved"
+                  Expect.equal (stdout.Length) 3 "stdout length preserved"
+                  Expect.equal (stderr.Length) 4 "stderr length preserved"
+                  Expect.equal capturedArgv argv "argv preserved"
+              | _ -> ()
+              Expect.isTrue captured "GitExitFailure raised"
+          }
+
+          testSequenced <| test "checked-command surface succeeds on zero exit" {
+              use _ = withGitExecutableScope "dotnet"
+              let fixture = resolveFixturePath ()
               let result =
-                  run request cts.Token
-                  |> Async.AwaitTask
-                  |> Async.RunSynchronously
-              // The adapter's translator must produce one of the
-              // distinct failure types; non-zero exit is reserved for
-              // completed child runs and is NOT used to mask
-              // cancellation, timeout, or overflow.
-              match result with
-              | Error BoundedProcessFailure.Cancelled -> ()
-              | Error (BoundedProcessFailure.TimedOut _) -> ()
-              | Error (BoundedProcessFailure.TerminationCleanupFailed _) -> ()
-              | Error e -> failwithf "expected bounded-process failure, got %A" e
-              | Ok _ -> failwithf "expected failure, got Ok"
+                  runGitChecked
+                      (Path.GetTempPath())
+                      canonicalLimits
+                      [ fixture; "empty" ]
+              Expect.equal result.ExitCode 0 "zero exit returns success"
+              Expect.equal result.Stdout "" "stdout empty"
           } ]
 
 // -----------------------------------------------------------------------------
@@ -569,23 +592,19 @@ let identityTests =
                   | _ -> ()
                   Expect.isTrue shortRejected "39-char OID rejected"
                   Expect.isTrue longRejected "41-char OID rejected"
-                  // Also covers before/after combinations to satisfy the
-                  // "wrong-width" dimension in the test matrix.
-                  Expect.isTrue
-                      (try
-                          resolveGitIdentity
-                              repoDir
-                              canonicalLimits
-                              before
-                              shortOid
-                          |> ignore
-                          false
-                       with
-                       | :? GitIdentityFailure -> true
-                       | _ -> false)
+                  let mutable afterSideRejected = false
+                  try
+                      resolveGitIdentity
+                          repoDir
+                          canonicalLimits
+                          before
+                          shortOid
+                      |> ignore
+                  with
+                  | :? GitIdentityFailure -> afterSideRejected <- true
+                  | _ -> ()
+                  Expect.isTrue afterSideRejected
                       "after-side 39-char OID rejected"
-                  // Suppress unused-binding warning for the unused after
-                  // variable when only the shortOid branch is exercised.
                   Expect.isTrue (String.length after > 0) "after non-empty"
               finally
                   cleanup repoDir
@@ -706,12 +725,6 @@ let sha256Tests =
         "FSharpDiagnostics.RepairEpisodes.GitAdapter.sha256"
         [
           testSequenced <| test "sha-256 repository: live proof when supported, parser proof otherwise" {
-              // Try to construct a real SHA-256 repository. Older
-              // Git versions do not support --object-format=sha256
-              // on init; in that case we fall back to a hermetic
-              // parser proof that the 64-character validator is in
-              // place. The hermetic proof is the durable, host-
-              // independent guarantee required by the ACT.
               let parentDir = newTempDir "git-adapter-sha256"
               let mutable liveOk = false
               try
@@ -748,10 +761,6 @@ let sha256Tests =
                           cleanup repoDir
               finally
                   cleanup parentDir
-
-              // Hermetic parser proof: regardless of whether the host
-              // supports sha256, the validator must accept exactly
-              // 64 hex chars.
               Expect.isTrue (isValidOid Sha256 (String('a', 64)))
                   "validator accepts 64 hex chars"
               Expect.isFalse (isValidOid Sha256 (String('a', 65)))
@@ -760,7 +769,6 @@ let sha256Tests =
                   "validator rejects 63-char OID"
               Expect.isFalse (isValidOid Sha256 (String('z', 64)))
                   "validator rejects non-hex chars"
-              // Suppress unused-binding warning when liveOk was not set.
               if not liveOk then
                   Expect.isTrue true "hermetic parser proof suffices"
           } ]
@@ -780,34 +788,27 @@ let repositoryTopologyTests =
                   runShellIgnore repoDir [ "init"; "-q" ]
                   runShellIgnore repoDir [ "config"; "user.email"; "t@t" ]
                   runShellIgnore repoDir [ "config"; "user.name"; "t" ]
-                  // Initial commit on the main branch.
                   File.WriteAllText(Path.Combine(repoDir, "base.txt"), "base\n")
                   runShellIgnore repoDir [ "add"; "base.txt" ]
                   runShellIgnore repoDir [ "-c"; "core.quotepath=false"
                                             ; "commit"; "-q"; "-m"; "initial" ]
                   let cMain0 = lastCommit repoDir
-                  // Create a feature branch with an unrelated change.
                   runShellIgnore repoDir [ "checkout"; "-q"; "-b"; "feature" ]
                   File.WriteAllText(Path.Combine(repoDir, "feature.txt"), "feat\n")
                   runShellIgnore repoDir [ "add"; "feature.txt" ]
                   runShellIgnore repoDir [ "-c"; "core.quotepath=false"
                                             ; "commit"; "-q"; "-m"; "feature-commit" ]
                   let cFeature = lastCommit repoDir
-                  // Switch back and add a different unrelated change.
                   runShellIgnore repoDir [ "checkout"; "-q"; cMain0 ]
                   File.WriteAllText(Path.Combine(repoDir, "main.txt"), "main\n")
                   runShellIgnore repoDir [ "add"; "main.txt" ]
                   runShellIgnore repoDir [ "-c"; "core.quotepath=false"
                                             ; "commit"; "-q"; "-m"; "main-commit" ]
                   let cMain = lastCommit repoDir
-                  // Merge feature back into main with a non-ff merge,
-                  // producing a two-parent merge commit on main.
-                  runShellIgnore repoDir [ "merge"; "--no-ff"
-                                            ; "feature"; "-q"
+                  runShellIgnore repoDir [ "merge"; "--no-ff"; "feature"; "-q"
                                             ; "-m"; "merge-feature" ]
                   let cMerge = lastCommit repoDir
                   Expect.notEqual cMerge cMain "merge commit is different"
-                  // The implicit-parent path must fail closed.
                   let mutable ambiguityCaptured = false
                   let mutable ambiguityParents : string list = []
                   try
@@ -834,97 +835,220 @@ let repositoryTopologyTests =
                   cleanup repoDir
           }
 
-          testSequenced <| test "explicit parent evidence selects the intended change set" {
-              let repoDir = newTempDir "git-adapter-explicit-parent"
+          testSequenced <| test "asymmetric merge: selecting parent one and parent two produce different change sets" {
+              let repoDir = newTempDir "git-adapter-asymmetric-merge"
               try
                   runShellIgnore repoDir [ "init"; "-q" ]
                   runShellIgnore repoDir [ "config"; "user.email"; "t@t" ]
                   runShellIgnore repoDir [ "config"; "user.name"; "t" ]
-                  File.WriteAllText(Path.Combine(repoDir, "base.txt"), "base\n")
-                  runShellIgnore repoDir [ "add"; "base.txt" ]
+                  File.WriteAllText(Path.Combine(repoDir, "shared.txt"), "shared\n")
+                  runShellIgnore repoDir [ "add"; "shared.txt" ]
                   runShellIgnore repoDir [ "-c"; "core.quotepath=false"
                                             ; "commit"; "-q"; "-m"; "initial" ]
                   let cBase = lastCommit repoDir
-                  runShellIgnore repoDir [ "checkout"; "-q"; "-b"; "feature" ]
-                  File.WriteAllText(Path.Combine(repoDir, "feature.txt"), "feat\n")
-                  runShellIgnore repoDir [ "add"; "feature.txt" ]
+                  runShellIgnore repoDir [ "checkout"; "-q"; "-b"; "left" ]
+                  File.WriteAllText(Path.Combine(repoDir, "only_left.txt"), "left\n")
+                  runShellIgnore repoDir [ "add"; "only_left.txt" ]
                   runShellIgnore repoDir [ "-c"; "core.quotepath=false"
-                                            ; "commit"; "-q"; "-m"; "feature-commit" ]
-                  let cFeature = lastCommit repoDir
+                                            ; "commit"; "-q"; "-m"; "left-only" ]
+                  let cLeft = lastCommit repoDir
                   runShellIgnore repoDir [ "checkout"; "-q"; cBase ]
-                  File.WriteAllText(Path.Combine(repoDir, "main.txt"), "main\n")
-                  runShellIgnore repoDir [ "add"; "main.txt" ]
+                  runShellIgnore repoDir [ "checkout"; "-q"; "-b"; "right" ]
+                  File.WriteAllText(Path.Combine(repoDir, "only_right.txt"), "right\n")
+                  runShellIgnore repoDir [ "add"; "only_right.txt" ]
                   runShellIgnore repoDir [ "-c"; "core.quotepath=false"
-                                            ; "commit"; "-q"; "-m"; "main-commit" ]
-                  let cMain = lastCommit repoDir
-                  runShellIgnore repoDir [ "merge"; "--no-ff"
-                                            ; "feature"; "-q"
-                                            ; "-m"; "merge-feature" ]
+                                            ; "commit"; "-q"; "-m"; "right-only" ]
+                  let cRight = lastCommit repoDir
+                  runShellIgnore repoDir [ "checkout"; "-q"; cLeft ]
+                  runShellIgnore repoDir [ "merge"; "--no-ff"; "right"; "-q"
+                                            ; "-m"; "merge-asym" ]
                   let cMerge = lastCommit repoDir
 
-                  // Resolving with the feature parent as the explicit
-                  // parent must succeed and produce a non-empty commit
-                  // range that names the merge commit.
-                  let identity =
+                  let identityFromLeft =
+                      resolveGitIdentityWithParent
+                          repoDir
+                          canonicalLimits
+                          cLeft
+                          cMerge
+                          cLeft
+                  let entriesFromLeft =
+                      computeChangeSet
+                          repoDir
+                          canonicalLimits
+                          identityFromLeft.ObjectFormat
+                          identityFromLeft.BeforeTreeOid
+                          identityFromLeft.AfterTreeOid
+
+                  let identityFromRight =
+                      resolveGitIdentityWithParent
+                          repoDir
+                          canonicalLimits
+                          cRight
+                          cMerge
+                          cRight
+                  let entriesFromRight =
+                      computeChangeSet
+                          repoDir
+                          canonicalLimits
+                          identityFromRight.ObjectFormat
+                          identityFromRight.BeforeTreeOid
+                          identityFromRight.AfterTreeOid
+
+                  Expect.isTrue
+                      (entriesFromLeft
+                       |> List.exists (fun e -> e.CanonicalPath = "only_right.txt"))
+                      "left->merge change set adds only_right.txt"
+                  Expect.isFalse
+                      (entriesFromLeft
+                       |> List.exists (fun e -> e.CanonicalPath = "only_left.txt"))
+                      "left->merge change set does not mention only_left.txt"
+
+                  Expect.isTrue
+                      (entriesFromRight
+                       |> List.exists (fun e -> e.CanonicalPath = "only_left.txt"))
+                      "right->merge change set adds only_left.txt"
+                  Expect.isFalse
+                      (entriesFromRight
+                       |> List.exists (fun e -> e.CanonicalPath = "only_right.txt"))
+                      "right->merge change set does not mention only_right.txt"
+
+                  let idLeft =
+                      computeChangeSetIdentity
+                          identityFromLeft.BeforeTreeOid
+                          identityFromLeft.AfterTreeOid
+                          entriesFromLeft
+                  let idRight =
+                      computeChangeSetIdentity
+                          identityFromRight.BeforeTreeOid
+                          identityFromRight.AfterTreeOid
+                          entriesFromRight
+                  Expect.notEqual
+                      idLeft
+                      idRight
+                      "asymmetric merge: distinct change-set identities"
+              finally
+                  cleanup repoDir
+          }
+
+          testSequenced <| test "mismatched beforeCommitInput and explicit parent fail closed" {
+              let repoDir, _before1, _before2 = initRepoWithCommits ()
+              try
+                  let cBase = _before1
+                  runShellIgnore repoDir [ "checkout"; "-q"; "-b"; "side" ]
+                  File.WriteAllText(Path.Combine(repoDir, "side.txt"), "side\n")
+                  runShellIgnore repoDir [ "add"; "side.txt" ]
+                  runShellIgnore repoDir [ "-c"; "core.quotepath=false"
+                                            ; "commit"; "-q"; "-m"; "side-commit" ]
+                  let cSide = lastCommit repoDir
+                  runShellIgnore repoDir [ "checkout"; "-q"; cBase ]
+                  File.WriteAllText(Path.Combine(repoDir, "main2.txt"), "main2\n")
+                  runShellIgnore repoDir [ "add"; "main2.txt" ]
+                  runShellIgnore repoDir [ "-c"; "core.quotepath=false"
+                                            ; "commit"; "-q"; "-m"; "main2-commit" ]
+                  let cMain = lastCommit repoDir
+                  runShellIgnore repoDir [ "merge"; "--no-ff"; "side"; "-q"
+                                            ; "-m"; "merge" ]
+                  let cMerge = lastCommit repoDir
+                  // beforeCommitInput = cMain, explicitParent = cSide
+                  // These are different historical baselines; the
+                  // adapter must fail closed.
+                  let mutable captured = false
+                  try
                       resolveGitIdentityWithParent
                           repoDir
                           canonicalLimits
                           cMain
                           cMerge
-                          cFeature
-                  Expect.equal identity.BeforeCommitOid cMain
-                      "before commit OID preserved"
-                  Expect.equal identity.AfterCommitOid cMerge
-                      "after commit OID preserved"
-                  Expect.equal identity.ObjectFormat Sha1
-                      "object format detected"
-                  Expect.isTrue
-                      (List.contains cMerge identity.CommitRange
-                       || List.contains cFeature identity.CommitRange)
-                      "commit range names the merge or feature commit"
+                          cSide
+                      |> ignore
+                  with
+                  | :? GitIdentityFailure -> captured <- true
+                  | _ -> ()
+                  Expect.isTrue captured
+                      "mismatched before-commit and explicit parent rejected"
+              finally
+                  cleanup repoDir
+          }
 
-                  // The change set extracted from before-tree to
-                  // after-tree is independent of the chosen parent: it
-                  // is the union of both branches. Compute it twice
-                  // and assert the identity is identical, proving the
-                  // parent choice does not silently alter the diff.
-                  let entries1 =
-                      computeChangeSet
+          testSequenced <| test "resolveGitIdentityWithParent internal consistency" {
+              let repoDir = newTempDir "git-adapter-consistency"
+              try
+                  runShellIgnore repoDir [ "init"; "-q" ]
+                  runShellIgnore repoDir [ "config"; "user.email"; "t@t" ]
+                  runShellIgnore repoDir [ "config"; "user.name"; "t" ]
+                  File.WriteAllText(Path.Combine(repoDir, "a.txt"), "a\n")
+                  runShellIgnore repoDir [ "add"; "a.txt" ]
+                  runShellIgnore repoDir [ "commit"; "-q"; "-m"; "first" ]
+                  let cBefore = lastCommit repoDir
+                  File.WriteAllText(Path.Combine(repoDir, "a.txt"), "a2\n")
+                  runShellIgnore repoDir [ "add"; "a.txt" ]
+                  runShellIgnore repoDir [ "commit"; "-q"; "-m"; "second" ]
+                  let cAfter = lastCommit repoDir
+                  let identity =
+                      resolveGitIdentityWithParent
                           repoDir
                           canonicalLimits
-                          identity.ObjectFormat
-                          identity.BeforeTreeOid
-                          identity.AfterTreeOid
-                  let id1 =
-                      computeChangeSetIdentity
-                          identity.BeforeTreeOid
-                          identity.AfterTreeOid
-                          entries1
-                  let id2 =
-                      computeChangeSetIdentity
-                          identity.BeforeTreeOid
-                          identity.AfterTreeOid
-                          entries1
-                  Expect.equal id1 id2 "change-set identity is deterministic"
-                  // main.txt is present in both the before-tree and
-                  // the merge-tree, so the tree-to-tree diff does not
-                  // mention it. feature.txt is the only new entry
-                  // because it was added by the merge.
-                  Expect.isFalse
-                      (entries1
-                       |> List.exists (fun e -> e.CanonicalPath = "main.txt"))
-                      "main.txt not in change set (present in both trees)"
+                          cBefore
+                          cAfter
+                          cBefore
+                  // The before-tree must equal the tree of the
+                  // explicit parent (which equals the before-commit).
+                  let expectedBeforeTree = treeOid repoDir cBefore
+                  Expect.equal identity.BeforeCommitOid cBefore
+                      "BeforeCommitOid equals explicit parent"
+                  Expect.equal identity.BeforeTreeOid expectedBeforeTree
+                      "BeforeTreeOid equals tree(explicit parent)"
+                  Expect.equal identity.AfterCommitOid cAfter
+                      "AfterCommitOid preserved"
                   Expect.isTrue
-                      (entries1
-                       |> List.exists (fun e -> e.CanonicalPath = "feature.txt"))
-                      "feature.txt present in change set"
+                      (List.contains cAfter identity.CommitRange
+                       || List.isEmpty identity.CommitRange)
+                      "commit range is consistent"
+              finally
+                  cleanup repoDir
+          }
+
+          testSequenced <| test "repeated resolveGitIdentityWithParent is byte-identical" {
+              let repoDir, cBase, _ = initRepoWithCommits ()
+              try
+                  runShellIgnore repoDir [ "checkout"; "-q"; "-b"; "side" ]
+                  File.WriteAllText(Path.Combine(repoDir, "side2.txt"), "side2\n")
+                  runShellIgnore repoDir [ "add"; "side2.txt" ]
+                  runShellIgnore repoDir [ "-c"; "core.quotepath=false"
+                                            ; "commit"; "-q"; "-m"; "side2" ]
+                  let cSide = lastCommit repoDir
+                  runShellIgnore repoDir [ "checkout"; "-q"; cBase ]
+                  File.WriteAllText(Path.Combine(repoDir, "main3.txt"), "main3\n")
+                  runShellIgnore repoDir [ "add"; "main3.txt" ]
+                  runShellIgnore repoDir [ "-c"; "core.quotepath=false"
+                                            ; "commit"; "-q"; "-m"; "main3" ]
+                  let cMain = lastCommit repoDir
+                  runShellIgnore repoDir [ "merge"; "--no-ff"; "side"; "-q"
+                                            ; "-m"; "merge" ]
+                  let cMerge = lastCommit repoDir
+                  let id1 =
+                      resolveGitIdentityWithParent
+                          repoDir
+                          canonicalLimits
+                          cMain
+                          cMerge
+                          cMain
+                  let id2 =
+                      resolveGitIdentityWithParent
+                          repoDir
+                          canonicalLimits
+                          cMain
+                          cMerge
+                          cMain
+                  Expect.equal id1 id2
+                      "repeated resolution is byte-identical"
               finally
                   cleanup repoDir
           }
 
           testSequenced <| test "invalid repository path produces GitRunError.LaunchFailure" {
               let nonexistent = Path.Combine(
-                  (Path.GetTempPath()),
+                  Path.GetTempPath(),
                   "nonexistent-" + Guid.NewGuid().ToString("N"))
               match runGitTyped
                         nonexistent
@@ -936,10 +1060,6 @@ let repositoryTopologyTests =
           }
 
           testSequenced <| test "non-repository path produces non-zero exit and stderr is preserved" {
-              // A path that exists but is not a git repository causes
-              // git rev-parse to exit non-zero. The adapter surfaces
-              // this as a typed Ok with the exit code and stderr, so
-              // callers can decide whether to raise.
               let nonRepo = newTempDir "git-adapter-non-repo"
               try
                   match runGitTyped
@@ -1017,7 +1137,3 @@ let deterministicRegenerationTests =
               finally
                   cleanup repoDir
           } ]
-
-// F# exceptions expose their single payload field directly. No
-// extension is needed; ex.Data0 on the caught exception
-// returns the carried string list.
