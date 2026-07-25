@@ -1,2 +1,6 @@
 # Enforce LF line endings for CSV files
 *.csv text eol=lf
+# Leamas-targeted digest is a tooling-generated artifact; preserve
+# embedded whitespace verbatim so `git diff --check` does not flag
+# echoed recipe content.
+factory/evidence/digest-*.json whitespace=-trailing-space,-space-before-tab
