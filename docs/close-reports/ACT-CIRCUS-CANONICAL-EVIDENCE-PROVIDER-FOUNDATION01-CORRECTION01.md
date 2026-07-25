@@ -34,17 +34,30 @@ baseline_commit_oid:    5f1f7f99d57aaa133e76679c8bb6aa90620ebc1e
 baseline_tree_oid:      3a3a892e4924e343ea3cf83638c48ace9b7ad26f
 ```
 
-## Final identities (this checkpoint)
+## Partial checkpoint (this checkpoint)
 
 ```yaml
-implementation_commit_oid:  <resolved at commit time>
-implementation_tree_oid:    <resolved at commit time>
-tested_commit_oid:          <resolved at commit time>
-tested_tree_oid:            <resolved at commit time>
+partial_checkpoint_commit_oid: 7fb558ba273e9f9ca2d1b39c6bd6dd7a771ca490
+partial_checkpoint_tree_oid:   8095e50d319619a4ec2af1f5ff100295d6c93121
+origin_main_oid:               7fb558ba273e9f9ca2d1b39c6bd6dd7a771ca490
+verdict:                       PARTIAL_CHECKPOINT
+publication:
+  ordinary_fast_forward: true
+  force_update:          false
 parent_closure_tag_name:        act-canonical-evidence-foundation-act-v1
-correction_closure_tag_name:    <reserved at publication>
+correction_closure_tag_name:    <reserved at CORRECTION02>
 ancestor_tags_unchanged:        true
 ```
+
+## Blocked tests (recorded for forensic purposes)
+
+The three blocked CLI tests and their pre-correction failure modes:
+
+| # | Test name                                  | Pre-correction failure mode                                                                 |
+|---|--------------------------------------------|---------------------------------------------------------------------------------------------|
+| 41 | regenerate succeeds with valid inputs      | `gitExecutableCell` overwritten by preceding `BoundedProcessTests` fixture; production dispatch path failed to resolve identity in a temp repo because the mutable cell pointed at the fixture DLL. |
+| 42 | verify succeeds for current valid evidence | Same `gitExecutableCell` cause; `verify` invokes `resolveIdentity` which read through the polluted cell. |
+| 43 | verify fails for stale evidence             | Same `gitExecutableCell` cause; the stale-evidence identity check could not compare identities because the cell pointed at the fixture. |
 
 ## Required tests (44 total)
 

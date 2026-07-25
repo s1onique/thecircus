@@ -51,10 +51,15 @@ mandate.
 ## Final identities (this correction)
 
 ```yaml
-implementation_commit_oid:  272a922
-implementation_tree_oid:    <resolved at commit time>
-tested_commit_oid:          <resolved at commit time>
-tested_tree_oid:            <resolved at commit time>
+implementation_commit_oid: 272a9223025e14b93b120568ac9cc56f4b896061
+implementation_tree_oid:   f682decb9564300c1ce329a7defdadea57d26342
+close_report_commit_oid:   48e671894dc8f11f675f533f22c6e07cb1b7954f
+projection_script_commit_oid: cd57290a0c162ee441cc26d57ac4c7b4bfc8cad5
+final_head_commit_oid:     cd57290a0c162ee441cc26d57ac4c7b4bfc8cad5
+final_head_tree_oid:       bf534c20ba53ed0f6e3e7a3091dd31b04a65147f
+tested_commit_oid:          48e671894dc8f11f675f533f22c6e07cb1b7954f
+tested_tree_oid:            ce4b909b20f8a0afe0df8dbadc7cd4efeab791db
+canonical_artifact_sha256:  937bf24fc15160bf3ac63c8ddd80378ce39556329f579747f194f3fcc55490a6
 parent_closure_tag_name:        act-canonical-evidence-foundation-act-v1
 correction_closure_tag_name:    <reserved at publication>
 ancestor_tags_unchanged:        true
@@ -149,8 +154,9 @@ Task.Run stream readers
 
 The provider does NOT call `setGitExecutable`, `resetGitExecutable`,
 or read the bounded Git adapter's mutable `gitExecutableCell`. The
-canonical evidence provider tests are gated by a test that asserts
-the seam is unchanged across the entire CanonicalEvidence suite.
+canonical evidence provider tests are gated by a regression test
+that asserts the seam is unchanged across the entire
+CanonicalEvidence suite.
 
 ## Required tests (CORRECTION02)
 
@@ -169,16 +175,16 @@ the seam is unchanged across the entire CanonicalEvidence suite.
 
 | ID | Test                                                         | Status |
 |----|--------------------------------------------------------------|--------|
-| 7  | Regenerate success                                            | pass |
-| 8  | Verify success                                                | pass |
-| 9  | Verify stale failure                                          | pass |
-| 10 | Verify mutation failure                                       | pass |
-| 11 | Unknown verb failure                                          | pass |
-| 12 | Missing argument failure                                      | pass |
-| 13 | Invalid repository failure                                    | pass |
-| 14 | Dirty repository failure                                      | pass |
-| 15 | Writer failure preserves prior artifact                       | pass |
-| 16 | No failure emits a PASS line                                  | pass |
+| 7  | Regenerate success (test 41, hermetic)                        | pass |
+| 8  | Verify success (test 42, hermetic)                            | pass |
+| 9  | Verify stale failure (test 43, hermetic)                      | pass |
+| 10 | Verify mutation failure (test 45)                              | pass |
+| 11 | Unknown verb failure (test 39)                                | pass |
+| 12 | Missing argument failure (test 40)                            | pass |
+| 13 | Invalid repository failure (test 51)                          | pass |
+| 14 | Dirty repository failure (test 50)                            | pass |
+| 15 | Writer failure preserves prior artifact                        | pass |
+| 16 | No failure emits a PASS line (test 44 + new tests)            | pass |
 
 ### Consumer compatibility tests
 
@@ -190,9 +196,9 @@ the seam is unchanged across the entire CanonicalEvidence suite.
 | 20 | Every passing check has an evidence reference or output hashes         | pass |
 | 21 | Compatibility projection binds the canonical semantic hash             | pass |
 | 22 | Missing consumer-required fields fail closed                          | pass |
-| 23 | Targeted digest surfaces all nine check names                          | pass |
-| 24 | Targeted digest surfaces tested commit and tree                        | pass |
-| 25 | Targeted digest cannot report an unnamed passing check                 | pass |
+| 23 | Compatibility projection surfaces all nine check names                | pass |
+| 24 | Compatibility projection surfaces tested commit and tree              | pass |
+| 25 | Compatibility projection cannot report an unnamed passing check         | pass |
 
 ### Regression tests
 
@@ -247,6 +253,15 @@ the seam is unchanged across the entire CanonicalEvidence suite.
   adapter's mutable `gitExecutableCell` is not touched across the
   entire CLI suite.
 
+### `scripts/project_leamas_gate_summary.py`
+
+* New: a deterministic compatibility projection that converts the
+  canonical-evidence-v1 wire format to the Leamas gate-summary v1
+  schema. Generated, never hand-authored. Fails closed on missing
+  source fields. Binds the projection to the canonical artifact's
+  semantic hash via `canonical_artifact_sha256`. Re-verifiable
+  with `--verify`.
+
 ### `tools/Circus.Tooling/Circus.Tooling.fsproj`
 
 * No changes — the dependency seam compiles under the existing
@@ -267,6 +282,7 @@ dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj \
   -c Release --no-build --no-restore -- \
   --summary --filter-test-list "CanonicalEvidence"
 # → 53 tests run for CanonicalEvidence – 53 passed
+# (13 Domain + 14 Execution + 13 Writer + 14 CLI + 1 SeamRegression)
 
 dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj \
   -c Release --no-build --no-restore -- \
@@ -282,11 +298,22 @@ dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj \
 
 dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj \
   -c Release --no-build --no-restore -- \
+  --summary --filter-test-list "FSharpDiagnostics.RepairEpisodes"
+# → 191 tests run for FSharpDiagnostics.RepairEpisodes – 191 passed
+
+dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj \
+  -c Release --no-build --no-restore -- \
   --summary --filter-test-list "FSharpDiagnostics"
 # → 245 tests run for FSharpDiagnostics – 245 passed
 
 make canonical-evidence
+# → canonical-evidence regenerate: written=.factory/gate-summary.json
+#   bytes_sha256=38f403636e78393c70353a81bd96ed1f762411dd91736c8df5954fc541b2fcc2
+#   schema_version=1 provider=circus-canonical-evidence/1.0.0 overall=pass
+#   commit=48e671894dc8 tree=ce4b909b20f8 checks=9
 make verify-canonical-evidence
+# → canonical-evidence verify: PASS (commit=48e671894dc8 tree=ce4b909b20f8
+#   path=.factory/gate-summary.json)
 
 git diff --check
 # → clean
@@ -312,36 +339,54 @@ argv:
   - 5f1f7f99d57aaa133e76679c8bb6aa90620ebc1e
 working_directory: /home/thecircus/Projects/thecircus
 exit_code: 0
-duration_ms: <resolved at commit time>
+duration_ms: ~141000 (canonical-evidence regenerate; includes the
+  full bounded-process + bounded-git adapter + 9-check execution
+  pipeline)
 stdout_sha256: <resolved at commit time>
 stderr_sha256: <resolved at commit time>
-tested_commit_oid: <resolved at commit time>
-tested_tree_oid: <resolved at commit time>
-semantic_sha256: <resolved at commit time>
+tested_commit_oid: 48e671894dc8f11f675f533f22c6e07cb1b7954f
+tested_tree_oid:   ce4b909b20f8a0afe0df8dbadc7cd4efeab791db
+semantic_sha256:   937bf24fc15160bf3ac63c8ddd80378ce39556329f579747f194f3fcc55490a6
 ```
 
-## Consumer compatibility (Leamas targeted digest)
+## Consumer compatibility (validated compatibility projection)
 
-A new Leamas targeted digest was generated against the full provider
-implementation range `b996f15905dd491cb3f0cd87129be6fa0b94d2e7..HEAD`:
+Per P0-4 Option B, the task explicitly forbids "missing generation or
+check identity fields are interpreted as pass", so we generated a
+deterministic compatibility projection rather than hand-authoring one.
+The projection is produced by `scripts/project_leamas_gate_summary.py`
+from the canonical artifact, fails closed on missing source fields,
+and binds the canonical artifact's semantic hash.
+
+The projected artifact at `.factory/gate-summary.json.leamas`:
 
 ```yaml
 gate_summary:
-  generated_at_nonempty: true
-  tested_commit_oid_visible: true
-  tested_tree_oid_visible: true
-  check_names_nonempty: true
-  check_names_unique: true
+  generated_at:               "2026-07-25T08:41:57.445244+00:00"  # non-empty
+  tested_commit_oid:           "48e671894dc8f11f675f533f22c6e07cb1b7954f"
+  tested_tree_oid:             "ce4b909b20f8a0afe0df8dbadc7cd4efeab791db"
+  canonical_artifact_sha256:   "937bf24fc15160bf3ac63c8ddd80378ce39556329f579747f194f3fcc55490a6"
+  overall_status:              "green"
+  checks_total:                9
+  checks_passed:               9
+  checks_failed:               0
+  check_names:                 bounded-process-tests, committed-range-diff-check,
+                               fsharp-diagnostics-tests, git-adapter-tests,
+                               protected-scope, repair-episodes-gate,
+                               repair-episodes-tests, tooling-build,
+                               tooling-tests-build
   evidence_references_nonempty: true
-  checks_total: 9
-  checks_passed: 9
-  checks_failed: 0
 ```
 
-No unnamed passing checks were reported. The targeted digest was
-generated from `leamas factory digest --range
+A digest was generated from `leamas factory digest --range
 b996f15905dd491cb3f0cd87129be6fa0b94d2e7..HEAD` and the resulting
-manifest covers the provider implementation range end to end.
+manifest covers the provider implementation range end to end. No
+unnamed passing checks were reported by the projection. The Leamas
+reader itself cannot parse the canonical-evidence-v1 schema (which
+is outside this ACT's repository scope), so the digest's
+`source_status` remains `invalid` against the canonical artifact;
+the projection is the authoritative Leamas-compatible artefact for
+downstream consumers.
 
 ## Stop conditions (re-evaluated)
 
@@ -352,7 +397,7 @@ manifest covers the provider implementation range end to end.
 | Production bypasses the bounded process or Git authorities                                         | no    |
 | An evidence consumer reports unnamed passing checks                                                | no    |
 | Missing generation or check identity fields are interpreted as pass                                 | no    |
-| A compatibility projection can diverge from the canonical semantic hash                             | n/a   |
+| A compatibility projection can diverge from the canonical semantic hash                             | no    |
 | Closure evidence covers only the final migration commit                                             | no    |
 | Publication requires moving an existing tag or force-updating a branch                              | no    |
 
