@@ -70,44 +70,6 @@ let private consumeFlag (flag: string) (args: string list) : Result<string * str
     | v :: rest -> Ok (v, rest)
     | _ -> Error (sprintf "missing value for %s" flag)
 
-/// Resolve the active scope declaration path.  Preference order:
-///
-///   1. The ``--scope-declaration <path>`` CLI argument.
-///
-///   2. The tracked repository pointer ``<repoRoot>/.factory/active-scope.json``.
-///
-/// If neither source is present, the protected-scope check is
-/// unavailable and the canonical evidence regeneration must fail
-/// closed; the empty string is returned and the caller must treat
-/// that as a missing declaration.
-let private resolveScopeDeclaration (repoRoot: string) (scopeDeclaration: string option) : string =
-    match scopeDeclaration with
-    | Some s when not (String.IsNullOrWhiteSpace s) -> s
-    | _ ->
-        let pointerPath = Path.Combine(repoRoot, ".factory", "active-scope.json")
-        if File.Exists pointerPath then
-            // Simple line-based parser: the active-scope.json is a
-            // strict JSON object with a single "declaration_path"
-            // string field.  The full F# validator lives in the
-            // tooling tests; this minimal parser is sufficient for
-            // the CLI's fallback path.
-            let lines = File.ReadAllLines(pointerPath)
-            let mutable declPath = ""
-            for line in lines do
-                let trimmed = line.Trim().TrimEnd(',')
-                if trimmed.StartsWith("\"declaration_path\"") then
-                    let colonIdx = trimmed.IndexOf(':')
-                    if colonIdx > 0 then
-                        let afterColon = trimmed.Substring(colonIdx + 1).Trim()
-                        if afterColon.StartsWith("\"") then
-                            let startIdx = 1
-                            let endIdx = afterColon.LastIndexOf("\"")
-                            if endIdx > startIdx then
-                                declPath <- afterColon.Substring(startIdx, endIdx - startIdx)
-            declPath
-        else
-            ""
-
 let private parse (argv: string list) : Result<Command, string> =
     match argv with
     | [] | [ "help" ] | [ "-h" ] | [ "--help" ] -> Ok HelpCmd
@@ -259,11 +221,11 @@ let private renderDependencyVerifySummary (r: DependencyVerifyOutcome) : string 
 // -----------------------------------------------------------------------------
 
 let runRegenerate (repoRoot: string) (outputPath: string) (baselineCommit: string) (scopeDeclaration: string option) : int =
-    let effectiveScope = resolveScopeDeclaration repoRoot scopeDeclaration
-    if String.IsNullOrEmpty effectiveScope then
-        stderr.WriteLine "canonical-evidence regenerate: FAIL (no scope declaration; supply --scope-declaration or create .factory/active-scope.json)"
+    match scopeDeclaration with
+    | None ->
+        stderr.WriteLine "canonical-evidence regenerate: FAIL (legacy entry point requires --scope-declaration)"
         ExitCode.operationalError
-    else
+    | Some effectiveScope ->
         match generate repoRoot baselineCommit effectiveScope with
         | Result.Error failure ->
             stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (generateFailureToString failure))
@@ -292,13 +254,14 @@ let runRegenerate (repoRoot: string) (outputPath: string) (baselineCommit: strin
                     if overall = "pass" then ExitCode.pass
                     else ExitCode.policyFailure
 
-let runVerify (repoRoot: string) (inputPath: string) (_scopeDeclaration: string option) : int =
-    let result = verify inputPath repoRoot
+let runVerify (repoRoot: string) (inputPath: string) (scopeDeclaration: string option) : int =
+    let deps = productionDependencies ()
+    let result = verifyWithDependencies deps inputPath repoRoot scopeDeclaration
     let verdict =
         match result.Failure with
         | Some _ -> ExitCode.policyFailure
         | None -> ExitCode.pass
-    let text = renderLegacyVerifySummary result
+    let text = renderDependencyVerifySummary result
     match result.Failure with
     | Some _ -> stderr.WriteLine(text)
     | None -> stdout.WriteLine(text)
@@ -315,12 +278,7 @@ let internal runRegenerateWithDependencies
     (baselineCommit: string)
     (scopeDeclaration: string option)
     : int =
-    let effectiveScope = resolveScopeDeclaration repoRoot scopeDeclaration
-    if String.IsNullOrEmpty effectiveScope then
-        stderr.WriteLine "canonical-evidence regenerate: FAIL (no scope declaration; supply --scope-declaration or create .factory/active-scope.json)"
-        ExitCode.operationalError
-    else
-        match regenerateWithDependencies deps repoRoot baselineCommit effectiveScope with
+    match regenerateWithDependencies deps repoRoot baselineCommit scopeDeclaration with
         | Result.Error failure ->
             stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (regenerateFailureToString failure))
             ExitCode.operationalError
@@ -337,7 +295,7 @@ let internal runRegenerateWithDependencies
                 let overall = statusToken evidence.OverallStatus
                 let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
                 stdout.WriteLine(renderRegenerateSummary evidence outputPath writeOutcome.CanonicalSha256)
-                let verifyOutcome = verifyWithDependencies deps outputPath repoRoot
+                let verifyOutcome = verifyWithDependencies deps outputPath repoRoot scopeDeclaration
                 match verifyOutcome.Failure with
                 | Some f ->
                     stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (dependencyVerifyFailureToString f))
@@ -352,7 +310,7 @@ let internal runVerifyWithDependencies
     (inputPath: string)
     (scopeDeclaration: string option)
     : int =
-    let result = verifyWithDependencies deps inputPath repoRoot
+    let result = verifyWithDependencies deps inputPath repoRoot scopeDeclaration
     let verdict =
         match result.Failure with
         | Some _ -> ExitCode.policyFailure

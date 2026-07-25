@@ -82,6 +82,11 @@ type CanonicalEvidence = {
     TestedCommitOid: string
     TestedTreeOid: string
     ObjectFormat: string
+    ActiveScopeActId: string
+    ActiveScopePointerBlobOid: string
+    ScopeDeclarationPath: string
+    DeclarationBlobOid: string
+    BaselineCommitOid: string
     Checks: EvidenceCheckResult list
     OverallStatus: EvidenceStatus
     SemanticSha256: string
@@ -299,6 +304,16 @@ let internal renderCanonicalisationForm (e: CanonicalEvidence) : string =
     sb.Append(escapeJsonString e.TestedTreeOid) |> ignore
     sb.Append ",\"object_format\":" |> ignore
     sb.Append(escapeJsonString e.ObjectFormat) |> ignore
+    sb.Append ",\"active_scope_act_id\":" |> ignore
+    sb.Append(escapeJsonString e.ActiveScopeActId) |> ignore
+    sb.Append ",\"active_scope_pointer_blob_oid\":" |> ignore
+    sb.Append(escapeJsonString e.ActiveScopePointerBlobOid) |> ignore
+    sb.Append ",\"scope_declaration_path\":" |> ignore
+    sb.Append(escapeJsonString e.ScopeDeclarationPath) |> ignore
+    sb.Append ",\"declaration_blob_oid\":" |> ignore
+    sb.Append(escapeJsonString e.DeclarationBlobOid) |> ignore
+    sb.Append ",\"baseline_commit_oid\":" |> ignore
+    sb.Append(escapeJsonString e.BaselineCommitOid) |> ignore
     sb.Append ",\"checks\":[" |> ignore
     let sortedChecks =
         e.Checks |> List.sortBy (fun c -> c.Id, c.CommandArgv) |> List.toSeq

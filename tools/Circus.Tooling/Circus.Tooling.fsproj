@@ -69,6 +69,11 @@
          and consume BoundedProcess.run as its single execution authority. -->
     <Compile Include="FSharpDiagnostics\RepairEpisodes\BoundedProcess.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Git.fs" />
+    <!-- Strict active-scope parser and bounded Git binding authority
+         (ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION03).
+         ScopeAuthority compiles before every production consumer. -->
+    <Compile Include="ScopeAuthority\Domain.fs" />
+    <Compile Include="ScopeAuthority\Authority.fs" />
     <!-- Canonical evidence provider (ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION01).
          Compile order is fixed: Domain must precede Serialization, Validation, Provider, and Cli;
          the provider must precede the top-level Cli dispatcher. -->

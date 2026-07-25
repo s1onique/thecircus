@@ -1,31 +1,13 @@
 module Circus.Tooling.EvidenceValidator.Validation
 
 // =============================================================================
-// Evidence validator – validation logic
+// Exact committed-evidence validation
 //
-// ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION01
-//
-// Pure validation functions that take the parsed JSON document and
-// the resolved containing commit OID and return a ``ValidationResult``.
-//
-// The validator is composed of two concerns:
-//
-//   * Extract-the-fields: retrieve ``tested_subject_commit_oid``,
-//     ``evidence_payload_sha256``, and the documented placeholder.
-//     Missing fields, wrong types, and placeholder width mismatches
-//     are reported as issues with stable tokens.
-//
-//   * Verify-the-claims: produce the canonical JSON form, replace
-//     the payload hash field with the placeholder, compute SHA-256,
-//     and compare. Also reject any identity field whose value equals
-//     the containing commit OID.
-//
-// The canonical JSON form is produced by the
-// ``renderCanonicalRoot`` helper below. The helper MANUALLY walks the
-// parsed JSON document and emits keys in sorted order with no
-// whitespace. This matches the canonicalisation the evidence file
-// was produced with and avoids any environmental dependency on
-// ``System.Text.Json`` serializer settings.
+// Every Git operation uses the bounded raw-byte adapter.  The explicit subject
+// S and evidence commit E are resolved as commits, E:path is resolved as a
+// blob, working bytes are compared byte-for-byte with that blob, S's tree is
+// checked against the payload, and S must be a strict ancestor of E.  Any Git
+// operational failure is represented separately and can never yield PASS.
 // =============================================================================
 
 open System
@@ -34,269 +16,639 @@ open System.Globalization
 open System.IO
 open System.Text
 open System.Text.Json
+open System.Text.RegularExpressions
 
-open Circus.Tooling.EvidenceValidator.Domain
 open Circus.Tooling.FSharpDiagnostics.Hashing
+open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Git
+open Circus.Tooling.ScopeAuthority.Domain
+open Circus.Tooling.EvidenceValidator.Domain
+open Circus.Tooling.CanonicalEvidence.Serialization
+open Circus.Tooling.CanonicalEvidence.Validation
 
-// -----------------------------------------------------------------------------
-// Field extraction
-// -----------------------------------------------------------------------------
-
-type EvidenceSnapshot = {
-    SubjectCommitOid: string option
-    SubjectTreeOid: string option
-    PayloadHash: string option
-    Placeholder: string option
+type EvidenceDependencies = {
+    RunGit: string -> string list -> Result<int * byte array * byte array, string>
+    ReadWorkingBytes: string -> Result<byte array, string>
 }
 
-let private tryGetString (el: JsonElement) (name: string) : string option =
-    let mutable found = Unchecked.defaultof<JsonElement>
-    if el.TryGetProperty(name, &found) then
-        if found.ValueKind = JsonValueKind.String then
-            Some (found.GetString())
-        else
-            None
-    else
-        None
+let productionDependencies () =
+    { RunGit =
+        fun repoRoot arguments ->
+            match runGitBytesTyped repoRoot defaultGitRunOptions arguments with
+            | Error error -> Error(sprintf "%A" error)
+            | Ok result -> Ok(result.ExitCode, result.Stdout, result.Stderr)
+      ReadWorkingBytes =
+        fun path ->
+            try
+                if File.Exists path then
+                    Ok(File.ReadAllBytes path)
+                else
+                    Error("file not found: " + path)
+            with error ->
+                Error(sprintf "%s: %s" (error.GetType().Name) error.Message) }
 
-let extractSnapshot (raw: string) : Result<EvidenceSnapshot, Issue> =
+exception private PayloadException of Issue
+exception private OperationalException of string * string
+
+let private payloadFail issue =
+    raise (PayloadException issue)
+
+let private operationalFail operation detail =
+    raise (OperationalException(operation, detail))
+
+let private isAsciiSha256 (value: string) =
+    not (isNull value)
+    && value.Length = 64
+    && value
+       |> Seq.forall (fun c ->
+           (c >= '0' && c <= '9')
+           || (c >= 'a' && c <= 'f')
+           || (c >= 'A' && c <= 'F'))
+
+let private equalOid left right =
+    String.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+
+let private strictUtf8 (label: string) (bytes: byte array) =
     try
-        let doc = JsonDocument.Parse(raw)
-        let root = doc.RootElement
-        if root.ValueKind <> JsonValueKind.Object then
-            Error (NotJsonObject "<input>")
-        else
-            Ok {
-                SubjectCommitOid = tryGetString root "tested_subject_commit_oid"
-                SubjectTreeOid = tryGetString root "tested_subject_tree_oid"
-                PayloadHash = tryGetString root "evidence_payload_sha256"
-                Placeholder = tryGetString root "evidence_payload_sha256_input_placeholder"
-            }
-    with ex ->
-        Error (NotJsonObject (sprintf "json parse failed: %s" ex.Message))
+        UTF8Encoding(false, true).GetString(bytes)
+    with :? DecoderFallbackException as error ->
+        operationalFail label ("invalid UTF-8: " + error.Message)
 
-// -----------------------------------------------------------------------------
-// Canonical JSON form
-//
-// Emit a strict, deterministic JSON string. Keys are sorted; strings
-// are escaped per RFC 8259; numbers use invariant culture. The output
-// has no whitespace between tokens.
-//
-// This is the canonical form the validator expects. It deliberately
-// does NOT rely on the order in which ``System.Text.Json`` happens to
-// serialise properties — the manual walk guarantees stability across
-// runtime versions and builds.
-// -----------------------------------------------------------------------------
-
-let private escapeJsonString (s: string) : string =
-    let sb = StringBuilder(s.Length + 2)
-    sb.Append '"' |> ignore
-    for c in s do
-        if c = '\\' then sb.Append("\\\\") |> ignore
-        elif c = '"' then sb.Append("\\\"") |> ignore
-        elif c = '\n' then sb.Append("\\n") |> ignore
-        elif c = '\r' then sb.Append("\\r") |> ignore
-        elif c = '\t' then sb.Append("\\t") |> ignore
-        elif int c < 0x20 then
-            sb.AppendFormat(CultureInfo.InvariantCulture, "\\u{0:x4}", int c) |> ignore
-        else sb.Append c |> ignore
-    sb.Append '"' |> ignore
-    sb.ToString()
-
-let private compareKeys (a: string) (b: string) : int =
-    String.Compare(a, b, StringComparison.Ordinal)
-
-let rec private renderValue (sb: StringBuilder) (el: JsonElement) : unit =
-    match el.ValueKind with
+let rec private rejectDuplicates context (element: JsonElement) =
+    match element.ValueKind with
     | JsonValueKind.Object ->
-        sb.Append '{' |> ignore
-        let mutable keys = ResizeArray<string>()
-        for p in el.EnumerateObject() do
-            keys.Add(p.Name)
-        let sortedKeys = keys |> Seq.sortWith compareKeys |> Seq.toArray
-        let mutable first = true
-        for k in sortedKeys do
-            if not first then sb.Append ',' |> ignore
-            first <- false
-            sb.Append(escapeJsonString k) |> ignore
-            sb.Append ':' |> ignore
-            let mutable v = Unchecked.defaultof<JsonElement>
-            if el.TryGetProperty(k, &v) then
-                renderValue sb v
-        sb.Append '}' |> ignore
+        let seen = HashSet<string>(StringComparer.Ordinal)
+
+        for property in element.EnumerateObject() do
+            if not (seen.Add property.Name) then
+                payloadFail (DuplicateJsonProperty(context, property.Name))
+
+            rejectDuplicates (context + "." + property.Name) property.Value
     | JsonValueKind.Array ->
-        sb.Append '[' |> ignore
-        let mutable first = true
-        for item in el.EnumerateArray() do
-            if not first then sb.Append ',' |> ignore
-            first <- false
-            renderValue sb item
-        sb.Append ']' |> ignore
-    | JsonValueKind.String ->
-        sb.Append(escapeJsonString(el.GetString())) |> ignore
-    | JsonValueKind.Number ->
-        let raw = el.GetRawText()
-        sb.Append raw |> ignore
-    | JsonValueKind.True ->
-        sb.Append "true" |> ignore
-    | JsonValueKind.False ->
-        sb.Append "false" |> ignore
-    | JsonValueKind.Null ->
-        sb.Append "null" |> ignore
-    | _ ->
-        sb.Append "null" |> ignore
+        let mutable index = 0
 
-let private renderCanonicalRoot (sb: StringBuilder) (root: JsonElement) : unit =
-    sb.Append '{' |> ignore
-    let mutable keys = ResizeArray<string>()
-    for p in root.EnumerateObject() do
-        keys.Add(p.Name)
-    let sortedKeys = keys |> Seq.sortWith compareKeys |> Seq.toArray
-    let mutable first = true
-    for k in sortedKeys do
-        if not first then sb.Append ',' |> ignore
-        first <- false
-        sb.Append(escapeJsonString k) |> ignore
-        sb.Append ':' |> ignore
-        let mutable v = Unchecked.defaultof<JsonElement>
-        if root.TryGetProperty(k, &v) then
-            renderValue sb v
-    sb.Append '}' |> ignore
+        for item in element.EnumerateArray() do
+            rejectDuplicates (sprintf "%s[%d]" context index) item
+            index <- index + 1
+    | _ -> ()
 
-let renderCanonical (raw: string) : string =
-    let sb = StringBuilder()
-    let mutable opts = JsonDocumentOptions()
-    opts.AllowTrailingCommas <- false
-    opts.CommentHandling <- JsonCommentHandling.Disallow
-    opts.MaxDepth <- 64
-    use doc = JsonDocument.Parse(raw, opts)
-    renderCanonicalRoot sb doc.RootElement
-    sb.ToString()
+let private tryProperty (element: JsonElement) (name: string) =
+    let mutable value = Unchecked.defaultof<JsonElement>
+    if element.TryGetProperty(name, &value) then Some value else None
 
-// -----------------------------------------------------------------------------
-// Validation entry point
-// -----------------------------------------------------------------------------
+let private requiredProperty (context: string) (name: string) (element: JsonElement) =
+    match tryProperty element name with
+    | Some value -> value
+    | None -> payloadFail (MissingField(context + "." + name))
 
-type ValidationResult = {
-    Path: string
-    Snapshot: EvidenceSnapshot option
-    Issues: Issue list
-    ComputedPayloadHash: string option
-}
+let private requiredString context name element =
+    let value = requiredProperty context name element
 
-let validate
-    (path: string)
-    (snapshot: EvidenceSnapshot)
-    (containingCommitOid: string option)
-    (canonicalJson: string)
-    : ValidationResult =
+    if value.ValueKind <> JsonValueKind.String then
+        payloadFail (WrongFieldType(context + "." + name, "a string"))
+
+    let text = value.GetString()
+
+    if String.IsNullOrWhiteSpace text then
+        payloadFail (WrongFieldType(context + "." + name, "a non-empty string"))
+
+    text
+
+let private requiredInt context name element =
+    let value = requiredProperty context name element
+    let mutable parsed = 0
+
+    if value.ValueKind <> JsonValueKind.Number || not (value.TryGetInt32(&parsed)) then
+        payloadFail (WrongFieldType(context + "." + name, "an integer"))
+
+    parsed
+
+let private requiredBool context name element =
+    let value = requiredProperty context name element
+
+    match value.ValueKind with
+    | JsonValueKind.True -> true
+    | JsonValueKind.False -> false
+    | _ -> payloadFail (WrongFieldType(context + "." + name, "a Boolean"))
+
+let private escapeJsonString (value: string) =
+    let builder = StringBuilder()
+    builder.Append('"') |> ignore
+
+    for character in value do
+        match character with
+        | '\\' -> builder.Append("\\\\") |> ignore
+        | '"' -> builder.Append("\\\"") |> ignore
+        | '\n' -> builder.Append("\\n") |> ignore
+        | '\r' -> builder.Append("\\r") |> ignore
+        | '\t' -> builder.Append("\\t") |> ignore
+        | value when int value < 0x20 ->
+            builder.AppendFormat(CultureInfo.InvariantCulture, "\\u{0:x4}", int value)
+            |> ignore
+        | value -> builder.Append(value) |> ignore
+
+    builder.Append('"') |> ignore
+    builder.ToString()
+
+let rec private renderValue (builder: StringBuilder) (element: JsonElement) =
+    match element.ValueKind with
+    | JsonValueKind.Object ->
+        builder.Append('{') |> ignore
+
+        element.EnumerateObject()
+        |> Seq.sortBy (fun property -> property.Name)
+        |> Seq.iteri (fun index property ->
+            if index > 0 then builder.Append(',') |> ignore
+            builder.Append(escapeJsonString property.Name).Append(':') |> ignore
+            renderValue builder property.Value)
+
+        builder.Append('}') |> ignore
+    | JsonValueKind.Array ->
+        builder.Append('[') |> ignore
+
+        element.EnumerateArray()
+        |> Seq.iteri (fun index item ->
+            if index > 0 then builder.Append(',') |> ignore
+            renderValue builder item)
+
+        builder.Append(']') |> ignore
+    | JsonValueKind.String -> builder.Append(escapeJsonString(element.GetString())) |> ignore
+    | JsonValueKind.Number -> builder.Append(element.GetRawText()) |> ignore
+    | JsonValueKind.True -> builder.Append("true") |> ignore
+    | JsonValueKind.False -> builder.Append("false") |> ignore
+    | JsonValueKind.Null -> builder.Append("null") |> ignore
+    | _ -> payloadFail (MalformedJson "unsupported JSON token")
+
+let private renderActHashInput (root: JsonElement) =
+    let builder = StringBuilder()
+    builder.Append('{') |> ignore
+
+    root.EnumerateObject()
+    |> Seq.sortBy (fun property -> property.Name)
+    |> Seq.iteri (fun index property ->
+        if index > 0 then builder.Append(',') |> ignore
+        builder.Append(escapeJsonString property.Name).Append(':') |> ignore
+
+        if property.Name = "evidence_payload_sha256" then
+            builder.Append(escapeJsonString Sha256Placeholder) |> ignore
+        else
+            renderValue builder property.Value)
+
+    builder.Append('}') |> ignore
+    builder.ToString()
+
+let computeActPayloadHash raw =
+    try
+        let mutable options = JsonDocumentOptions()
+        options.AllowTrailingCommas <- false
+        options.CommentHandling <- JsonCommentHandling.Disallow
+        options.MaxDepth <- 64
+        use document = JsonDocument.Parse((raw: string), options)
+
+        if document.RootElement.ValueKind <> JsonValueKind.Object then
+            Error(MalformedJson "root is not an object")
+        else
+            rejectDuplicates "evidence" document.RootElement
+            Ok(sha256OfUtf8 (renderActHashInput document.RootElement))
+    with
+    | PayloadException issue -> Error issue
+    | :? JsonException as error -> Error(MalformedJson error.Message)
+
+let private parseSummary context element exitCode =
+    { Tests = requiredInt context "tests" element
+      Passed = requiredInt context "passed" element
+      Failed = requiredInt context "failed" element
+      Errored = requiredInt context "errored" element
+      ExitCode = exitCode }
+
+let private parseSmoke root =
+    match tryProperty root "direct" with
+    | None -> None
+    | Some direct when direct.ValueKind <> JsonValueKind.Object ->
+        payloadFail (WrongFieldType("evidence.direct", "an object"))
+    | Some direct ->
+        match tryProperty direct "hermetic" with
+        | None -> None
+        | Some hermetic when hermetic.ValueKind <> JsonValueKind.Object ->
+            payloadFail (WrongFieldType("evidence.direct.hermetic", "an object"))
+        | Some hermetic ->
+            let context = "evidence.direct.hermetic"
+            let exitCode = requiredInt context "exit_code" hermetic
+            let summaryElement = requiredProperty context "expecto_summary" hermetic
+
+            if summaryElement.ValueKind <> JsonValueKind.Object then
+                payloadFail (WrongFieldType(context + ".expecto_summary", "an object"))
+
+            Some
+                { TranscriptPath = requiredString context "transcript_path" hermetic
+                  TranscriptBlobOid = requiredString context "transcript_blob_oid" hermetic
+                  TranscriptSha256 = requiredString context "output_sha256" hermetic
+                  ScanPath = requiredString context "scan_path" hermetic
+                  ScanBlobOid = requiredString context "scan_blob_oid" hermetic
+                  ScanSha256 = requiredString context "scan_sha256" hermetic
+                  DeclaredSummary = parseSummary (context + ".expecto_summary") summaryElement exitCode }
+
+let private parseActEvidence (raw: string) (root: JsonElement) =
+    let subject = requiredString "evidence" "tested_subject_commit_oid" root
+    let tree = requiredString "evidence" "tested_subject_tree_oid" root
+    let generatedAfter = requiredBool "evidence" "evidence_generated_after_subject" root
+    let payloadHash = requiredString "evidence" "evidence_payload_sha256" root
+    let placeholder = requiredString "evidence" "evidence_payload_sha256_input_placeholder" root
+
     let issues = ResizeArray<Issue>()
 
-    // --- Mandatory subject commit OID ---
-    let subjectOid =
-        match snapshot.SubjectCommitOid with
-        | Some oid when not (String.IsNullOrWhiteSpace oid) -> Some oid
-        | _ ->
-            issues.Add(MissingField(path, "tested_subject_commit_oid"))
-            None
+    if not (isAsciiHexOid subject) then
+        issues.Add(InvalidOid("tested_subject_commit_oid", subject))
 
-    // --- Payload hash field presence ---
-    let payloadHash =
-        match snapshot.PayloadHash with
-        | Some h when not (String.IsNullOrWhiteSpace h) -> Some h
-        | Some _ ->
-            issues.Add(PayloadHashFieldNotString path)
-            None
-        | None ->
-            issues.Add(PayloadHashFieldMissing path)
-            None
+    if not (isAsciiHexOid tree) then
+        issues.Add(InvalidOid("tested_subject_tree_oid", tree))
 
-    // --- Placeholder field presence ---
-    let placeholder =
-        match snapshot.Placeholder with
-        | Some p when not (String.IsNullOrWhiteSpace p) -> Some p
-        | Some _ ->
-            issues.Add(PlaceholderFieldNotString path)
-            None
-        | None ->
-            issues.Add(PlaceholderFieldMissing path)
-            None
+    if not (isAsciiSha256 payloadHash) then
+        issues.Add(InvalidSha256("evidence_payload_sha256", payloadHash))
 
-    // --- Payload hash check ---
-    //
-    // The canonical form is produced from the JSON document with the
-    // payload hash field replaced by the placeholder. This makes the
-    // hash a fixed-point: the canonical form does not depend on the
-    // actual hash value, so the SHA-256 is computed over a stable
-    // byte stream regardless of which hash value is currently stored.
-    let computedHash =
-        match payloadHash, placeholder with
-        | Some _, Some _ ->
-            // The canonical form passed in already has the placeholder
-            // substituted for the hash field, so the hash is directly
-            // SHA-256 of the canonical form.
-            Some (sha256OfUtf8 canonicalJson)
-        | _ ->
-            None
+    if placeholder <> Sha256Placeholder then
+        issues.Add(InvalidSha256("evidence_payload_sha256_input_placeholder", placeholder))
 
-    match payloadHash, computedHash with
-    | Some declared, Some computed when
-        String.Equals(declared, computed, StringComparison.OrdinalIgnoreCase) ->
-        ()
-    | Some declared, Some computed ->
-        issues.Add(PayloadHashMismatch(path, declared, computed))
-    | _ ->
-        ()
+    if not generatedAfter then
+        issues.Add(MandatoryBooleanFalse "evidence_generated_after_subject")
 
-    // --- Self-reference check ---
-    match subjectOid, containingCommitOid with
-    | Some s, Some c when
-        String.Equals(s, c, StringComparison.OrdinalIgnoreCase) ->
-        issues.Add(SelfReferentialIdentity(path, "tested_subject_commit_oid", s, c))
-    | _ ->
-        ()
+    let computed = sha256OfUtf8 (renderActHashInput root)
 
-    {
-        Path = path
-        Snapshot = Some snapshot
-        Issues = issues |> Seq.toList
-        ComputedPayloadHash = computedHash
-    }
+    if not (String.Equals(payloadHash, computed, StringComparison.OrdinalIgnoreCase)) then
+        issues.Add(PayloadHashMismatch(payloadHash, computed))
 
-let validatePath
+    { Kind = ActEvidencePayload
+      SubjectCommitOid = subject
+      SubjectTreeOid = tree
+      EvidenceGeneratedAfterSubject = Some generatedAfter
+      PayloadHash = payloadHash
+      Placeholder = Some placeholder
+      Smoke = parseSmoke root },
+    computed,
+    List.ofSeq issues
+
+let private parseCanonicalEvidence (raw: string) (root: JsonElement) =
+    match parseWireJson raw with
+    | Error detail -> payloadFail (MalformedJson detail)
+    | Ok canonical ->
+        let rawKeys = [ for property in root.EnumerateObject() -> property.Name ]
+        let validation = validate rawKeys canonical
+        let issues =
+            if isValid validation then
+                []
+            else
+                [ CanonicalPayloadInvalid(validation.Issues |> List.map issueToString) ]
+
+        { Kind = CanonicalEvidencePayload
+          SubjectCommitOid = canonical.TestedCommitOid
+          SubjectTreeOid = canonical.TestedTreeOid
+          EvidenceGeneratedAfterSubject = None
+          PayloadHash = canonical.SemanticSha256
+          Placeholder = None
+          Smoke = None },
+        canonical.SemanticSha256,
+        issues
+
+let parseEvidence (raw: string) =
+    try
+        let mutable options = JsonDocumentOptions()
+        options.AllowTrailingCommas <- false
+        options.CommentHandling <- JsonCommentHandling.Disallow
+        options.MaxDepth <- 64
+        use document = JsonDocument.Parse((raw: string), options)
+        let root = document.RootElement
+
+        if root.ValueKind <> JsonValueKind.Object then
+            Error(MalformedJson "root is not an object")
+        else
+            rejectDuplicates "evidence" root
+
+            if (tryProperty root "tested_subject_commit_oid").IsSome then
+                Ok(parseActEvidence raw root)
+            elif (tryProperty root "tested_commit_oid").IsSome then
+                Ok(parseCanonicalEvidence raw root)
+            else
+                Error(MissingField "tested_subject_commit_oid or tested_commit_oid")
+    with
+    | PayloadException issue -> Error issue
+    | :? JsonException as error -> Error(MalformedJson error.Message)
+
+let private runGit (deps: EvidenceDependencies) (repoRoot: string) (operation: string) (arguments: string list) =
+    match deps.RunGit repoRoot arguments with
+    | Error detail -> operationalFail operation detail
+    | Ok(exitCode, stdout, stderr) -> exitCode, stdout, stderr
+
+let private requiredGit (deps: EvidenceDependencies) (repoRoot: string) (operation: string) (missingDescription: string) (arguments: string list) =
+    let exitCode, stdout, stderr = runGit deps repoRoot operation arguments
+
+    if exitCode <> 0 then
+        operationalFail operation (sprintf "%s; exit=%d stderr=%s" missingDescription exitCode (Encoding.UTF8.GetString(stderr).Trim()))
+
+    stdout
+
+let private oidOutput (operation: string) (bytes: byte array) =
+    let oid = strictUtf8 operation bytes |> fun value -> value.Trim()
+
+    if not (isAsciiHexOid oid) then
+        operationalFail operation ("Git returned malformed OID: " + oid)
+
+    oid
+
+let private resolveCommit deps repoRoot oid =
+    requiredGit
+        deps
+        repoRoot
+        "resolve-commit"
+        ("commit does not exist: " + oid)
+        [ "rev-parse"; "--verify"; "--end-of-options"; oid + "^{commit}" ]
+    |> oidOutput "resolve-commit"
+
+let private resolveTree deps repoRoot oid =
+    requiredGit
+        deps
+        repoRoot
+        "resolve-tree"
+        ("tree does not exist for commit: " + oid)
+        [ "rev-parse"; "--verify"; "--end-of-options"; oid + "^{tree}" ]
+    |> oidOutput "resolve-tree"
+
+let private resolvePath deps repoRoot commitOid path =
+    requiredGit
+        deps
+        repoRoot
+        ("resolve-path:" + path)
+        (sprintf "path %s does not exist in %s" path commitOid)
+        [ "rev-parse"; "--verify"; "--end-of-options"; commitOid + ":" + path ]
+    |> oidOutput ("resolve-path:" + path)
+
+let private catBlob deps repoRoot path blobOid =
+    requiredGit
+        deps
+        repoRoot
+        ("cat-blob:" + path)
+        ("blob does not exist: " + blobOid)
+        [ "cat-file"; "blob"; blobOid ]
+
+let private stripAnsi text =
+    Regex.Replace(text, "\\x1B\\[[0-?]*[ -/]*[@-~]", "")
+
+let parseTranscriptSummary (bytes: byte array) =
+    try
+        let text = UTF8Encoding(false, true).GetString bytes |> stripAnsi
+        let summary =
+            Regex.Match(
+                text,
+                "EXPECTO!\\s*(\\d+)\\s+tests run.*?(\\d+)\\s+passed,\\s*(\\d+)\\s+ignored,\\s*(\\d+)\\s+failed,\\s*(\\d+)\\s+errored",
+                RegexOptions.Singleline ||| RegexOptions.CultureInvariant
+            )
+
+        if not summary.Success then
+            Error(TranscriptSummaryMalformed "Expecto aggregate line not found")
+        else
+            let exitMatch = Regex.Match(text, "process exit code:\\s*(-?\\d+)", RegexOptions.CultureInvariant)
+
+            if not exitMatch.Success then
+                Error(TranscriptSummaryMalformed "process exit code marker not found")
+            elif Int32.Parse(summary.Groups.[3].Value, CultureInfo.InvariantCulture) <> 0 then
+                Error(TranscriptSummaryMalformed "ignored tests are not allowed in smoke evidence")
+            else
+                let requiredNames =
+                    [ "passing runner returns 0"
+                      "failed runner returns 1"
+                      "errored runner returns 2"
+                      "arbitrary non-zero runner returns its exact value (37)"
+                      "exactly one production runWith definition exists" ]
+
+                match requiredNames |> List.tryFind (fun name -> not (text.Contains(name, StringComparison.Ordinal))) with
+                | Some missing -> Error(TranscriptSummaryMalformed("missing smoke test name: " + missing))
+                | None ->
+                    Ok
+                        { Tests = Int32.Parse(summary.Groups.[1].Value, CultureInfo.InvariantCulture)
+                          Passed = Int32.Parse(summary.Groups.[2].Value, CultureInfo.InvariantCulture)
+                          Failed = Int32.Parse(summary.Groups.[4].Value, CultureInfo.InvariantCulture)
+                          Errored = Int32.Parse(summary.Groups.[5].Value, CultureInfo.InvariantCulture)
+                          ExitCode = Int32.Parse(exitMatch.Groups.[1].Value, CultureInfo.InvariantCulture) }
+    with error ->
+        Error(TranscriptSummaryMalformed error.Message)
+
+let private parseScanSummary (bytes: byte array) =
+    try
+        let raw = UTF8Encoding(false, true).GetString bytes
+        use document = JsonDocument.Parse raw
+        rejectDuplicates "smoke-scan" document.RootElement
+        let root = document.RootElement
+
+        Ok
+            { Tests = requiredInt "smoke-scan" "tests" root
+              Passed = requiredInt "smoke-scan" "passed" root
+              Failed = requiredInt "smoke-scan" "failed" root
+              Errored = requiredInt "smoke-scan" "errored" root
+              ExitCode = requiredInt "smoke-scan" "exit_code" root }
+    with
+    | PayloadException issue -> Error issue
+    | :? JsonException as error -> Error(MalformedJson("smoke scan: " + error.Message))
+
+let private validateReferencedBlob
+    (deps: EvidenceDependencies)
+    (repoRoot: string)
+    (evidenceCommit: string)
     (path: string)
-    (containingCommitOid: string option)
-    : ValidationResult =
-    if not (File.Exists path) then
-        {
-            Path = path
-            Snapshot = None
-            Issues = [ FileMissing path ]
-            ComputedPayloadHash = None
-        }
-    else
-        let raw = File.ReadAllText path
-        match extractSnapshot raw with
-        | Error issue ->
-            {
-                Path = path
-                Snapshot = None
-                Issues = [ issue ]
-                ComputedPayloadHash = None
-            }
-        | Ok snapshot ->
-            // The canonical form used for hashing must have the
-            // payload hash VALUE replaced by the placeholder. We
-            // produce this by string-replacing the actual hash value
-            // in the canonical form with the placeholder text. The
-            // result is a fixed point: the hash is solely determined
-            // by the file body excluding the hash field itself.
-            let canonical = renderCanonical raw
-            let canonicalForHash =
-                match snapshot.PayloadHash, snapshot.Placeholder with
-                | Some h, Some p ->
-                    // Replace the actual hash value with the placeholder.
-                    canonical.Replace(escapeJsonString h, escapeJsonString p)
-                | _ ->
-                    canonical
-            validate path snapshot containingCommitOid canonicalForHash
+    (expectedBlob: string)
+    (expectedHash: string)
+    (issues: ResizeArray<Issue>) =
+    match validateRepositoryPath false path with
+    | Error detail -> payloadFail (MalformedJson(sprintf "referenced path %s invalid: %s" path detail))
+    | Ok() -> ()
+
+    if not (isAsciiHexOid expectedBlob) then
+        issues.Add(InvalidOid(path + ".blob_oid", expectedBlob))
+
+    if not (isAsciiSha256 expectedHash) then
+        issues.Add(InvalidSha256(path + ".sha256", expectedHash))
+
+    let actualBlob = resolvePath deps repoRoot evidenceCommit path
+
+    if not (equalOid actualBlob expectedBlob) then
+        issues.Add(CommittedBlobMismatch(path, expectedBlob, actualBlob))
+
+    let bytes = catBlob deps repoRoot path actualBlob
+    let actualHash = sha256Hex bytes
+
+    if not (String.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase)) then
+        issues.Add(ReferencedHashMismatch(path, expectedHash, actualHash))
+
+    bytes
+
+let validateWithDependencies deps repoRoot path subjectCommitOid evidenceCommitOid =
+    let mutable proof = emptyProof
+    let issues = ResizeArray<Issue>()
+    let mutable snapshot = None
+    let mutable evidenceBlob = None
+
+    let finish operational =
+        { Path = path
+          SubjectCommitOid = subjectCommitOid
+          EvidenceCommitOid = evidenceCommitOid
+          EvidenceBlobOid = evidenceBlob
+          Proof = proof
+          Snapshot = snapshot
+          Issues = List.ofSeq issues
+          OperationalFailure = operational }
+
+    match validateRepositoryPath false path with
+    | Error detail ->
+        issues.Add(MalformedJson("evidence path is invalid: " + detail))
+        finish None
+    | Ok() when not (isAsciiHexOid subjectCommitOid) ->
+        issues.Add(InvalidOid("--subject-commit", subjectCommitOid))
+        finish None
+    | Ok() when not (isAsciiHexOid evidenceCommitOid) ->
+        issues.Add(InvalidOid("--evidence-commit", evidenceCommitOid))
+        finish None
+    | Ok() ->
+        try
+            let evidenceCommit = resolveCommit deps repoRoot evidenceCommitOid
+
+            if not (equalOid evidenceCommit evidenceCommitOid) then
+                operationalFail "resolve-evidence-commit" (sprintf "expected=%s actual=%s" evidenceCommitOid evidenceCommit)
+
+            proof <- { proof with EvidenceCommitExists = true }
+            let blobOid = resolvePath deps repoRoot evidenceCommit path
+            evidenceBlob <- Some blobOid
+            proof <- { proof with EvidencePathExists = true }
+            let committedBytes = catBlob deps repoRoot path blobOid
+            let absolutePath = Path.GetFullPath(Path.Combine(repoRoot, path))
+
+            let workingBytes =
+                match deps.ReadWorkingBytes absolutePath with
+                | Ok bytes -> bytes
+                | Error detail -> operationalFail "read-working-evidence" detail
+
+            let bytesEqual = workingBytes = committedBytes
+            proof <- { proof with WorkingBytesEqualEvidenceBlob = bytesEqual }
+
+            if not bytesEqual then
+                issues.Add(WorkingBytesMismatch path)
+
+            let raw = strictUtf8 path workingBytes
+
+            let parsed, computedPayloadHash, parseIssues =
+                match parseEvidence raw with
+                | Ok value -> value
+                | Error issue -> payloadFail issue
+
+            snapshot <- Some parsed
+
+            for issue in parseIssues do
+                issues.Add issue
+
+            let hashMatches =
+                String.Equals(parsed.PayloadHash, computedPayloadHash, StringComparison.OrdinalIgnoreCase)
+                && not (parseIssues |> List.exists (function | PayloadHashMismatch _ | CanonicalPayloadInvalid _ -> true | _ -> false))
+
+            proof <- { proof with PayloadHashMatches = hashMatches }
+
+            if not (equalOid parsed.SubjectCommitOid subjectCommitOid) then
+                issues.Add(SubjectArgumentMismatch(parsed.SubjectCommitOid, subjectCommitOid))
+
+            let subjectCommit = resolveCommit deps repoRoot subjectCommitOid
+
+            if not (equalOid subjectCommit subjectCommitOid) then
+                operationalFail "resolve-subject-commit" (sprintf "expected=%s actual=%s" subjectCommitOid subjectCommit)
+
+            proof <- { proof with SubjectCommitExists = true }
+            let subjectTree = resolveTree deps repoRoot subjectCommit
+            let treeMatches = equalOid parsed.SubjectTreeOid subjectTree
+            proof <- { proof with SubjectTreeMatches = treeMatches }
+
+            if not treeMatches then
+                issues.Add(SubjectTreeMismatch(parsed.SubjectTreeOid, subjectTree))
+
+            let differs = not (equalOid subjectCommit evidenceCommit)
+            proof <- { proof with SubjectDiffersFromEvidence = differs }
+
+            if not differs then
+                issues.Add(SubjectEqualsEvidenceCommit subjectCommit)
+
+            let ancestryExit, _, ancestryStderr =
+                runGit
+                    deps
+                    repoRoot
+                    "subject-ancestry"
+                    [ "merge-base"; "--is-ancestor"; subjectCommit; evidenceCommit ]
+
+            match ancestryExit with
+            | 0 -> proof <- { proof with SubjectIsAncestorOfEvidence = true }
+            | 1 -> issues.Add(SubjectNotAncestor(subjectCommit, evidenceCommit))
+            | code ->
+                operationalFail
+                    "subject-ancestry"
+                    (sprintf "exit=%d stderr=%s" code (Encoding.UTF8.GetString(ancestryStderr).Trim()))
+
+            match parsed.Smoke with
+            | None -> ()
+            | Some smoke ->
+                let transcript =
+                    validateReferencedBlob
+                        deps
+                        repoRoot
+                        evidenceCommit
+                        smoke.TranscriptPath
+                        smoke.TranscriptBlobOid
+                        smoke.TranscriptSha256
+                        issues
+
+                let scan =
+                    validateReferencedBlob
+                        deps
+                        repoRoot
+                        evidenceCommit
+                        smoke.ScanPath
+                        smoke.ScanBlobOid
+                        smoke.ScanSha256
+                        issues
+
+                let transcriptSummary =
+                    match parseTranscriptSummary transcript with
+                    | Ok value -> Some value
+                    | Error issue ->
+                        issues.Add issue
+                        None
+
+                let scanSummary =
+                    match parseScanSummary scan with
+                    | Ok value -> Some value
+                    | Error issue ->
+                        issues.Add issue
+                        None
+
+                match transcriptSummary with
+                | Some actual when actual = smoke.DeclaredSummary ->
+                    proof <- { proof with TranscriptSummaryMatches = Some true }
+                | Some actual ->
+                    proof <- { proof with TranscriptSummaryMatches = Some false }
+                    issues.Add(TranscriptSummaryMismatch(smoke.DeclaredSummary, actual))
+                | None -> proof <- { proof with TranscriptSummaryMatches = Some false }
+
+                match transcriptSummary, scanSummary with
+                | Some transcriptValue, Some scanValue when transcriptValue = scanValue ->
+                    proof <- { proof with TranscriptAndScanMatch = Some true }
+                | Some transcriptValue, Some scanValue ->
+                    proof <- { proof with TranscriptAndScanMatch = Some false }
+                    issues.Add(TranscriptScanMismatch(transcriptValue, scanValue))
+                | _ -> proof <- { proof with TranscriptAndScanMatch = Some false }
+
+            finish None
+        with
+        | PayloadException issue ->
+            issues.Add issue
+            finish None
+        | OperationalException(operation, detail) ->
+            finish (Some { Operation = operation; Detail = detail })
+
+let validate repoRoot path subjectCommitOid evidenceCommitOid =
+    validateWithDependencies
+        (productionDependencies ())
+        repoRoot
+        path
+        subjectCommitOid
+        evidenceCommitOid

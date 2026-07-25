@@ -1,8 +1,7 @@
 {
   "schema_version": 1,
-  "act_id": "ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02",
-  "act_classification": "P0",
-  "declaration_path": "docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION02.scope.json",
-  "declaration_blob_oid": "0ff7ee211f13bd5f2bd837efd0b69433c86e50d3",
-  "baseline_commit_oid": "da92e0d6573a95148c0a41240849bc5921c6fcfa"
+  "act_id": "ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION03",
+  "declaration_path": "docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION03.scope.json",
+  "declaration_blob_oid": "0fe58871d17944d2d6f33b52ebad5d437bc306f0",
+  "baseline_commit_oid": "90d36bb50ed0fac090318382543e7df4c8ac0d09"
 }

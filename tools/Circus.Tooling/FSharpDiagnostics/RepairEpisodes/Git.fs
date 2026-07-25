@@ -370,15 +370,27 @@ let parseGitBytesOrProtocol<'a>
 /// catastrophic bounded-process failures (launch, timeout,
 /// cancellation, output overflow, I/O, protocol) become ``Error``.
 ///
-/// ``runGitTyped`` is preserved as an alias that uses
-/// ``CancellationToken.None`` so existing callers continue to compile
-/// unchanged.
-let runGitTypedWithCancellation
+/// Raw-byte result used by authorities that must compare Git blob bytes
+/// exactly.  Text callers consume the decoded wrapper below; both surfaces
+/// share this one bounded-process execution path.
+type GitRunBytesSuccess = {
+    ExitCode: int
+    Stdout: byte array
+    Stderr: byte array
+    Argv: string list
+}
+
+/// Execute Git and preserve stdout/stderr byte-for-byte.  A completed child
+/// with a non-zero exit remains data, exactly as on ``runGitTyped``.  This is
+/// required for committed-evidence validation: decoding and line-ending
+/// normalisation must never occur before a blob is compared with working
+/// bytes.
+let runGitBytesTypedWithCancellation
     (repoPath: string)
     (options: GitRunOptions)
     (cancellationToken: CancellationToken)
     (args: string list)
-    : Result<GitRunSuccess, GitRunError> =
+    : Result<GitRunBytesSuccess, GitRunError> =
     if String.IsNullOrWhiteSpace repoPath then
         Error (GitRunError.LaunchFailure "git: empty repository path")
     elif not (Directory.Exists repoPath) then
@@ -391,26 +403,47 @@ let runGitTypedWithCancellation
         | Ok success ->
             Ok {
                 ExitCode = success.ExitCode
-                Stdout = decodeGitBytes success.Stdout
-                Stderr = decodeGitBytes success.Stderr
+                Stdout = success.Stdout
+                Stderr = success.Stderr
                 Argv = args
             }
         | Error failure ->
-            // ``NonZeroExit`` is data, not a bounded-process failure:
-            // the child ran to completion and returned an exit code we
-            // must inspect. Surface it as a typed success so callers
-            // decide whether to raise. Every other failure is a true
-            // bounded-process failure and is mapped to ``GitRunError``.
             match failure with
             | NonZeroExit (exitCode, stdout, stderr) ->
                 Ok {
                     ExitCode = exitCode
-                    Stdout = decodeGitBytes stdout
-                    Stderr = decodeGitBytes stderr
+                    Stdout = stdout
+                    Stderr = stderr
                     Argv = args
                 }
             | _ ->
                 Error (translateBoundedError failure args)
+
+let runGitBytesTyped
+    (repoPath: string)
+    (options: GitRunOptions)
+    (args: string list)
+    : Result<GitRunBytesSuccess, GitRunError> =
+    runGitBytesTypedWithCancellation repoPath options CancellationToken.None args
+
+/// ``runGitTyped`` is preserved as the deterministic text wrapper.  It is
+/// deliberately implemented on top of the raw-byte authority above so no
+/// second Git execution seam exists.
+let runGitTypedWithCancellation
+    (repoPath: string)
+    (options: GitRunOptions)
+    (cancellationToken: CancellationToken)
+    (args: string list)
+    : Result<GitRunSuccess, GitRunError> =
+    match runGitBytesTypedWithCancellation repoPath options cancellationToken args with
+    | Error error -> Error error
+    | Ok success ->
+        Ok {
+            ExitCode = success.ExitCode
+            Stdout = decodeGitBytes success.Stdout
+            Stderr = decodeGitBytes success.Stderr
+            Argv = success.Argv
+        }
 
 /// Raw-surface alias for callers that do not need cancellation.
 let runGitTyped

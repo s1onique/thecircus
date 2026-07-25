@@ -41,6 +41,8 @@ open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Git
 open Circus.Tooling.CanonicalEvidence.Domain
 open Circus.Tooling.CanonicalEvidence.Serialization
 open Circus.Tooling.CanonicalEvidence.Validation
+open Circus.Tooling.ScopeAuthority.Domain
+open Circus.Tooling.ScopeAuthority.Authority
 
 // -----------------------------------------------------------------------------
 // Identity resolution
@@ -241,7 +243,12 @@ let runAllChecks (defs: EvidenceCheckDefinition list) : EvidenceCheckResult list
 /// ``committed-range-diff-check`` and ``protected-scope`` ranges.
 /// -----------------------------------------------------------------------------
 
-let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) (scopeDeclarationPath: string) : EvidenceCheckDefinition list =
+let CanonicalCheckDefinitions
+    (repoRoot: string)
+    (baselineCommit: string)
+    (scopeDeclarationPath: string)
+    (evaluatedCommit: string)
+    : EvidenceCheckDefinition list =
     let workDir = repoRoot
     let longTimeout = TimeSpan.FromMinutes(60.0)
     let shortTimeout = TimeSpan.FromMinutes(15.0)
@@ -273,6 +280,10 @@ let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) (scope
             "."
             "--declaration"
             scopeDeclarationPath
+            "--baseline-commit"
+            baselineCommit
+            "--evaluated-commit"
+            evaluatedCommit
         ]
 
     [
@@ -289,7 +300,7 @@ let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) (scope
         {
             Id = "tooling-tests-build"
             Executable = "dotnet"
-            Arguments = [ "build"; "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj"; "-c"; "Release"; "--no-restore" ]
+            Arguments = [ "run"; "--project"; "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj"; "-c"; "Release"; "--no-restore"; "--"; "--summary"; "--filter-test-list"; "PostgresTestRunnerAuthorities" ]
             WorkingDirectory = workDir
             Required = true
             Timeout = shortTimeout
@@ -374,16 +385,22 @@ let CanonicalCheckDefinitions (repoRoot: string) (baselineCommit: string) (scope
 
 type GenerateFailure =
     | IdentityFailure of IdentityFailure
+    | ScopeAuthorityFailure of ScopeAuthorityError
     | CheckListEmpty
     | UnexpectedCheckId of id: string
 
 let generateFailureToString (f: GenerateFailure) : string =
     match f with
     | IdentityFailure id -> sprintf "identity: %s" (identityFailureToString id)
+    | ScopeAuthorityFailure scope -> sprintf "scope authority: %s" (errorToString scope)
     | CheckListEmpty -> "canonical check list is empty"
     | UnexpectedCheckId id -> sprintf "unexpected check id: %s" id
 
-let buildCanonicalEvidence (identity: ResolvedIdentity) (checks: EvidenceCheckResult list) : CanonicalEvidence =
+let buildCanonicalEvidence
+    (identity: ResolvedIdentity)
+    (scope: ScopeBinding)
+    (checks: EvidenceCheckResult list)
+    : CanonicalEvidence =
     let sortedChecks = sortChecksDeterministic checks
     let overallStatus = computeOverallStatus sortedChecks
     let doc = {
@@ -393,6 +410,11 @@ let buildCanonicalEvidence (identity: ResolvedIdentity) (checks: EvidenceCheckRe
         TestedCommitOid = identity.CommitOid
         TestedTreeOid = identity.TreeOid
         ObjectFormat = identity.ObjectFormat
+        ActiveScopeActId = scope.ActId
+        ActiveScopePointerBlobOid = scope.PointerBlobOid
+        ScopeDeclarationPath = scope.DeclarationPath
+        DeclarationBlobOid = scope.DeclarationBlobOid
+        BaselineCommitOid = scope.BaselineCommitOid
         Checks = sortedChecks
         OverallStatus = overallStatus
         SemanticSha256 = ""
@@ -422,10 +444,19 @@ let generate
     match resolveIdentity repoRoot with
     | Result.Error err -> Result.Error(IdentityFailure err)
     | Result.Ok identity ->
-        let defs = CanonicalCheckDefinitions repoRoot baselineCommit scopeDeclarationPath
-        match runCanonicalChecks defs with
-        | Result.Error err -> Result.Error err
-        | Result.Ok checks -> Result.Ok(buildCanonicalEvidence identity checks)
+        match resolve repoRoot identity.CommitOid (Some scopeDeclarationPath) (Some baselineCommit) with
+        | Error scopeError -> Result.Error(ScopeAuthorityFailure scopeError)
+        | Ok scope ->
+            let defs =
+                CanonicalCheckDefinitions
+                    repoRoot
+                    scope.BaselineCommitOid
+                    scope.DeclarationPath
+                    identity.CommitOid
+
+            match runCanonicalChecks defs with
+            | Result.Error err -> Result.Error err
+            | Result.Ok checks -> Result.Ok(buildCanonicalEvidence identity scope checks)
 
 // -----------------------------------------------------------------------------
 // Atomic write
@@ -754,6 +785,8 @@ let evidenceFailure (reason: string) (detail: string) : EvidenceFailure =
 
 type CanonicalEvidenceDependencies = {
     ResolveRepositoryIdentity: (string -> Result<RepositoryIdentity, EvidenceFailure>)
+    ResolveScopeBinding:
+        (string -> string -> string option -> string option -> Result<ScopeBinding, EvidenceFailure>)
     ReadWorkingTreeState: (string -> Result<WorkingTreeState, EvidenceFailure>)
     RunCheck: (EvidenceCheckDefinition -> CancellationToken -> Result<EvidenceCheckResult, EvidenceFailure>)
     ReadArtifact: (string -> Result<byte array, EvidenceFailure>)
@@ -786,6 +819,17 @@ let private productionResolveIdentity (repoRoot: string) : Result<RepositoryIden
         }
     | Result.Error err ->
         Result.Error(evidenceFailure "identity_failure" (identityFailureToString err))
+
+let private productionResolveScope
+    (repoRoot: string)
+    (evaluatedCommitOid: string)
+    (declarationPath: string option)
+    (baselineCommitOid: string option)
+    : Result<ScopeBinding, EvidenceFailure> =
+    match resolve repoRoot evaluatedCommitOid declarationPath baselineCommitOid with
+    | Ok binding -> Ok binding
+    | Error error ->
+        Error(evidenceFailure "scope_authority_failure" (errorToString error))
 
 let private productionReadWorkingTree (repoRoot: string) : Result<WorkingTreeState, EvidenceFailure> =
     if String.IsNullOrWhiteSpace repoRoot || not (Directory.Exists repoRoot) then
@@ -923,6 +967,7 @@ let private productionGetUtcNow () : DateTimeOffset = DateTimeOffset.UtcNow
 let productionDependencies () : CanonicalEvidenceDependencies =
     {
         ResolveRepositoryIdentity = productionResolveIdentity
+        ResolveScopeBinding = productionResolveScope
         ReadWorkingTreeState = productionReadWorkingTree
         RunCheck = productionRunCheck
         ReadArtifact = productionReadArtifact
@@ -936,6 +981,7 @@ let productionDependencies () : CanonicalEvidenceDependencies =
 
 type RegenerateFailure =
     | DependencyIdentityFailure of EvidenceFailure
+    | DependencyScopeAuthorityFailure of EvidenceFailure
     | DependencyWorkingTreeFailure of EvidenceFailure
     | DependencyWorkingTreeDirty
     | DependencyCheckListEmpty
@@ -946,6 +992,7 @@ type RegenerateFailure =
 let regenerateFailureToString (f: RegenerateFailure) : string =
     match f with
     | DependencyIdentityFailure e -> sprintf "identity: %s:%s" e.Reason e.Detail
+    | DependencyScopeAuthorityFailure e -> sprintf "scope_authority: %s:%s" e.Reason e.Detail
     | DependencyWorkingTreeFailure e -> sprintf "working_tree: %s:%s" e.Reason e.Detail
     | DependencyWorkingTreeDirty -> "working tree is dirty (regeneration requires a clean tree)"
     | DependencyCheckListEmpty -> "canonical check list is empty"
@@ -958,6 +1005,7 @@ let regenerateFailureToString (f: RegenerateFailure) : string =
 /// list. Pure function: no IO, no subprocess.
 let private assembleCanonicalEvidence
     (identity: RepositoryIdentity)
+    (scope: ScopeBinding)
     (checks: EvidenceCheckResult list)
     : CanonicalEvidence =
     let sortedChecks = sortChecksDeterministic checks
@@ -969,6 +1017,11 @@ let private assembleCanonicalEvidence
         TestedCommitOid = identity.CommitOid
         TestedTreeOid = identity.TreeOid
         ObjectFormat = identity.ObjectFormat
+        ActiveScopeActId = scope.ActId
+        ActiveScopePointerBlobOid = scope.PointerBlobOid
+        ScopeDeclarationPath = scope.DeclarationPath
+        DeclarationBlobOid = scope.DeclarationBlobOid
+        BaselineCommitOid = scope.BaselineCommitOid
         Checks = sortedChecks
         OverallStatus = overallStatus
         SemanticSha256 = ""
@@ -1015,7 +1068,7 @@ let internal regenerateWithDependencies
     (deps: CanonicalEvidenceDependencies)
     (repoRoot: string)
     (baselineCommit: string)
-    (scopeDeclarationPath: string)
+    (scopeDeclarationPath: string option)
     : Result<CanonicalEvidence, RegenerateFailure> =
     match deps.ResolveRepositoryIdentity repoRoot with
     | Result.Error e -> Result.Error(DependencyIdentityFailure e)
@@ -1026,10 +1079,25 @@ let internal regenerateWithDependencies
             if state.Dirty then
                 Result.Error DependencyWorkingTreeDirty
             else
-                let defs = CanonicalCheckDefinitions repoRoot baselineCommit scopeDeclarationPath
-                match executeChecksWithDependencies deps defs with
-                | Result.Error f -> Result.Error f
-                | Result.Ok checks -> Result.Ok(assembleCanonicalEvidence identity checks)
+                match
+                    deps.ResolveScopeBinding
+                        repoRoot
+                        identity.CommitOid
+                        scopeDeclarationPath
+                        (Some baselineCommit)
+                with
+                | Error failure -> Result.Error(DependencyScopeAuthorityFailure failure)
+                | Ok scope ->
+                    let defs =
+                        CanonicalCheckDefinitions
+                            repoRoot
+                            scope.BaselineCommitOid
+                            scope.DeclarationPath
+                            identity.CommitOid
+
+                    match executeChecksWithDependencies deps defs with
+                    | Result.Error f -> Result.Error f
+                    | Result.Ok checks -> Result.Ok(assembleCanonicalEvidence identity scope checks)
 
 // -----------------------------------------------------------------------------
 // Dependency-driven verification
@@ -1041,6 +1109,7 @@ type DependencyVerifyFailure =
     | DependencyValidationFailed of issues: string list
     | DependencyIdentityMismatch of field: string * expected: string * actual: string
     | DependencyIdentityUnresolved of EvidenceFailure
+    | DependencyScopeUnresolved of EvidenceFailure
 
 let dependencyVerifyFailureToString (f: DependencyVerifyFailure) : string =
     match f with
@@ -1050,6 +1119,7 @@ let dependencyVerifyFailureToString (f: DependencyVerifyFailure) : string =
     | DependencyIdentityMismatch (field, expected, actual) ->
         sprintf "identity mismatch for %s: expected=%s actual=%s" field expected actual
     | DependencyIdentityUnresolved e -> sprintf "identity unresolved: %s:%s" e.Reason e.Detail
+    | DependencyScopeUnresolved e -> sprintf "scope unresolved: %s:%s" e.Reason e.Detail
 
 type DependencyVerifyOutcome = {
     Path: string
@@ -1063,6 +1133,7 @@ let internal verifyWithDependencies
     (deps: CanonicalEvidenceDependencies)
     (path: string)
     (repoRoot: string)
+    (scopeDeclarationPath: string option)
     : DependencyVerifyOutcome =
     let readResult = deps.ReadArtifact path
     match readResult with
@@ -1106,35 +1177,48 @@ let internal verifyWithDependencies
                         BindingMatch = None
                     }
                 else
-                    match deps.ResolveRepositoryIdentity repoRoot with
-                    | Result.Error idErr ->
+                    match
+                        deps.ResolveScopeBinding
+                            repoRoot
+                            evidence.TestedCommitOid
+                            scopeDeclarationPath
+                            (Some evidence.BaselineCommitOid)
+                    with
+                    | Result.Error scopeError ->
                         {
                             Path = path
                             Evidence = Some evidence
                             Validation = Some vr
-                            Failure = Some(DependencyIdentityUnresolved idErr)
+                            Failure = Some(DependencyScopeUnresolved scopeError)
                             BindingMatch = Some false
                         }
-                    | Result.Ok current ->
-                        if current.CommitOid <> evidence.TestedCommitOid then
+                    | Result.Ok scope ->
+                        let mismatch =
+                            if not (String.Equals(scope.EvaluatedTreeOid, evidence.TestedTreeOid, StringComparison.OrdinalIgnoreCase)) then
+                                Some("tested_tree_oid", scope.EvaluatedTreeOid, evidence.TestedTreeOid)
+                            elif scope.ActId <> evidence.ActiveScopeActId then
+                                Some("active_scope_act_id", scope.ActId, evidence.ActiveScopeActId)
+                            elif not (String.Equals(scope.PointerBlobOid, evidence.ActiveScopePointerBlobOid, StringComparison.OrdinalIgnoreCase)) then
+                                Some("active_scope_pointer_blob_oid", scope.PointerBlobOid, evidence.ActiveScopePointerBlobOid)
+                            elif scope.DeclarationPath <> evidence.ScopeDeclarationPath then
+                                Some("scope_declaration_path", scope.DeclarationPath, evidence.ScopeDeclarationPath)
+                            elif not (String.Equals(scope.DeclarationBlobOid, evidence.DeclarationBlobOid, StringComparison.OrdinalIgnoreCase)) then
+                                Some("declaration_blob_oid", scope.DeclarationBlobOid, evidence.DeclarationBlobOid)
+                            elif not (String.Equals(scope.BaselineCommitOid, evidence.BaselineCommitOid, StringComparison.OrdinalIgnoreCase)) then
+                                Some("baseline_commit_oid", scope.BaselineCommitOid, evidence.BaselineCommitOid)
+                            else
+                                None
+
+                        match mismatch with
+                        | Some(field, expected, actual) ->
                             {
                                 Path = path
                                 Evidence = Some evidence
                                 Validation = Some vr
-                                Failure = Some(DependencyIdentityMismatch
-                                    ("tested_commit_oid", current.CommitOid, evidence.TestedCommitOid))
+                                Failure = Some(DependencyIdentityMismatch(field, expected, actual))
                                 BindingMatch = Some false
                             }
-                        elif current.TreeOid <> evidence.TestedTreeOid then
-                            {
-                                Path = path
-                                Evidence = Some evidence
-                                Validation = Some vr
-                                Failure = Some(DependencyIdentityMismatch
-                                    ("tested_tree_oid", current.TreeOid, evidence.TestedTreeOid))
-                                BindingMatch = Some false
-                            }
-                        else
+                        | None ->
                             {
                                 Path = path
                                 Evidence = Some evidence

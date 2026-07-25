@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <Compile Include="TestDoubles.fs" />
+    <Compile Include="AuthorityTestSupport.fs" />
     <Compile Include="SourcePolicy/LineCountingTests.fs" />
     <Compile Include="SourcePolicy/ClassificationTests.fs" />
     <Compile Include="SourcePolicy/ShebangTests.fs" />
@@ -63,6 +64,10 @@
     <Compile Include="CanonicalEvidence/WriterTests.fs" />
     <Compile Include="CanonicalEvidence/CliTests.fs" />
     <Compile Include="CanonicalEvidence/IntegrationTests.fs" />
+
+    <!-- Dedicated executable authority suites for CORRECTION03. -->
+    <Compile Include="ScopeAuthorityTests.fs" />
+    <Compile Include="EvidenceValidatorTests.fs" />
 
     <Compile Include="Program.fs" />
   </ItemGroup>

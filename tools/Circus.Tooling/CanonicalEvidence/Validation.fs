@@ -40,6 +40,8 @@ type ValidationIssue =
     | UnsupportedObjectFormat of actual: string
     | InvalidCommitOid of oid: string * objectFormat: string
     | InvalidTreeOid of oid: string * objectFormat: string
+    | InvalidScopeOid of field: string * oid: string * objectFormat: string
+    | EmptyScopeField of field: string
     | UnsupportedCheckId of id: string
     | InvalidStatusToken of context: string * token: string
     | SemanticHashMismatch of expected: string * actual: string
@@ -58,6 +60,8 @@ let issueToString (i: ValidationIssue) : string =
     | UnsupportedObjectFormat actual -> sprintf "unsupported object_format: %s" actual
     | InvalidCommitOid (oid, fmt) -> sprintf "invalid commit_oid for %s: %s" fmt oid
     | InvalidTreeOid (oid, fmt) -> sprintf "invalid tree_oid for %s: %s" fmt oid
+    | InvalidScopeOid (field, oid, fmt) -> sprintf "invalid %s for %s: %s" field fmt oid
+    | EmptyScopeField field -> sprintf "empty canonical scope field: %s" field
     | UnsupportedCheckId id -> sprintf "unsupported check id: %s" id
     | InvalidStatusToken (ctx, tok) -> sprintf "%s status token invalid: %s" ctx tok
     | SemanticHashMismatch (expected, actual) ->
@@ -111,6 +115,20 @@ let private validateOids (e: CanonicalEvidence) (issues: ResizeArray<ValidationI
     elif not (isValidOid e.ObjectFormat e.TestedTreeOid) then
         issues.Add(InvalidTreeOid (e.TestedTreeOid, e.ObjectFormat))
 
+let private validateScopeBindingFields (e: CanonicalEvidence) (issues: ResizeArray<ValidationIssue>) =
+    for field, value in
+        [ "active_scope_act_id", e.ActiveScopeActId
+          "scope_declaration_path", e.ScopeDeclarationPath ] do
+        if String.IsNullOrWhiteSpace value then
+            issues.Add(EmptyScopeField field)
+
+    for field, oid in
+        [ "active_scope_pointer_blob_oid", e.ActiveScopePointerBlobOid
+          "declaration_blob_oid", e.DeclarationBlobOid
+          "baseline_commit_oid", e.BaselineCommitOid ] do
+        if not (isValidOid e.ObjectFormat oid) then
+            issues.Add(InvalidScopeOid(field, oid, e.ObjectFormat))
+
 let private validateChecks (e: CanonicalEvidence) (issues: ResizeArray<ValidationIssue>) =
     let seen = System.Collections.Generic.HashSet<string>()
     for c in e.Checks do
@@ -152,6 +170,7 @@ let validate (rawJsonKeys: string list) (e: CanonicalEvidence) : ValidationResul
     validateProviderVersion e issues
     validateObjectFormat e issues
     validateOids e issues
+    validateScopeBindingFields e issues
     validateChecks e issues
     validateSemanticHash e issues
     validateOverallStatus e issues

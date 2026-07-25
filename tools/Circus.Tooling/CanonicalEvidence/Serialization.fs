@@ -97,6 +97,16 @@ let renderCanonicalisationForm (e: CanonicalEvidence) : string =
     sb.Append(escapeJsonString e.TestedTreeOid) |> ignore
     sb.Append ",\"object_format\":" |> ignore
     sb.Append(escapeJsonString e.ObjectFormat) |> ignore
+    sb.Append ",\"active_scope_act_id\":" |> ignore
+    sb.Append(escapeJsonString e.ActiveScopeActId) |> ignore
+    sb.Append ",\"active_scope_pointer_blob_oid\":" |> ignore
+    sb.Append(escapeJsonString e.ActiveScopePointerBlobOid) |> ignore
+    sb.Append ",\"scope_declaration_path\":" |> ignore
+    sb.Append(escapeJsonString e.ScopeDeclarationPath) |> ignore
+    sb.Append ",\"declaration_blob_oid\":" |> ignore
+    sb.Append(escapeJsonString e.DeclarationBlobOid) |> ignore
+    sb.Append ",\"baseline_commit_oid\":" |> ignore
+    sb.Append(escapeJsonString e.BaselineCommitOid) |> ignore
     sb.Append ",\"checks\":[" |> ignore
     let sorted = sortedChecks e.Checks
     let mutable first = true
@@ -279,6 +289,11 @@ let private deserializeJson (raw: string) : Result<CanonicalEvidence, string> =
                     TestedCommitOid = parseJsonString root "tested_commit_oid"
                     TestedTreeOid = parseJsonString root "tested_tree_oid"
                     ObjectFormat = parseJsonString root "object_format"
+                    ActiveScopeActId = parseJsonString root "active_scope_act_id"
+                    ActiveScopePointerBlobOid = parseJsonString root "active_scope_pointer_blob_oid"
+                    ScopeDeclarationPath = parseJsonString root "scope_declaration_path"
+                    DeclarationBlobOid = parseJsonString root "declaration_blob_oid"
+                    BaselineCommitOid = parseJsonString root "baseline_commit_oid"
                     Checks = checks |> Seq.toList
                     OverallStatus = overall
                     SemanticSha256 = parseJsonString root "semantic_sha256"
