@@ -546,7 +546,7 @@ index 5e44a64..372374e 100644
 @@ -257,10 +257,31 @@ test-source-policy: build-source-policy
  # Native gate
  # =============================================================================
- 
+
 +# Canonical evidence provider (ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION01)
 +# =============================================================================
 +
@@ -570,7 +570,7 @@ index 5e44a64..372374e 100644
  .PHONY: gate
  gate: factorize format-check test-backend test-devhost test-web smoke
  	@echo "=== Native gate passed ==="
- 
+
 +
  # =============================================================================
  # Linux development environment (ACT-CIRCUS-LINUX-DEV-HOST-BOOTSTRAP01)
@@ -1456,7 +1456,7 @@ index 8b0047a..d3379bd 100644
 --- a/docs/close-reports/ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01-CORRECTION02.md
 +++ b/docs/close-reports/ACT-CIRCUS-FSHARP-DIAGNOSTIC-BOUNDED-GIT-ADAPTER01-CORRECTION02.md
 @@ -281,3 +281,24 @@ may begin.
- 
+
  `ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-EXTRACTION01` remains
  separately dependent on non-vacuous repair-episode evidence.
 +
@@ -2903,7 +2903,7 @@ index 09c3ea5..57ae525 100644
 @@ -56,6 +56,13 @@
      <Compile Include="FSharpDiagnostics/RepairEpisodes/BoundedProcessTests.fs" />
      <Compile Include="FSharpDiagnostics/RepairEpisodes/GitAdapterTests.fs" />
- 
+
 +    <!-- Canonical evidence provider tests (ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION01).
 +         Compile order: Domain tests => Execution tests => Writer tests => CLI tests. -->
 +    <Compile Include="CanonicalEvidence/DomainTests.fs" />
@@ -2913,7 +2913,7 @@ index 09c3ea5..57ae525 100644
 +
      <Compile Include="Program.fs" />
    </ItemGroup>
- 
+
 
 === tools/Circus.Tooling/CanonicalEvidence/Cli.fs ===
 
@@ -5444,7 +5444,7 @@ index aeed44b..5b5652d 100644
      | FSharpDiagnosticsCmd of subArgs: string list
      | HelpCmd
      | VersionCmd
- 
+
  let helpText () : string =
 -    "circus-tooling — F# implementation policy verifier (source-policy, container-policy, gate-summary)\n"
 +    "circus-tooling — F# implementation policy verifier (source-policy, container-policy, gate-summary, canonical-evidence)\n"
@@ -5458,7 +5458,7 @@ index aeed44b..5b5652d 100644
 +    + "  circus-tooling canonical-evidence regenerate|verify\n"
      + "  circus-tooling help\n"
      + "  circus-tooling version\n"
- 
+
 @@ -66,9 +68,10 @@ let parseTopLevel (argv: string list) : Result<Command, string> =
      | "gate-summary" :: "regenerate" :: [] -> Ok GateSummaryRegenerateCmd
      | "gate-summary" :: "verify" :: [] -> Ok GateSummaryVerifyCmd
@@ -5468,7 +5468,7 @@ index aeed44b..5b5652d 100644
      | "fsharp-diagnostics" :: rest -> Ok(FSharpDiagnosticsCmd rest)
 -    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|no-force-push|fsharp-diagnostics|help|version}"
 +    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|canonical-evidence|no-force-push|fsharp-diagnostics|help|version}"
- 
+
  /// Legacy parser for backward compatibility (delegates to top-level).
  let parse (argv: string list) : Result<Command, string> =
 
@@ -5489,4 +5489,3 @@ GENERATOR_STALE: false
 
 ## Workflow anchors
 No workflow anchors configured.
-
