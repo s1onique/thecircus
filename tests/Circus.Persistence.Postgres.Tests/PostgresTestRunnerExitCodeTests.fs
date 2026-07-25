@@ -16,9 +16,7 @@ open Circus.Persistence.Postgres.Tests.PostgresTestRunner
 ///   caller exactly;
 /// * the runner is invoked with the argv that the caller passed and
 ///   with no default arguments (per the production implementation).
-let private fakeRunner
-    (result: int)
-    : CLIArguments seq -> string array -> Test -> int =
+let private fakeRunner (result: int) : CLIArguments seq -> string array -> Test -> int =
     fun (defaults: CLIArguments seq) (argv: string array) (_: Test) ->
         Expect.isEmpty defaults "seam calls runner with no default CLIArguments"
         Expect.equal argv [| "alpha"; "beta" |] "seam passes argv through to runner"

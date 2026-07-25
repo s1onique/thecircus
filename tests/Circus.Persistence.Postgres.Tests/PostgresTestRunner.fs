@@ -20,9 +20,5 @@ open Expecto
 ///   remapped.  They propagate to the caller exactly as raised.
 /// * No mutable global state is introduced and no PostgreSQL
 ///   resource is touched.
-let runWith
-    (runner: CLIArguments seq -> string array -> Test -> int)
-    (argv: string array)
-    (tests: Test)
-    : int =
+let runWith (runner: CLIArguments seq -> string array -> Test -> int) (argv: string array) (tests: Test) : int =
     runner [||] argv tests
