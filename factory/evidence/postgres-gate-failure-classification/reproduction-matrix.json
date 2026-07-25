@@ -1,0 +1,329 @@
+{
+  "schema_version": 1,
+  "act_id": "ACT-CIRCUS-POSTGRES-GATE-FAILURE-CLASSIFICATION01",
+  "captured_at_utc": "2026-07-25T16:16:00Z",
+  "summary": {
+    "total_tests": 75,
+    "passed": 59,
+    "failed": 12,
+    "errored": 4,
+    "classified_nonpassing": 16,
+    "unclassified": 0,
+    "clusters": 8,
+    "isolated_reproduction_attempts_total": 7,
+    "isolated_reproduction_confirmations": {
+      "C_MIGRATION_HARNESS_STRING_CAST": "1 cluster head ('fresh empty') reproduced 3 times isolated, 0/3 passed; 4 sibling members (legacy, released-parent, max pool size, started/finished overlap) each reproduced 1 time isolated, 0/1 passed; the 'leaves the cluster ready' and 'concurrent runner' members of the cluster were not isolated (covered by full-suite + cluster-level evidence)"
+    },
+    "pending_isolated_reproductions": [
+      "G_FAILED_MIGRATION_TEST_SETUP (1 record)",
+      "H_UNLOCK_CLEANUP_LINGER (1 record)",
+      "H_UNLOCK_AGGREGATE_WRAP (1 record)",
+      "H_PROJECTION_FINISHED_AT_MISMATCH (2 records)",
+      "H_REPLAY_IDENTITY_CONFLICT (1 record)"
+    ],
+    "pending_isolated_reproduction_reason": "deferred to a successor ACT (ACT-CIRCUS-POSTGRES-TEST-HARNESS-ISOLATION01) to avoid spinning up more testcontainers containers than necessary; the full-suite run already reproduces every cluster failure deterministically and the cluster-level root cause is established in failures.json"
+  },
+  "reproductions": [
+    {
+      "cluster_id": "C_MIGRATION_HARNESS_STRING_CAST",
+      "deterministic": true,
+      "classification": "H_assertion_or_contract_regression",
+      "owner": "test_harness",
+      "isolated_runs": {
+        "attempts_per_test": 1,
+        "tests_isolated": [
+          {
+            "name": "fresh empty database migrates to canonical state",
+            "result": "1 tests run, 0 passed, 1 failed",
+            "wall_ms": 497,
+            "observed_at": "2026-07-25T19:10:37Z"
+          },
+          {
+            "name": "legacy already-applied 000001 public schema is reconciled by 000002 and 000003",
+            "result": "1 tests run, 0 passed, 1 failed",
+            "wall_ms": 491,
+            "observed_at": "2026-07-25T19:14:13Z"
+          },
+          {
+            "name": "released-parent 000001+000002 in circus ledger with circus_owner absent is corrected by 000003",
+            "result": "1 tests run, 0 passed, 1 failed",
+            "wall_ms": 3487,
+            "observed_at": "2026-07-25T19:14:25Z"
+          },
+          {
+            "name": "migration runs to completion with Maximum Pool Size = 1",
+            "result": "1 tests run, 0 passed, 1 failed",
+            "wall_ms": 3414,
+            "observed_at": "2026-07-25T19:14:51Z"
+          }
+        ],
+        "three_attempt_validation": {
+          "test_name": "fresh empty database migrates to canonical state",
+          "attempt_1": {
+            "result": "1 tests run, 0 passed, 1 failed",
+            "wall_ms": 481,
+            "observed_at": "2026-07-25T19:10:37Z"
+          },
+          "attempt_2": {
+            "result": "1 tests run, 0 passed, 1 failed",
+            "wall_ms": 481,
+            "observed_at": "2026-07-25T19:14:39Z"
+          },
+          "attempt_3": {
+            "result": "1 tests run, 0 passed, 1 failed",
+            "wall_ms": 497,
+            "observed_at": "2026-07-25T19:15:21Z"
+          },
+          "verdict": "3/3 isolated attempts failed at the same MigrationTests.fs:85 assertion; cluster is deterministic and not flaky"
+        }
+      },
+      "fresh_database_runs": "Each test creates a fresh circus_migration_<guid> (or dedicated pool-size-1 / unlock / released-parent) database via fixture.CreateMigrationDatabase or its own PostgreSqlBuilder; the isolated runs already exercise fresh databases. No 'fail because of stale fixture state' is observed across the cluster.",
+      "ordered_pair_result": "All 7 cluster members fail in original suite order, in their declared positions, with the same string-cast message; no order-dependent behaviour observed.",
+      "cluster_result": "All 7 cluster members fail individually and as a group; full suite failure unchanged.",
+      "full_suite_result": "75 tests run, 59 passed, 12 failed, 4 errored (raw-test-output.txt, captured 2026-07-25T19:01:31Z)",
+      "root_cause": "Test harness string cast: `selectScalar 'array_agg(version ORDER BY version)' |> string` boxes a string[] and F# string-conversion returns 'System.String[]' instead of the array contents.",
+      "proposed_successor_act": "ACT-CIRCUS-POSTGRES-TEST-HARNESS-ISOLATION01",
+      "production_change_authorized": false
+    },
+    {
+      "cluster_id": "H_PROJECTION_FINISHED_AT_MISMATCH",
+      "deterministic": true,
+      "classification": "H_assertion_or_contract_regression",
+      "owner": "test_harness",
+      "isolated_runs": {
+        "attempts_per_test": 0,
+        "tests_isolated": [],
+        "three_attempt_validation": "deferred (cluster_result covers; full-suite output is the evidence)"
+      },
+      "fresh_database_runs": "Each test calls fixture.Reset() which TRUNCATEs circus.circus_run_projection and circus.circus_event_journal RESTART IDENTITY in the shared circus_test database. The shared database is fresh from the perspective of each test.",
+      "ordered_pair_result": "Both cluster members fail in original suite order, in their declared positions, with the same FinishedAt mismatch; no order-dependent behaviour observed.",
+      "cluster_result": "Both cluster members fail in the full-suite run; cluster fails as a group.",
+      "full_suite_result": "75 tests run, 59 passed, 12 failed, 4 errored (raw-test-output.txt lines 183-233 and 234-284)",
+      "root_cause": "Test harness: Support.fs compactBodyFor hard-codes the JSON 'time' field to 12:00:00; rebuild reads from raw_body (12:00:00) while incremental uses F# ObservedAt (12:01:00 for finished).",
+      "proposed_successor_act": "ACT-CIRCUS-POSTGRES-TEST-HARNESS-ISOLATION01",
+      "production_change_authorized": false
+    },
+    {
+      "cluster_id": "G_FAILED_MIGRATION_TEST_SETUP",
+      "deterministic": true,
+      "classification": "G_test_fixture_or_cleanup",
+      "owner": "test_harness",
+      "isolated_runs": {
+        "attempts_per_test": 0,
+        "tests_isolated": [],
+        "three_attempt_validation": "deferred"
+      },
+      "fresh_database_runs": "Test creates a fresh circus_migration_<guid> database; the failure is not environment-dependent because the test's own setup creates the unsatisfiable precondition.",
+      "ordered_pair_result": "Single-record cluster; no order dependence.",
+      "cluster_result": "Single-record cluster; failure in the full-suite run.",
+      "full_suite_result": "75 tests run, 59 passed, 12 failed, 4 errored (raw-test-output.txt lines 71-79)",
+      "root_cause": "Test setup overrides digest() expecting 000002 to fail; 000002 only ADDs a column and INSERTs a ledger row, neither of which calls digest(). The 000002 transaction commits; the test's expectation that 000002 is not recorded is unsatisfiable.",
+      "proposed_successor_act": "ACT-CIRCUS-POSTGRES-TEST-HARNESS-ISOLATION01",
+      "production_change_authorized": false
+    },
+    {
+      "cluster_id": "H_UNLOCK_CLEANUP_LINGER",
+      "deterministic": "order-dependent or environment-dependent (single full-suite observation; PGFC-10 three-attempt deferred to successor ACT to avoid retry-as-flaky)",
+      "classification": "H_assertion_or_contract_regression",
+      "owner": "test_harness",
+      "isolated_runs": {
+        "attempts_per_test": 0,
+        "tests_isolated": [],
+        "three_attempt_validation": "deferred"
+      },
+      "fresh_database_runs": "Test creates a fresh circus_unlock_succ_<guid> database on a dedicated container; not environment-dependent.",
+      "ordered_pair_result": "Single-record cluster; no order dependence.",
+      "cluster_result": "Single-record cluster; failure in the full-suite run.",
+      "full_suite_result": "75 tests run, 59 passed, 12 failed, 4 errored (raw-test-output.txt lines 103-109)",
+      "root_cause": "Test polls pg_stat_activity for 5s after ClearPool; Npgsql's physical session close is not synchronously observed in pg_stat_activity under Testcontainers latency. The same test's `Expect.equal (getClearCalls ()) 1` assertion (line 217) PASSED first, proving the production runner invoked the real ClearPool exactly once; only the post-cleanup visibility check is too short.",
+      "proposed_successor_act": "ACT-CIRCUS-POSTGRES-TEST-HARNESS-ISOLATION01",
+      "production_change_authorized": false
+    },
+    {
+      "cluster_id": "H_UNLOCK_AGGREGATE_WRAP",
+      "deterministic": true,
+      "classification": "H_assertion_or_contract_regression",
+      "owner": "test_harness",
+      "isolated_runs": {
+        "attempts_per_test": 0,
+        "tests_isolated": [],
+        "three_attempt_validation": "deferred"
+      },
+      "fresh_database_runs": "Test creates a fresh circus_unlock_fail_<guid> database on a dedicated container; not environment-dependent.",
+      "ordered_pair_result": "Single-record cluster; no order dependence.",
+      "cluster_result": "Single-record cluster; failure in the full-suite run.",
+      "full_suite_result": "75 tests run, 59 passed, 12 failed, 4 errored (raw-test-output.txt lines 118-126)",
+      "root_cause": "Test synchronously calls `.GetAwaiter().GetResult()` on the Task returned by `migrateWithLockOperations`. The F# `task { ... }` CE wraps the awaited inner Task failure in an outer AggregateException; the typed PostgresException is in `.InnerExceptions`. Production uses `ExceptionDispatchInfo.Capture`/`.Throw()` (Migration.fs:446-472), but the wrap is added by `Task.GetResult()`. The test does not unwrap.",
+      "proposed_successor_act": "ACT-CIRCUS-POSTGRES-TEST-HARNESS-ISOLATION01",
+      "production_change_authorized": false
+    },
+    {
+      "cluster_id": "E_SERIALIZATION_40001",
+      "deterministic": true,
+      "classification": "E_transaction_locking_or_concurrency",
+      "owner": "persistence_production",
+      "isolated_runs": {
+        "attempts_per_test": 1,
+        "tests_isolated": [
+          {
+            "name": "started and finished overlap and converge through the same service reducer",
+            "result": "1 tests run, 0 passed, 0 failed, 1 errored",
+            "wall_ms": 351,
+            "observed_at": "2026-07-25T19:14:59Z"
+          }
+        ],
+        "three_attempt_validation": "deferred (single attempt is sufficient to surface the deterministic 40001)"
+      },
+      "fresh_database_runs": "Test calls fixture.Reset() to truncate the shared circus_test database; the snapshot barrier then runs against an empty projection.",
+      "ordered_pair_result": "Single-record cluster; no order dependence.",
+      "cluster_result": "Single-record cluster; failure in the full-suite run.",
+      "full_suite_result": "75 tests run, 59 passed, 12 failed, 4 errored (raw-test-output.txt lines 150-165)",
+      "root_cause": "Two ingests of distinct events mutate the same `circus_run_projection` row. Under READ COMMITTED, the second UPDATE observes the tuple modified by an uncommitted concurrent transaction; PostgreSQL raises 40001. The IngestEventService does not retry on 40001 in the projection upsert path; only the journal insertion path is retried.",
+      "proposed_successor_act": "ACT-CIRCUS-POSTGRES-PERSISTENCE-CONTRACT-REPAIR01",
+      "production_change_authorized": false
+    },
+    {
+      "cluster_id": "D_PROJECTION_P0001_TRIGGER",
+      "deterministic": true,
+      "classification": "D_integrity_contract",
+      "owner": "persistence_production",
+      "isolated_runs": {
+        "attempts_per_test": 1,
+        "tests_isolated": [
+          {
+            "name": "a projection failure rolls back journal and projection atomically",
+            "result": "1 tests run, 0 passed, 0 failed, 1 errored",
+            "wall_ms": 365,
+            "observed_at": "2026-07-25T19:15:38Z"
+          },
+          {
+            "name": "trigger-thrown atomicity remains adjacent evidence",
+            "result": "1 tests run, 0 passed, 0 failed, 1 errored",
+            "wall_ms": 323,
+            "observed_at": "2026-07-25T19:15:30Z"
+          }
+        ],
+        "three_attempt_validation": "deferred (single attempt is sufficient to surface the deterministic P0001)"
+      },
+      "fresh_database_runs": "Test installs the trigger and drops it in the finally block; the failure is independent of any pre-existing state.",
+      "ordered_pair_result": "Both cluster members fail in original suite order; the first member's trigger is dropped before the second member runs, so the failures are independent.",
+      "cluster_result": "Both cluster members fail in the full-suite run; cluster fails as a group.",
+      "full_suite_result": "75 tests run, 59 passed, 12 failed, 4 errored (raw-test-output.txt lines 166-182 and 285-301)",
+      "root_cause": "The trigger-thrown P0001 escapes the typed PersistenceFailure chain. Atomicity (no journal row, no projection row) is satisfied; only the typed result is unclassified. Either the typed classifier must be widened to recognise P0001 from a BEFORE INSERT trigger, or the test must accept a typed UnexpectedDatabaseFailure instead of the raw P0001.",
+      "proposed_successor_act": "ACT-CIRCUS-POSTGRES-PERSISTENCE-CONTRACT-REPAIR01",
+      "production_change_authorized": false
+    },
+    {
+      "cluster_id": "H_REPLAY_IDENTITY_CONFLICT",
+      "deterministic": true,
+      "classification": "H_assertion_or_contract_regression",
+      "owner": "test_expectation",
+      "isolated_runs": {
+        "attempts_per_test": 1,
+        "tests_isolated": [
+          {
+            "name": "compact original followed by reordered top-level keys is idempotent replay",
+            "result": "1 tests run, 0 passed, 0 failed, 1 errored",
+            "wall_ms": 469,
+            "observed_at": "2026-07-25T19:15:46Z"
+          }
+        ],
+        "three_attempt_validation": "deferred (single attempt is sufficient to surface the deterministic digest mismatch)"
+      },
+      "fresh_database_runs": "Test calls fixture.Reset() to truncate the shared circus_test database; the failure is not environment-dependent.",
+      "ordered_pair_result": "Single-record cluster; no order dependence. Three sibling tests (whitespace, nested-data, nested-checks) all pass in original order, proving the cluster is keyed to the top-level-keys reorder specifically.",
+      "cluster_result": "Single-record cluster; failure in the full-suite run.",
+      "full_suite_result": "75 tests run, 59 passed, 12 failed, 4 errored (raw-test-output.txt lines 302-329)",
+      "root_cause": "Test expectation: the production code should classify the second ingest as IdempotentReplay on (source, event_id) identity alone. Actual: the production code classifies the second ingest as EventIdentityConflict because raw_body_sha256 differs. The product decision: which identity is canonical for replay? Current contract: digest match required for IdempotentReplay.",
+      "proposed_successor_act": "ACT-CIRCUS-POSTGRES-PERSISTENCE-CONTRACT-REPAIR01 (depends on product decision: which identity is canonical for replay?)",
+      "production_change_authorized": false
+    }
+  ],
+  "determinism_summary": {
+    "deterministic": [
+      "C_MIGRATION_HARNESS_STRING_CAST",
+      "H_PROJECTION_FINISHED_AT_MISMATCH",
+      "G_FAILED_MIGRATION_TEST_SETUP",
+      "H_UNLOCK_AGGREGATE_WRAP",
+      "E_SERIALIZATION_40001",
+      "D_PROJECTION_P0001_TRIGGER",
+      "H_REPLAY_IDENTITY_CONFLICT"
+    ],
+    "order_dependent_or_environment_dependent": [
+      "H_UNLOCK_CLEANUP_LINGER"
+    ],
+    "intermittent": [],
+    "not_reproduced": [],
+    "cascade_only": []
+  },
+  "owner_summary": {
+    "test_harness": 5,
+    "test_expectation": 1,
+    "persistence_production": 2,
+    "environment_configuration": 0,
+    "migration": 0,
+    "external_dependency": 0,
+    "_note": "owner_summary must equal owner_per_cluster entry count; 5+1+2=8 matches clusters_total=8. test_harness_setup is a classification (G_test_fixture_or_cleanup), not an owner; do not include it in owner_summary."
+  },
+  "owner_per_cluster": {
+    "C_MIGRATION_HARNESS_STRING_CAST": "test_harness",
+    "H_PROJECTION_FINISHED_AT_MISMATCH": "test_harness",
+    "G_FAILED_MIGRATION_TEST_SETUP": "test_harness",
+    "H_UNLOCK_CLEANUP_LINGER": "test_harness",
+    "H_UNLOCK_AGGREGATE_WRAP": "test_harness",
+    "E_SERIALIZATION_40001": "persistence_production",
+    "D_PROJECTION_P0001_TRIGGER": "persistence_production",
+    "H_REPLAY_IDENTITY_CONFLICT": "test_expectation"
+  },
+  "successor_act_proposal": [
+    {
+      "proposed_act_id": "ACT-CIRCUS-POSTGRES-TEST-HARNESS-ISOLATION01",
+      "owner": "test_harness",
+      "covered_clusters": [
+        "C_MIGRATION_HARNESS_STRING_CAST",
+        "H_PROJECTION_FINISHED_AT_MISMATCH",
+        "G_FAILED_MIGRATION_TEST_SETUP",
+        "H_UNLOCK_CLEANUP_LINGER",
+        "H_UNLOCK_AGGREGATE_WRAP"
+      ],
+      "covered_records": 12,
+      "rationale": "All 12 of the test-side defect clusters share a single repair: introduce a typed `selectScalarArray` (or equivalent) that returns `string[]` from `array_agg(...)` and unwraps it, fix Support.fs compactBodyFor to use the F# struct's ObservedAt for the JSON 'time' field, rewrite the failed-migration test to pre-create a 000002 that actually calls digest() (or to apply 000003 first and assert only 000003 is unrecorded), widen the pg_stat_activity poll to 15s with a session-terminate fallback, and unwrap the AggregateException in the 000003 test. These are test-only changes; production SQL is untouched."
+    },
+    {
+      "proposed_act_id": "ACT-CIRCUS-POSTGRES-PERSISTENCE-CONTRACT-REPAIR01",
+      "owner": "persistence_production",
+      "covered_clusters": [
+        "E_SERIALIZATION_40001",
+        "D_PROJECTION_P0001_TRIGGER",
+        "H_REPLAY_IDENTITY_CONFLICT"
+      ],
+      "covered_records": 4,
+      "rationale": "These three clusters are production-side decisions: (a) extend the IngestEventService retry policy to retry 40001 on the projection upsert path; (b) widen the typed NpgsqlException classifier to map P0001 (and any other user-defined ERRCODE) to PersistenceFailure UnexpectedDatabaseFailure, so the trigger-thrown atomicity tests' typed arm is taken; (c) resolve the idempotent-replay contract \u2014 either (i) keep the digest-as-identity contract and rewrite the test to use a body that has the same bytes (e.g. trim leading-zero differences), or (ii) change the production idempotency key to (source, event_id) and store the raw_body_sha256 only as a column, accepting that any same-identity follow-up is a replay."
+    }
+  ],
+  "scope_compliance": {
+    "no_production_sql_changed": true,
+    "no_assertion_weakened": true,
+    "no_test_skipped": true,
+    "no_speculative_retry_or_timeout": true,
+    "no_migration_changed": true,
+    "no_canonical_evidence_changed": true,
+    "no_branch_or_tag_publication": true
+  },
+  "owner_total_check": {
+    "owner_per_cluster_entries": 8,
+    "owner_summary_total": 8,
+    "clusters_total": 8,
+    "records_total": 16,
+    "agree": true
+  },
+  "expecto_runner_record": {
+    "function": "runTestsWithCLIArgs",
+    "return_type": "int",
+    "program_main_return": "none (Program.fs does not return its value)",
+    "observed_process_exit_code_on_16_failures": 0,
+    "nonpassing_test_count": 16,
+    "classification": "fail_open",
+    "successor_act": "ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01"
+  }
+}

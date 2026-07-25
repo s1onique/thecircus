@@ -1,0 +1,34 @@
+[testcontainers.org 00:00:00.41] Connected to Docker:
+  Host: unix:///var/run/docker.sock
+  Server Version: 29.6.2
+  Kernel Version: 6.17.0-19-generic
+  API Version: 1.55
+  Operating System: Linux Mint 22.3
+  Total Memory: 78.45 GB
+[testcontainers.org 00:00:00.82] Docker container 35b2e9f7ebd8 created
+[testcontainers.org 00:00:00.90] Start Docker container 35b2e9f7ebd8
+[testcontainers.org 00:00:01.15] Wait for Docker container 35b2e9f7ebd8 to complete readiness checks
+[testcontainers.org 00:00:02.19] Docker container 35b2e9f7ebd8 ready
+[testcontainers.org 00:00:02.47] Docker container c91955952c57 created
+[testcontainers.org 00:00:02.47] Start Docker container c91955952c57
+[testcontainers.org 00:00:02.68] Wait for Docker container c91955952c57 to complete readiness checks
+[testcontainers.org 00:00:02.69] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container c91955952c57
+[testcontainers.org 00:00:03.86] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container c91955952c57
+[testcontainers.org 00:00:04.98] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container c91955952c57
+[testcontainers.org 00:00:05.12] Docker container c91955952c57 ready
+[37m[[37m19:39:54 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m19:39:54 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.concurrent runner is rejected by the migration advisory lock[37m failed in [32m00:00:00.4480000[37m. [36m
+After lock release, Migration.migrate succeeds and records the full ledger. Expected subject string 'System.String[]' to contain substring '000003_runtime_grant_hardening'.
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@440-12.Invoke(NpgsqlCommand lockCommand) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 494
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Circus.Persistence.Postgres.Tests.MigrationTests.f@1-15(TestCaseBuilder builder@, NpgsqlDataSource adminDataSource', Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 437
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@419-10.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 421[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m19:39:54 [37mINF[37m] [37mEXPECTO! [36m1[37m tests run in [32m00:00:00.5331984[37m for [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.concurrent runner is rejected by the migration advisory lock[37m – [36m0[37m passed, [36m0[37m ignored, [36m1[37m failed, [36m0[37m errored. [36m[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m19:39:54 [37mINF[37m] [37mEXPECTO?! Summary...
+Passed: [36m 0[37m
+Ignored: [36m0[37m
+Failed: [36m 1
+	Circus.Persistence.Postgres.Tests.Migration and least privilege.concurrent runner is rejected by the migration advisory lock[37m
+Errored: [36m0[37m [37m<[37mExpecto[37m>[37m
+[0m[testcontainers.org 00:00:06.39] Stop Docker container c91955952c57

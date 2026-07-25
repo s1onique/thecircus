@@ -1,0 +1,43 @@
+[testcontainers.org 00:00:00.30] Connected to Docker:
+  Host: unix:///var/run/docker.sock
+  Server Version: 29.6.2
+  Kernel Version: 6.17.0-19-generic
+  API Version: 1.55
+  Operating System: Linux Mint 22.3
+  Total Memory: 78.45 GB
+[testcontainers.org 00:00:00.70] Docker container 608329c3131c created
+[testcontainers.org 00:00:00.81] Start Docker container 608329c3131c
+[testcontainers.org 00:00:01.08] Wait for Docker container 608329c3131c to complete readiness checks
+[testcontainers.org 00:00:02.12] Docker container 608329c3131c ready
+[testcontainers.org 00:00:02.34] Docker container 6644e5fc5271 created
+[testcontainers.org 00:00:02.34] Start Docker container 6644e5fc5271
+[testcontainers.org 00:00:02.58] Wait for Docker container 6644e5fc5271 to complete readiness checks
+[testcontainers.org 00:00:02.60] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 6644e5fc5271
+[testcontainers.org 00:00:03.77] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 6644e5fc5271
+[testcontainers.org 00:00:04.91] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 6644e5fc5271
+[testcontainers.org 00:00:05.03] Docker container 6644e5fc5271 ready
+[37m[[37m19:43:36 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m19:43:37 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Concurrent service ingestion.started and finished overlap and converge through the same service reducer[37m errored in [32m00:00:00.1920000[37m [37m<[37mExpecto[37m>[37m
+Npgsql.PostgresException (0x80004005): 40001: could not serialize access due to concurrent update
+[37m   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)[37m
+[37m   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)[37m
+[37m   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)[37m
+[37m   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)[37m
+  Exception data:
+    Severity: ERROR
+    SqlState: 40001
+    MessageText: could not serialize access due to concurrent update
+    File: nodeModifyTable.c
+    Line: 312
+    Routine: ExecCheckTupleVisible
+[0m[1000D[?25h[1000D[?25h[37m[[37m19:43:37 [37mINF[37m] [37mEXPECTO! [36m1[37m tests run in [32m00:00:00.2727654[37m for [36mCircus.Persistence.Postgres.Tests.Concurrent service ingestion.started and finished overlap and converge through the same service reducer[37m – [36m0[37m passed, [36m0[37m ignored, [36m0[37m failed, [36m1[37m errored. [36m[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m19:43:37 [37mINF[37m] [37mEXPECTO?! Summary...
+Passed: [36m 0[37m
+Ignored: [36m0[37m
+Failed: [36m 0[37m
+Errored: [36m1
+	Circus.Persistence.Postgres.Tests.Concurrent service ingestion.started and finished overlap and converge through the same service reducer[37m [37m<[37mExpecto[37m>[37m
+[0m[testcontainers.org 00:00:06.07] Stop Docker container 6644e5fc5271

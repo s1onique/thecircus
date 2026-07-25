@@ -1,0 +1,42 @@
+[testcontainers.org 00:00:00.30] Connected to Docker:
+  Host: unix:///var/run/docker.sock
+  Server Version: 29.6.2
+  Kernel Version: 6.17.0-19-generic
+  API Version: 1.55
+  Operating System: Linux Mint 22.3
+  Total Memory: 78.45 GB
+[testcontainers.org 00:00:00.66] Docker container be20408900a6 created
+[testcontainers.org 00:00:00.75] Start Docker container be20408900a6
+[testcontainers.org 00:00:00.96] Wait for Docker container be20408900a6 to complete readiness checks
+[testcontainers.org 00:00:01.99] Docker container be20408900a6 ready
+[testcontainers.org 00:00:02.25] Docker container 0f3e6da68581 created
+[testcontainers.org 00:00:02.26] Start Docker container 0f3e6da68581
+[testcontainers.org 00:00:02.44] Wait for Docker container 0f3e6da68581 to complete readiness checks
+[testcontainers.org 00:00:02.45] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 0f3e6da68581
+[testcontainers.org 00:00:03.60] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 0f3e6da68581
+[testcontainers.org 00:00:04.72] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 0f3e6da68581
+[testcontainers.org 00:00:04.85] Docker container 0f3e6da68581 ready
+[37m[[37m19:39:15 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[testcontainers.org 00:00:05.92] Docker container ef88fe623f0c created
+[0m[1000D[?25h[testcontainers.org 00:00:05.92] Start Docker container ef88fe623f0c
+[0m[1000D[?25h[testcontainers.org 00:00:06.14] Wait for Docker container ef88fe623f0c to complete readiness checks
+[0m[1000D[?25h[testcontainers.org 00:00:06.14] Execute "pg_isready --host localhost --dbname circus_poolsize1_826c83a0550d4fdebaec225a7ff0eebe --username postgres" at Docker container ef88fe623f0c
+[0m[1000D[?25h[testcontainers.org 00:00:07.25] Execute "pg_isready --host localhost --dbname circus_poolsize1_826c83a0550d4fdebaec225a7ff0eebe --username postgres" at Docker container ef88fe623f0c
+[0m[1000D[?25h[testcontainers.org 00:00:08.38] Execute "pg_isready --host localhost --dbname circus_poolsize1_826c83a0550d4fdebaec225a7ff0eebe --username postgres" at Docker container ef88fe623f0c
+[0m[1000D[?25h[testcontainers.org 00:00:08.52] Docker container ef88fe623f0c ready
+[0m[1000D[?25h[testcontainers.org 00:00:08.77] Stop Docker container ef88fe623f0c
+[0m[1000D[?25h[37m[[37m19:39:19 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.migration runs to completion with Maximum Pool Size = 1[37m failed in [32m00:00:03.3700000[37m. [36m
+Pool-size-1 migration recorded 000003. Expected subject string 'System.String[]' to contain substring '000003_runtime_grant_hardening'.
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@394-9.Invoke(NpgsqlDataSource adminDataSource) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 402
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Circus.Persistence.Postgres.Tests.MigrationTests.f@1-14(TestCaseBuilder builder@, PostgreSqlContainer container, Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 392
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@376-8.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 385
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m19:39:19 [37mINF[37m] [37mEXPECTO! [36m1[37m tests run in [32m00:00:03.4683128[37m for [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.migration runs to completion with Maximum Pool Size = 1[37m – [36m0[37m passed, [36m0[37m ignored, [36m1[37m failed, [36m0[37m errored. [36m[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m19:39:19 [37mINF[37m] [37mEXPECTO?! Summary...
+Passed: [36m 0[37m
+Ignored: [36m0[37m
+Failed: [36m 1
+	Circus.Persistence.Postgres.Tests.Migration and least privilege.migration runs to completion with Maximum Pool Size = 1[37m
+Errored: [36m0[37m [37m<[37mExpecto[37m>[37m
+[0m[testcontainers.org 00:00:09.12] Stop Docker container 0f3e6da68581

@@ -1,0 +1,36 @@
+[testcontainers.org 00:00:00.29] Connected to Docker:
+  Host: unix:///var/run/docker.sock
+  Server Version: 29.6.2
+  Kernel Version: 6.17.0-19-generic
+  API Version: 1.55
+  Operating System: Linux Mint 22.3
+  Total Memory: 78.45 GB
+[testcontainers.org 00:00:00.65] Docker container 1a69f049dfb3 created
+[testcontainers.org 00:00:00.72] Start Docker container 1a69f049dfb3
+[testcontainers.org 00:00:00.94] Wait for Docker container 1a69f049dfb3 to complete readiness checks
+[testcontainers.org 00:00:01.98] Docker container 1a69f049dfb3 ready
+[testcontainers.org 00:00:02.20] Docker container 4964f53a19f3 created
+[testcontainers.org 00:00:02.20] Start Docker container 4964f53a19f3
+[testcontainers.org 00:00:02.40] Wait for Docker container 4964f53a19f3 to complete readiness checks
+[testcontainers.org 00:00:02.41] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 4964f53a19f3
+[testcontainers.org 00:00:03.56] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 4964f53a19f3
+[testcontainers.org 00:00:04.68] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 4964f53a19f3
+[testcontainers.org 00:00:04.80] Docker container 4964f53a19f3 ready
+[37m[[37m19:41:54 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m19:41:54 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.failed migration is not recorded as applied[37m failed in [32m00:00:00.3450000[37m. [36m
+Failed 000002 is not recorded as applied. String does not match at position 0. Expected char: 'F', but got 'T'.
+[32mexpected[36m: [32mFalse[36m
+[31m  actual[36m: [31mTrue[36m
+   at Circus.Persistence.Postgres.Tests.MigrationTests.f@1-19(TestCaseBuilder builder@, NpgsqlDataSource adminDataSource', Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 561
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@529-15.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 531
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m19:41:54 [37mINF[37m] [37mEXPECTO! [36m1[37m tests run in [32m00:00:00.4338658[37m for [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.failed migration is not recorded as applied[37m – [36m0[37m passed, [36m0[37m ignored, [36m1[37m failed, [36m0[37m errored. [36m[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m19:41:54 [37mINF[37m] [37mEXPECTO?! Summary...
+Passed: [36m 0[37m
+Ignored: [36m0[37m
+Failed: [36m 1
+	Circus.Persistence.Postgres.Tests.Migration and least privilege.failed migration is not recorded as applied[37m
+Errored: [36m0[37m [37m<[37mExpecto[37m>[37m
+[0m[testcontainers.org 00:00:05.95] Stop Docker container 4964f53a19f3

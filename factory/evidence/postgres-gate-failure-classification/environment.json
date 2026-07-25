@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "act_id": "ACT-CIRCUS-POSTGRES-GATE-FAILURE-CLASSIFICATION01",
+  "captured_at_local": "2026-07-25T19:10:46+03:00",
+  "captured_at_utc": "2026-07-25T16:10:46Z",
+  "dotnet_sdk": {
+    "version": "10.0.202",
+    "active_sdk": "10.0.202",
+    "installed_sdks": [
+      "9.0.316",
+      "10.0.202"
+    ],
+    "global_json_pinned": "10.0.200",
+    "roll_forward": "latestPatch",
+    "allow_prerelease": false
+  },
+  "test_runner": "Expecto 11.1.0 (dotnet run --project tests/Circus.Persistence.Postgres.Tests)",
+  "test_assembly_sha256": "b4c6d0663d2b4e745d9022f662dc2a9062c22fca620c5f6b2d70c055e8a042f9",
+  "test_assembly_path": "tests/Circus.Persistence.Postgres.Tests/bin/Release/net10.0/Circus.Persistence.Postgres.Tests.dll",
+  "npgsql_version": "10.0.3",
+  "testcontainers_postgresql_version": "4.13.0",
+  "expecto_version": "11.1.0",
+  "postgresql_server_version": "17.4 (Debian 17.4-1.pgdg120+2)",
+  "postgresql_server_version_num": "170004",
+  "postgresql_container_image": "postgres:17.4",
+  "postgresql_container_image_sha256_resolved": "304ab8135187",
+  "postgresql_container_or_service_identity": "testcontainers-managed ephemeral container, one per test that needs a dedicated cluster (PostgreSqlBuilder default with database=circus_<test-prefix>_<guid>)",
+  "docker": {
+    "daemon_version": "29.6.2",
+    "daemon_api_version": "1.55",
+    "kernel_version": "6.17.0-19-generic",
+    "host_socket": "unix:///var/run/docker.sock",
+    "os": "Linux Mint 22.3 (Zena) on Ubuntu 24.04.2 LTS base",
+    "memory_total_gb": 78.45,
+    "available_postgres_images": [
+      "postgres:17.4 (304ab8135187, 627MB)",
+      "postgres:16-alpine (57c72fd2a128, 420MB)"
+    ]
+  },
+  "database_name_runtime": "circus_test (shared) plus ephemeral per-test databases prefixed circus_migration_/circus_released_parent_/circus_poolsize1_/circus_default_privs_/circus_unlock_*/circus_lock_<guid>",
+  "database_user_runtime": "postgres (admin) and circus_app (runtime, password: redacted-in-tracked-evidence, runtime credential is set by PostgresFixture inside the ephemeral container only)",
+  "database_host": "PostgreSQL container loopback (127.0.0.1 mapped to a random testcontainers-controlled port)",
+  "database_port": "testcontainers-allocated ephemeral port (no fixed number)",
+  "database_timezone": "Etc/UTC",
+  "database_encoding": "UTF8",
+  "default_transaction_isolation": "read committed",
+  "search_path": "\"$user\", public (default; canonical application code uses SET search_path explicitly per cluster_invariance tests)",
+  "data_checksums": "off",
+  "max_connections": "100",
+  "shared_buffers": "128MB",
+  "migration_head": "000003_runtime_grant_hardening (canonical version list: 000001_event_journal, 000002_namespace_alignment, 000003_runtime_grant_hardening)",
+  "preflight": {
+    "pg_isready_command": "pg_isready -h localhost -p 55432 -d circus_test -U postgres",
+    "pg_isready_status": "accepting connections (verified on 2026-07-25T19:07:27Z against the env-probe container, exit 0)"
+  },
+  "server_identity_queries": {
+    "select version()": "PostgreSQL 17.4 (Debian 17.4-1.pgdg120+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14) 12.2.0, 64-bit",
+    "show server_version": "17.4 (Debian 17.4-1.pgdg120+2)",
+    "show server_version_num": "170004",
+    "show server_encoding": "UTF8",
+    "show timezone": "Etc/UTC",
+    "show default_transaction_isolation": "read committed",
+    "show search_path": "\"$user\", public",
+    "select current_database(), current_user": "circus_test | postgres",
+    "show data_checksums": "off",
+    "show max_connections": "100",
+    "show shared_buffers": "128MB"
+  },
+  "working_tree": {
+    "commit_oid": "e51ed927f6782e20ca448af2376c99668240199f",
+    "tree_oid": "10f00651b953796ed1b499838726c5511decffe5",
+    "branch_head": "main (local)",
+    "origin_main_oid": "731034caf5eab7fa68eb69971bc2332204d11ca1",
+    "fast_forward_origin_to_local": "not_applicable (parent correction03 closed at PARTIAL_CHECKPOINT with final_pass_line_emitted=false; ordinary gate deliberately failing on postgres; no publication step inside this classification ACT)",
+    "working_tree_untracked_count": 2,
+    "untracked_paths": [
+      "docs/acts/ACT-CIRCUS-POSTGRES-GATE-FAILURE-CLASSIFICATION01.md",
+      "factory/evidence/postgres-gate-failure-classification/"
+    ]
+  },
+  "makefile_targets_invoked": [
+    "test-postgres (via the same dotnet run command; see raw-test-output.txt)"
+  ],
+  "expecto_args_used_for_full_run": [
+    "--no-build",
+    "--no-restore",
+    "-c",
+    "Release"
+  ],
+  "expecto_args_used_for_isolated_reproduction": [
+    "--no-build",
+    "--no-restore",
+    "-c",
+    "Release",
+    "--summary",
+    "--filter-test-case <substring-of-fully-qualified-name>"
+  ],
+  "expecto_help_output": "Confirmed --filter-test-case <substring> matches a single test by its fully qualified name; --filter is hierarchy-bound and did not match when the substring cut across the assembly/test-list boundary.",
+  "git_safety_status": "clean publish path (no force push attempted; this ACT is classification-only and does not push)",
+  "notes": "All test runs use Testcontainers to spin up an ephemeral postgres:17.4 container. The Testcontainers package re-uses the local docker daemon and writes the docker.sock on Linux. The shared PostgresFixture owns the canonical main database (circus_test); every test that needs a dedicated cluster creates its own PostgreSqlBuilder and disposes it on teardown. The 12 failed and 4 errored test outcomes in raw-test-output.txt are captured under the same make-test-postgres / dotnet-run command path; isolated reproductions in this ACT used --filter-test-case against the same binary. No production code was modified."
+}

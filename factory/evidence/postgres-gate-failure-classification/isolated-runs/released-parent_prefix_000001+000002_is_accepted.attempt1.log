@@ -1,0 +1,34 @@
+[testcontainers.org 00:00:00.32] Connected to Docker:
+  Host: unix:///var/run/docker.sock
+  Server Version: 29.6.2
+  Kernel Version: 6.17.0-19-generic
+  API Version: 1.55
+  Operating System: Linux Mint 22.3
+  Total Memory: 78.45 GB
+[testcontainers.org 00:00:00.68] Docker container 3f114ff7e1bf created
+[testcontainers.org 00:00:00.75] Start Docker container 3f114ff7e1bf
+[testcontainers.org 00:00:00.98] Wait for Docker container 3f114ff7e1bf to complete readiness checks
+[testcontainers.org 00:00:02.02] Docker container 3f114ff7e1bf ready
+[testcontainers.org 00:00:02.21] Docker container 70540367a215 created
+[testcontainers.org 00:00:02.21] Start Docker container 70540367a215
+[testcontainers.org 00:00:02.41] Wait for Docker container 70540367a215 to complete readiness checks
+[testcontainers.org 00:00:02.42] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 70540367a215
+[testcontainers.org 00:00:03.57] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 70540367a215
+[testcontainers.org 00:00:04.69] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container 70540367a215
+[testcontainers.org 00:00:04.81] Docker container 70540367a215 ready
+[37m[[37m19:40:02 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m19:40:02 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.released-parent prefix 000001+000002 is accepted and only 000003 is applied without refresh[37m failed in [32m00:00:00.3230000[37m. [36m
+Prefix test: 000001 is preserved. Expected subject string 'System.String[]' to contain substring '000001_event_journal'.
+   at Circus.Persistence.Postgres.Tests.MigrationTests.f@1-26(PostgresFixture fixture, TestCaseBuilder builder@, NpgsqlDataSource adminDataSource', Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 997
+   at Circus.Persistence.Postgres.Tests.MigrationTests.tests@963-52.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/MigrationTests.fs:line 965
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m19:40:02 [37mINF[37m] [37mEXPECTO! [36m1[37m tests run in [32m00:00:00.4101460[37m for [36mCircus.Persistence.Postgres.Tests.Migration and least privilege.released-parent prefix 000001+000002 is accepted and only 000003 is applied without refresh[37m – [36m0[37m passed, [36m0[37m ignored, [36m1[37m failed, [36m0[37m errored. [36m[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m19:40:02 [37mINF[37m] [37mEXPECTO?! Summary...
+Passed: [36m 0[37m
+Ignored: [36m0[37m
+Failed: [36m 1
+	Circus.Persistence.Postgres.Tests.Migration and least privilege.released-parent prefix 000001+000002 is accepted and only 000003 is applied without refresh[37m
+Errored: [36m0[37m [37m<[37mExpecto[37m>[37m
+[0m[testcontainers.org 00:00:05.91] Stop Docker container 70540367a215

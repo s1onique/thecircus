@@ -1,0 +1,5 @@
+[1000D[?25hDIAG_P0-4: caught.GetType() = System.AggregateException
+[1000D[?25hDIAG_P0-4: caught.Message = One or more errors occurred. (PZ001: migration_invariant: circus_app is a member of circus_owner (direct or indirect))
+[1000D[?25hDIAG_P0-4: chain[0] = System.AggregateException :: One or more errors occurred. (PZ001: migration_invariant: circus_app is a member of circus_owner (direct or indirect))
+[1000D[?25hDIAG_P0-4: chain[1] = Npgsql.PostgresException :: PZ001: migration_invariant: circus_app is a member of circus_owner (direct or indirect)
+[1000D[?25hDIAG_P0-4: agg.Inner = Npgsql.PostgresException :: PZ001: migration_invariant: circus_app is a member of circus_owner (direct or indirect)

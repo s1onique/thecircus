@@ -1,0 +1,42 @@
+[testcontainers.org 00:00:00.28] Connected to Docker:
+  Host: unix:///var/run/docker.sock
+  Server Version: 29.6.2
+  Kernel Version: 6.17.0-19-generic
+  API Version: 1.55
+  Operating System: Linux Mint 22.3
+  Total Memory: 78.45 GB
+[testcontainers.org 00:00:00.63] Docker container bad08e3b3fcd created
+[testcontainers.org 00:00:00.70] Start Docker container bad08e3b3fcd
+[testcontainers.org 00:00:00.91] Wait for Docker container bad08e3b3fcd to complete readiness checks
+[testcontainers.org 00:00:01.95] Docker container bad08e3b3fcd ready
+[testcontainers.org 00:00:02.18] Docker container e3fca295e65e created
+[testcontainers.org 00:00:02.19] Start Docker container e3fca295e65e
+[testcontainers.org 00:00:02.40] Wait for Docker container e3fca295e65e to complete readiness checks
+[testcontainers.org 00:00:02.42] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container e3fca295e65e
+[testcontainers.org 00:00:03.59] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container e3fca295e65e
+[testcontainers.org 00:00:04.71] Execute "pg_isready --host localhost --dbname circus_test --username postgres" at Docker container e3fca295e65e
+[testcontainers.org 00:00:04.84] Docker container e3fca295e65e ready
+[37m[[37m19:40:37 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[testcontainers.org 00:00:05.99] Docker container 057f3b42760c created
+[0m[1000D[?25h[testcontainers.org 00:00:06.00] Start Docker container 057f3b42760c
+[0m[1000D[?25h[testcontainers.org 00:00:06.21] Wait for Docker container 057f3b42760c to complete readiness checks
+[0m[1000D[?25h[testcontainers.org 00:00:06.21] Execute "pg_isready --host localhost --dbname circus_unlock_recover_5ed99f5b74e049d9b822e08f6c4e1c76 --username postgres" at Docker container 057f3b42760c
+[0m[1000D[?25h[testcontainers.org 00:00:07.35] Execute "pg_isready --host localhost --dbname circus_unlock_recover_5ed99f5b74e049d9b822e08f6c4e1c76 --username postgres" at Docker container 057f3b42760c
+[0m[1000D[?25h[testcontainers.org 00:00:08.46] Execute "pg_isready --host localhost --dbname circus_unlock_recover_5ed99f5b74e049d9b822e08f6c4e1c76 --username postgres" at Docker container 057f3b42760c
+[0m[1000D[?25h[testcontainers.org 00:00:08.59] Docker container 057f3b42760c ready
+[0m[1000D[?25h[testcontainers.org 00:00:08.84] Stop Docker container 057f3b42760c
+[0m[1000D[?25h[37m[[37m19:40:40 [31mERR[37m] [36mCircus.Persistence.Postgres.Tests.Migration unlock-failure cleanup.successful migration with deterministic unlock failure leaves the cluster ready for a follow-up real migrate run[37m failed in [32m00:00:03.4670000[37m. [36m
+Recovery migration records 000003 after the unlock-failure cleanup cleared the pool. Expected subject string 'System.String[]' to contain substring '000003_runtime_grant_hardening'.
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.tests@399-11.Invoke(NpgsqlCommand verifyCmd) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 404
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Microsoft.FSharp.Core.Operators.Using[T,TResult](T resource, FSharpFunc`2 action) in D:\a\_work\1\s\src\FSharp.Core\prim-types.fs:line 5159
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.f@1-2(NpgsqlDataSource adminDataSource, Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 396
+   at Circus.Persistence.Postgres.Tests.UnlockFailureTests.tests@375-2.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Persistence.Postgres.Tests/UnlockFailureTests.fs:line 377[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m19:40:40 [37mINF[37m] [37mEXPECTO! [36m1[37m tests run in [32m00:00:03.5700420[37m for [36mCircus.Persistence.Postgres.Tests.Migration unlock-failure cleanup.successful migration with deterministic unlock failure leaves the cluster ready for a follow-up real migrate run[37m – [36m0[37m passed, [36m0[37m ignored, [36m1[37m failed, [36m0[37m errored. [36m[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m19:40:40 [37mINF[37m] [37mEXPECTO?! Summary...
+Passed: [36m 0[37m
+Ignored: [36m0[37m
+Failed: [36m 1
+	Circus.Persistence.Postgres.Tests.Migration unlock-failure cleanup.successful migration with deterministic unlock failure leaves the cluster ready for a follow-up real migrate run[37m
+Errored: [36m0[37m [37m<[37mExpecto[37m>[37m
+[0m[testcontainers.org 00:00:09.22] Stop Docker container e3fca295e65e
