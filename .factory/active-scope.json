@@ -2,6 +2,6 @@
   "schema_version": 1,
   "act_id": "ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02",
   "declaration_path": "docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02.scope.json",
-  "declaration_blob_oid": "placeholder",
+  "declaration_blob_oid": "e61883ab994c8f695e59b3361d7a743526dce397",
   "baseline_commit_oid": "ea0815b3544add4884cd689764092cb5c3521e0c"
 }
