@@ -44,7 +44,9 @@ let private resolveFixturePath () : string =
             sprintf
                 "precompiled process fixture not found at %s. The MSBuild `CopyProcessTreeFixture` target must run for the test project's output to contain the fixture's managed assembly. Rebuild the test project (`dotnet build tests/Circus.Tooling.Tests`) before running this test."
                 fixturePath
+
         failwithf "%s" msg
+
     fixturePath
 
 // -----------------------------------------------------------------------------
@@ -61,17 +63,16 @@ let private runBounded
     (stdoutLimit: int)
     (stderrLimit: int)
     : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
-    let request = {
-        Executable = executable
-        WorkingDirectory = workingDirectory
-        Arguments = args
-        Environment = env
-        Limits = {
-            Timeout = timeout
-            StdoutLimitBytes = stdoutLimit
-            StderrLimitBytes = stderrLimit
-        }
-    }
+    let request =
+        { Executable = executable
+          WorkingDirectory = workingDirectory
+          Arguments = args
+          Environment = env
+          Limits =
+            { Timeout = timeout
+              StdoutLimitBytes = stdoutLimit
+              StderrLimitBytes = stderrLimit } }
+
     run request CancellationToken.None
 
 /// Launch the precompiled fixture as a child process via `dotnet
@@ -91,11 +92,11 @@ let private runFixture
 
 /// Helper to make expected stdout bytes
 let private makeStdoutBytes (count: int) : byte array =
-    Array.init count (fun i -> byte (97 + (i % 26)))  // 'a' to 'z'
+    Array.init count (fun i -> byte (97 + (i % 26))) // 'a' to 'z'
 
 /// Helper to make expected stderr bytes
 let private makeStderrBytes (count: int) : byte array =
-    Array.init count (fun i -> byte (65 + (i % 26)))  // 'A' to 'Z'
+    Array.init count (fun i -> byte (65 + (i % 26))) // 'A' to 'Z'
 
 // -----------------------------------------------------------------------------
 // Tests
@@ -109,6 +110,7 @@ let tests =
           // 1. Empty stdout process succeeds
           testTask "empty stdout process returns Ok with empty arrays" {
               let! result = runFixture (Path.GetTempPath()) [ "empty" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+
               match result with
               | Ok success ->
                   Expect.equal success.ExitCode 0 "exit code should be 0"
@@ -121,6 +123,7 @@ let tests =
           testTask "non-empty stdout is captured correctly" {
               let expected = makeStdoutBytes 10
               let! result = runFixture (Path.GetTempPath()) [ "stdout"; "10" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+
               match result with
               | Ok success ->
                   Expect.equal success.ExitCode 0 "exit code should be 0"
@@ -133,6 +136,7 @@ let tests =
           testTask "non-empty stderr is captured correctly" {
               let expected = makeStderrBytes 10
               let! result = runFixture (Path.GetTempPath()) [ "stderr"; "10" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+
               match result with
               | Ok success ->
                   Expect.equal success.ExitCode 0 "exit code should be 0"
@@ -145,9 +149,12 @@ let tests =
           testTask "working directory is propagated to subprocess" {
               let tempDir = Path.GetTempPath()
               let! result = runFixture tempDir [ "working-directory" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+
               match result with
               | Ok success ->
-                  let expectedDir = tempDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                  let expectedDir =
+                      tempDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+
                   let actualDir = System.Text.Encoding.UTF8.GetString(success.Stdout).Trim()
                   Expect.equal actualDir expectedDir "working directory propagated"
               | Error e -> failwithf "expected Ok, got Error: %A" e
@@ -159,7 +166,10 @@ let tests =
                   runFixture
                       (Path.GetTempPath())
                       [ "echo-args"; "hello world"; "foo" ]
-                      (TimeSpan.FromSeconds 5.0) 1024 1024
+                      (TimeSpan.FromSeconds 5.0)
+                      1024
+                      1024
+
               match result with
               | Ok success ->
                   let output = System.Text.Encoding.UTF8.GetString(success.Stdout).Trim()
@@ -174,7 +184,10 @@ let tests =
                   runFixture
                       (Path.GetTempPath())
                       [ "echo-args"; "\"hello\""; "'world'" ]
-                      (TimeSpan.FromSeconds 5.0) 1024 1024
+                      (TimeSpan.FromSeconds 5.0)
+                      1024
+                      1024
+
               match result with
               | Ok success ->
                   let output = System.Text.Encoding.UTF8.GetString(success.Stdout)
@@ -187,6 +200,7 @@ let tests =
           testTask "exact stdout limit succeeds" {
               let expected = makeStdoutBytes 50
               let! result = runFixture (Path.GetTempPath()) [ "stdout"; "50" ] (TimeSpan.FromSeconds 5.0) 50 1024
+
               match result with
               | Ok success ->
                   Expect.equal success.ExitCode 0 "exit code should be 0"
@@ -197,6 +211,7 @@ let tests =
           // 8. Stdout over limit fails
           testTask "stdout over limit fails with StdoutLimitExceeded" {
               let! result = runFixture (Path.GetTempPath()) [ "stdout"; "51" ] (TimeSpan.FromSeconds 5.0) 50 1024
+
               match result with
               | Error(StdoutLimitExceeded limit) when limit = 50 -> ()
               | Error e -> failwithf "expected StdoutLimitExceeded(50), got: %A" e
@@ -207,6 +222,7 @@ let tests =
           testTask "exact stderr limit succeeds" {
               let expected = makeStderrBytes 50
               let! result = runFixture (Path.GetTempPath()) [ "stderr"; "50" ] (TimeSpan.FromSeconds 5.0) 1024 50
+
               match result with
               | Ok success ->
                   Expect.equal success.ExitCode 0 "exit code should be 0"
@@ -217,6 +233,7 @@ let tests =
           // 10. Stderr over limit fails
           testTask "stderr over limit fails with StderrLimitExceeded" {
               let! result = runFixture (Path.GetTempPath()) [ "stderr"; "51" ] (TimeSpan.FromSeconds 5.0) 1024 50
+
               match result with
               | Error(StderrLimitExceeded limit) when limit = 50 -> ()
               | Error e -> failwithf "expected StderrLimitExceeded(50), got: %A" e
@@ -226,6 +243,7 @@ let tests =
           // 11. Zero stdout limit with zero bytes succeeds
           testTask "zero stdout limit with zero bytes succeeds" {
               let! result = runFixture (Path.GetTempPath()) [ "empty" ] (TimeSpan.FromSeconds 5.0) 0 1024
+
               match result with
               | Ok success ->
                   Expect.equal success.ExitCode 0 "exit code should be 0"
@@ -236,6 +254,7 @@ let tests =
           // 12. Zero stdout limit with one byte fails
           testTask "zero stdout limit with one byte fails" {
               let! result = runFixture (Path.GetTempPath()) [ "stdout"; "1" ] (TimeSpan.FromSeconds 5.0) 0 1024
+
               match result with
               | Error(StdoutLimitExceeded limit) when limit = 0 -> ()
               | Error e -> failwithf "expected StdoutLimitExceeded(0), got: %A" e
@@ -246,7 +265,10 @@ let tests =
           testTask "concurrent stdout and stderr are both captured" {
               let stdout = makeStdoutBytes 100
               let stderr = makeStderrBytes 100
-              let! result = runFixture (Path.GetTempPath()) [ "both"; "100"; "100" ] (TimeSpan.FromSeconds 10.0) 1024 1024
+
+              let! result =
+                  runFixture (Path.GetTempPath()) [ "both"; "100"; "100" ] (TimeSpan.FromSeconds 10.0) 1024 1024
+
               match result with
               | Ok success ->
                   Expect.equal success.ExitCode 0 "exit code should be 0"
@@ -259,8 +281,15 @@ let tests =
           testTask "non-zero exit preserves exit code and output" {
               let stdout = makeStdoutBytes 10
               let stderr = makeStderrBytes 10
+
               let! result =
-                  runFixture (Path.GetTempPath()) [ "exit-with-both"; "10"; "10"; "42" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+                  runFixture
+                      (Path.GetTempPath())
+                      [ "exit-with-both"; "10"; "10"; "42" ]
+                      (TimeSpan.FromSeconds 5.0)
+                      1024
+                      1024
+
               match result with
               | Error(NonZeroExit(code, actualStdout, actualStderr)) when code = 42 ->
                   Expect.equal actualStdout stdout "stdout preserved"
@@ -271,7 +300,9 @@ let tests =
 
           // 15. Timeout returns TimedOut
           testTask "timeout returns TimedOut" {
-              let! result = runFixture (Path.GetTempPath()) [ "sleep"; "5000" ] (TimeSpan.FromMilliseconds 500.0) 1024 1024
+              let! result =
+                  runFixture (Path.GetTempPath()) [ "sleep"; "5000" ] (TimeSpan.FromMilliseconds 500.0) 1024 1024
+
               match result with
               | Error(TimedOut timeout) ->
                   Expect.isTrue (timeout.TotalMilliseconds <= 1000.0) "timeout should be reasonable"
@@ -284,20 +315,21 @@ let tests =
               let cts = new CancellationTokenSource()
               cts.Cancel()
               let fixture = resolveFixturePath ()
-              let req = {
-                  Executable = "dotnet"
-                  WorkingDirectory = Path.GetTempPath()
-                  Arguments = [ fixture; "sleep"; "10000" ]
-                  Environment = []
-                  Limits = {
-                      Timeout = TimeSpan.FromSeconds 30.0
-                      StdoutLimitBytes = 1024
-                      StderrLimitBytes = 1024
-                  }
-              }
+
+              let req =
+                  { Executable = "dotnet"
+                    WorkingDirectory = Path.GetTempPath()
+                    Arguments = [ fixture; "sleep"; "10000" ]
+                    Environment = []
+                    Limits =
+                      { Timeout = TimeSpan.FromSeconds 30.0
+                        StdoutLimitBytes = 1024
+                        StderrLimitBytes = 1024 } }
+
               try
                   let! result = run req cts.Token
                   cts.Dispose()
+
                   match result with
                   | Error Cancelled -> ()
                   | Error e -> failwithf "expected Cancelled, got: %A" e
@@ -308,18 +340,29 @@ let tests =
 
           // 17. Missing executable produces LaunchFailed
           testTask "missing executable produces LaunchFailed" {
-              let! result = runBounded "/nonexistent/executable/path" (Path.GetTempPath()) [] [] (TimeSpan.FromSeconds 5.0) 1024 1024
+              let! result =
+                  runBounded
+                      "/nonexistent/executable/path"
+                      (Path.GetTempPath())
+                      []
+                      []
+                      (TimeSpan.FromSeconds 5.0)
+                      1024
+                      1024
+
               match result with
-              | Error(LaunchFailed(exe, _)) ->
-                  Expect.stringContains exe "nonexistent" "should mention nonexistent"
+              | Error(LaunchFailed(exe, _)) -> Expect.stringContains exe "nonexistent" "should mention nonexistent"
               | Error e -> failwithf "expected LaunchFailed, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
 
           // 18. Missing working directory produces InvalidRequest
           testTask "missing working directory produces InvalidRequest" {
-              let nonexistentDir = Path.Combine(Path.GetTempPath(), "nonexistent-" + Guid.NewGuid().ToString("N"))
+              let nonexistentDir =
+                  Path.Combine(Path.GetTempPath(), "nonexistent-" + Guid.NewGuid().ToString("N"))
+
               let! result = runBounded "dotnet" nonexistentDir [] [] (TimeSpan.FromSeconds 5.0) 1024 1024
+
               match result with
               | Error(InvalidRequest msg) ->
                   Expect.stringContains msg "working directory" "should mention working directory"
@@ -330,9 +373,9 @@ let tests =
           // 19. Negative stdout limit produces InvalidRequest
           testTask "negative stdout limit produces InvalidRequest" {
               let! result = runBounded "dotnet" (Path.GetTempPath()) [] [] (TimeSpan.FromSeconds 5.0) -1 1024
+
               match result with
-              | Error(InvalidRequest msg) ->
-                  Expect.stringContains msg "stdout" "should mention stdout"
+              | Error(InvalidRequest msg) -> Expect.stringContains msg "stdout" "should mention stdout"
               | Error e -> failwithf "expected InvalidRequest, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
@@ -340,19 +383,27 @@ let tests =
           // 20. Negative stderr limit produces InvalidRequest
           testTask "negative stderr limit produces InvalidRequest" {
               let! result = runBounded "dotnet" (Path.GetTempPath()) [] [] (TimeSpan.FromSeconds 5.0) 1024 -1
+
               match result with
-              | Error(InvalidRequest msg) ->
-                  Expect.stringContains msg "stderr" "should mention stderr"
+              | Error(InvalidRequest msg) -> Expect.stringContains msg "stderr" "should mention stderr"
               | Error e -> failwithf "expected InvalidRequest, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
 
           // 21. Duplicate environment keys produce InvalidRequest
           testTask "duplicate environment keys produce InvalidRequest" {
-              let! result = runBounded "dotnet" (Path.GetTempPath()) [] [ "FOO", "bar"; "FOO", "baz" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+              let! result =
+                  runBounded
+                      "dotnet"
+                      (Path.GetTempPath())
+                      []
+                      [ "FOO", "bar"; "FOO", "baz" ]
+                      (TimeSpan.FromSeconds 5.0)
+                      1024
+                      1024
+
               match result with
-              | Error(InvalidRequest msg) ->
-                  Expect.stringContains msg "environment" "should mention environment"
+              | Error(InvalidRequest msg) -> Expect.stringContains msg "environment" "should mention environment"
               | Error e -> failwithf "expected InvalidRequest, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
@@ -383,21 +434,25 @@ let tests =
               (stdoutLimit: int)
               (stderrLimit: int)
               : Task<LifecycleCompletion> =
-              let request = {
-                  Executable = "ignored"
-                  WorkingDirectory = "."
-                  Arguments = []
-                  Environment = []
-                  Limits = {
-                      Timeout = timeout
-                      StdoutLimitBytes = stdoutLimit
-                      StderrLimitBytes = stderrLimit
-                  }
-              }
+              let request =
+                  { Executable = "ignored"
+                    WorkingDirectory = "."
+                    Arguments = []
+                    Environment = []
+                    Limits =
+                      { Timeout = timeout
+                        StdoutLimitBytes = stdoutLimit
+                        StderrLimitBytes = stderrLimit } }
+
               let lcts = new CancellationTokenSource()
               let tcts = new CancellationTokenSource(timeout)
-              let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
-              let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+              let timeoutTcs =
+                  TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+              let cancelTcs =
+                  TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
               let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
               let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
               executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
@@ -414,7 +469,8 @@ let tests =
           let observeDeferred (finalization: Task) : unit =
               finalization.ContinueWith(fun (t: Task) ->
                   if t.IsFaulted then
-                      ignore t.Exception) |> ignore
+                      ignore t.Exception)
+              |> ignore
 
           /// Default seam-injection helper. Mirrors the public `run`
           /// contract by respecting `FinalizationMode`: a deferred
@@ -431,14 +487,7 @@ let tests =
               (stderrLimit: int)
               : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
               task {
-                  let! completion =
-                      runWithSeamCompletion
-                          seam
-                          stdoutTask
-                          stderrTask
-                          timeout
-                          stdoutLimit
-                          stderrLimit
+                  let! completion = runWithSeamCompletion seam stdoutTask stderrTask timeout stdoutLimit stderrLimit
 
                   match completion.FinalizationMode with
                   | AwaitBeforeReturn ->
@@ -464,17 +513,16 @@ let tests =
               (stdoutLimit: int)
               (stderrLimit: int)
               : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
-              let request = {
-                  Executable = "ignored"
-                  WorkingDirectory = "."
-                  Arguments = []
-                  Environment = []
-                  Limits = {
-                      Timeout = timeout
-                      StdoutLimitBytes = stdoutLimit
-                      StderrLimitBytes = stderrLimit
-                  }
-              }
+              let request =
+                  { Executable = "ignored"
+                    WorkingDirectory = "."
+                    Arguments = []
+                    Environment = []
+                    Limits =
+                      { Timeout = timeout
+                        StdoutLimitBytes = stdoutLimit
+                        StderrLimitBytes = stderrLimit } }
+
               let lcts = new CancellationTokenSource()
               let tcts = new CancellationTokenSource(timeout)
               let tReg = tcts.Token.Register(fun () -> timeoutTcs.TrySetResult(true) |> ignore)
@@ -485,6 +533,7 @@ let tests =
               // the finalization completes use this helper directly.
               let completion: Task<LifecycleCompletion> =
                   executeLifecycleWithSeam lcts request timeoutTcs cancelTcs stdoutTask stderrTask seam tReg cReg tcts
+
               task {
                   let! c = completion
                   do! c.Finalization
@@ -494,18 +543,23 @@ let tests =
           // 22. Faulted exit task -> WaitFailed with retained detail
           testTask "faulted exit task produces WaitFailed with detail" {
               let faultedExit = Task.FromException(System.Exception "synthetic exit wait fault")
-              let seam = {
-                  ExitTask = faultedExit
-                  Kill = fun () -> Ok ()
-                  HasExited = fun () -> true
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> ()
-              }
+
+              let seam =
+                  { ExitTask = faultedExit
+                    Kill = fun () -> Ok()
+                    HasExited = fun () -> true
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> () }
+
               let! result =
-                  runWithSeam seam
+                  runWithSeam
+                      seam
                       (Task.FromResult(EofReached [||]))
                       (Task.FromResult(EofReached [||]))
-                      (TimeSpan.FromSeconds 5.0) 1024 1024
+                      (TimeSpan.FromSeconds 5.0)
+                      1024
+                      1024
+
               match result with
               | Error(WaitFailed detail) ->
                   Expect.stringContains detail "synthetic exit wait fault" "should retain fault detail"
@@ -518,23 +572,29 @@ let tests =
               let cts = new CancellationTokenSource()
               cts.Cancel()
               let cancelledExit = Task.FromCanceled(cts.Token)
-              let seam = {
-                  ExitTask = cancelledExit
-                  Kill = fun () -> Ok ()
-                  HasExited = fun () -> true
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> ()
-              }
+
+              let seam =
+                  { ExitTask = cancelledExit
+                    Kill = fun () -> Ok()
+                    HasExited = fun () -> true
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> () }
+
               let! result =
-                  runWithSeam seam
+                  runWithSeam
+                      seam
                       (Task.FromResult(EofReached [||]))
                       (Task.FromResult(EofReached [||]))
-                      (TimeSpan.FromSeconds 5.0) 1024 1024
+                      (TimeSpan.FromSeconds 5.0)
+                      1024
+                      1024
+
               match result with
               | Error(WaitFailed _) -> ()
               | Error(Cancelled) -> failwithf "cancelled exit task leaked as caller Cancelled"
               | Error e -> failwithf "expected WaitFailed, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
+
               cts.Dispose()
           }
 
@@ -552,55 +612,48 @@ let tests =
           // The synthetic exit task is completed in a `finally` block so
           // the finalizer can finish, observe exactly-once disposal,
           // and release its owned resources before the test returns.
-          testTask "timer fires while streams at EOF but exit pending -> TerminationCleanupFailed { TimeoutFire; streams complete }" {
+          testTask
+              "timer fires while streams at EOF but exit pending -> TerminationCleanupFailed { TimeoutFire; streams complete }" {
               let mutable disposeCount = 0
+
               let pendingExit =
                   TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
-              let seam = {
-                  ExitTask = pendingExit.Task
-                  Kill = fun () -> Ok ()
-                  HasExited = fun () -> false
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> disposeCount <- disposeCount + 1
-              }
+
+              let seam =
+                  { ExitTask = pendingExit.Task
+                    Kill = fun () -> Ok()
+                    HasExited = fun () -> false
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> disposeCount <- disposeCount + 1 }
+
               let completion: Task<LifecycleCompletion> =
-                  runWithSeamCompletion seam
+                  runWithSeamCompletion
+                      seam
                       (Task.FromResult(EofReached [||]))
                       (Task.FromResult(EofReached [||]))
-                      (TimeSpan.FromMilliseconds 100.0) 1024 1024
+                      (TimeSpan.FromMilliseconds 100.0)
+                      1024
+                      1024
+
               try
                   let! c = completion
+
                   match c.Result with
-                  | Error(
-                      TerminationCleanupFailed {
-                          Cause = TimeoutFire
-                          TerminalFailure = None
-                          ProcessExited = false
-                          StdoutComplete = true
-                          StderrComplete = true
-                      }
-                    ) ->
-                      ()
-                  | Error e ->
-                      failtest "expected TerminationCleanupFailed { TimeoutFire; streams complete }, got: %A" e
-                  | Ok s ->
-                      failtestf "expected failure, got Ok: %A" s
+                  | Error(TerminationCleanupFailed { Cause = TimeoutFire
+                                                     TerminalFailure = None
+                                                     ProcessExited = false
+                                                     StdoutComplete = true
+                                                     StderrComplete = true }) -> ()
+                  | Error e -> failtest "expected TerminationCleanupFailed { TimeoutFire; streams complete }, got: %A" e
+                  | Ok s -> failtestf "expected failure, got Ok: %A" s
 
                   // The finalizer is deferred: ExitTask is still pending
                   // so the lifecycle cannot dispose yet.
-                  Expect.equal
-                      c.FinalizationMode
-                      Deferred
-                      "incomplete exit must select deferred finalization"
+                  Expect.equal c.FinalizationMode Deferred "incomplete exit must select deferred finalization"
 
-                  Expect.isFalse
-                      c.Finalization.IsCompleted
-                      "finalization must remain pending while ExitTask is pending"
+                  Expect.isFalse c.Finalization.IsCompleted "finalization must remain pending while ExitTask is pending"
 
-                  Expect.equal
-                      disposeCount
-                      0
-                      "resources must not be disposed before ExitTask settles"
+                  Expect.equal disposeCount 0 "resources must not be disposed before ExitTask settles"
               finally
                   // Settle the synthetic exit task so the finalizer can
                   // run and dispose exactly once.
@@ -612,10 +665,7 @@ let tests =
               let! c = completion
               do! c.Finalization
 
-              Expect.equal
-                  disposeCount
-                  1
-                  "resources are disposed exactly once after ExitTask settles"
+              Expect.equal disposeCount 1 "resources are disposed exactly once after ExitTask settles"
           }
 
           // 24a. Helper-contract regression: `runWithSeam` must NOT
@@ -626,41 +676,36 @@ let tests =
           testTask "runWithSeam returns within a strict bound when finalization is deferred" {
               let pendingExit =
                   TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
-              let seam = {
-                  ExitTask = pendingExit.Task
-                  // Kill does NOT complete pendingExit: this is exactly
-                  // the scenario Test 24 uses. If the helper regresses
-                  // to unconditional finalization awaiting, this test
-                  // hangs forever.
-                  Kill = fun () -> Ok ()
-                  HasExited = fun () -> false
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> ()
-              }
+
+              let seam =
+                  { ExitTask = pendingExit.Task
+                    // Kill does NOT complete pendingExit: this is exactly
+                    // the scenario Test 24 uses. If the helper regresses
+                    // to unconditional finalization awaiting, this test
+                    // hangs forever.
+                    Kill = fun () -> Ok()
+                    HasExited = fun () -> false
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> () }
+
               let! result =
-                  runWithSeam seam
+                  runWithSeam
+                      seam
                       (Task.FromResult(EofReached [||]))
                       (Task.FromResult(EofReached [||]))
-                      (TimeSpan.FromMilliseconds 100.0) 1024 1024
+                      (TimeSpan.FromMilliseconds 100.0)
+                      1024
+                      1024
               // Helper must return without awaiting the pending
               // finalizer; the test would otherwise block forever.
               match result with
-              | Error(
-                  TerminationCleanupFailed {
-                      Cause = TimeoutFire
-                      TerminalFailure = None
-                      ProcessExited = false
-                      StdoutComplete = true
-                      StderrComplete = true
-                  }
-                ) ->
-                  ()
-              | Error e ->
-                  failtest
-                      "expected deferred TimeoutFire cleanup failure, got: %A"
-                      e
-              | Ok s ->
-                  failtestf "expected failure, got Ok: %A" s
+              | Error(TerminationCleanupFailed { Cause = TimeoutFire
+                                                 TerminalFailure = None
+                                                 ProcessExited = false
+                                                 StdoutComplete = true
+                                                 StderrComplete = true }) -> ()
+              | Error e -> failtest "expected deferred TimeoutFire cleanup failure, got: %A" e
+              | Ok s -> failtestf "expected failure, got Ok: %A" s
               // Release the pending exit so the deferred finalizer can
               // settle and the test process can shut down cleanly.
               pendingExit.TrySetResult(true) |> ignore
@@ -672,18 +717,26 @@ let tests =
           testTask "reader failure with successful cleanup returns typed StdoutReaderFailed" {
               let pendingExit = TaskCompletionSource<bool>()
               let failedStdout = Task.FromResult(ReadFailed "synthetic reader pipe closed")
-              let seam = {
-                  ExitTask = pendingExit.Task
-                  Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
-                  HasExited = fun () -> true
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> ()
-              }
+
+              let seam =
+                  { ExitTask = pendingExit.Task
+                    Kill =
+                      fun () ->
+                          pendingExit.TrySetResult(true) |> ignore
+                          Ok()
+                    HasExited = fun () -> true
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> () }
+
               let! result =
-                  runWithSeam seam
+                  runWithSeam
+                      seam
                       failedStdout
                       (Task.FromResult(EofReached [||]))
-                      (TimeSpan.FromMilliseconds 100.0) 1024 1024
+                      (TimeSpan.FromMilliseconds 100.0)
+                      1024
+                      1024
+
               match result with
               | Error(StdoutReaderFailed detail) ->
                   Expect.equal detail "synthetic reader pipe closed" "should retain reader detail"
@@ -698,29 +751,29 @@ let tests =
           testTask "reader failure with unsuccessful cleanup returns TerminationCleanupFailed { StdoutTerminal }" {
               let pendingExit = TaskCompletionSource<bool>()
               let failedStdout = Task.FromResult(ReadFailed "synthetic reader pipe closed")
-              let seam = {
-                  ExitTask = pendingExit.Task
-                  Kill = fun () -> Ok ()
-                  HasExited = fun () -> false
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> ()
-              }
+
+              let seam =
+                  { ExitTask = pendingExit.Task
+                    Kill = fun () -> Ok()
+                    HasExited = fun () -> false
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> () }
+
               let! result =
-                  runWithSeam seam
+                  runWithSeam
+                      seam
                       failedStdout
                       (Task.FromResult(EofReached [||]))
-                      (TimeSpan.FromMilliseconds 100.0) 1024 1024
+                      (TimeSpan.FromMilliseconds 100.0)
+                      1024
+                      1024
+
               match result with
-              | Error(
-                  TerminationCleanupFailed {
-                      Cause = StdoutTerminal
-                      TerminalFailure = Some(StdoutReadFailure "synthetic reader pipe closed")
-                      ProcessExited = false
-                      StdoutComplete = true
-                      StderrComplete = true
-                  }
-                ) ->
-                  ()
+              | Error(TerminationCleanupFailed { Cause = StdoutTerminal
+                                                 TerminalFailure = Some(StdoutReadFailure "synthetic reader pipe closed")
+                                                 ProcessExited = false
+                                                 StdoutComplete = true
+                                                 StderrComplete = true }) -> ()
               | Error e -> failtest "expected TerminationCleanupFailed { StdoutTerminal }, got: %A" e
               | Ok s -> failwithf "expected failure, got Ok: %A" s
           }
@@ -732,18 +785,26 @@ let tests =
           // error, not a successful Exit 0.
           testTask "stdout EOF followed by sleeping child remains timeout-responsive" {
               let pendingExit = TaskCompletionSource<bool>()
-              let seam = {
-                  ExitTask = pendingExit.Task
-                  Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
-                  HasExited = fun () -> false
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> ()
-              }
+
+              let seam =
+                  { ExitTask = pendingExit.Task
+                    Kill =
+                      fun () ->
+                          pendingExit.TrySetResult(true) |> ignore
+                          Ok()
+                    HasExited = fun () -> false
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> () }
+
               let! result =
-                  runWithSeam seam
+                  runWithSeam
+                      seam
                       (Task.FromResult(EofReached [||]))
                       (Task.FromResult(EofReached [||]))
-                      (TimeSpan.FromMilliseconds 300.0) 1024 1024
+                      (TimeSpan.FromMilliseconds 300.0)
+                      1024
+                      1024
+
               match result with
               | Error(TimedOut _) -> ()
               | Error e -> failwithf "expected TimedOut, got: %A" e
@@ -766,17 +827,26 @@ let tests =
           // ignored as a cause. Repeated 100x to defeat ordering races.
           testTask "timeout participant and stdout already-cancelled race -> TimedOut (100 iterations)" {
               for _ in 1..100 do
-                  let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+                  let timeoutTcs =
+                      TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
                   timeoutTcs.SetResult(true)
-                  let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+                  let cancelTcs =
+                      TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
                   let pendingExit = TaskCompletionSource<bool>()
-                  let seam = {
-                      ExitTask = pendingExit.Task
-                      Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
-                      HasExited = fun () -> true
-                      ReadExitCode = fun () -> 0
-                      Dispose = fun () -> ()
-                  }
+
+                  let seam =
+                      { ExitTask = pendingExit.Task
+                        Kill =
+                          fun () ->
+                              pendingExit.TrySetResult(true) |> ignore
+                              Ok()
+                        HasExited = fun () -> true
+                        ReadExitCode = fun () -> 0
+                        Dispose = fun () -> () }
+
                   let! result =
                       runWithSeamCustom
                           timeoutTcs
@@ -784,11 +854,15 @@ let tests =
                           seam
                           (Task.FromResult(ReadCancelled))
                           (Task.FromResult(EofReached [||]))
-                          (TimeSpan.FromSeconds 5.0) 1024 1024
+                          (TimeSpan.FromSeconds 5.0)
+                          1024
+                          1024
+
                   match result with
                   | Error(TimedOut _) -> ()
-                  | Error(IncompleteOutput (_, _)) -> failwithf "expected TimedOut, got IncompleteOutput"
-                  | Error(TerminationCleanupFailed { Cause = StdoutTerminal }) -> failwithf "expected TimedOut, got TerminationCleanupFailed StdoutTerminal"
+                  | Error(IncompleteOutput(_, _)) -> failwithf "expected TimedOut, got IncompleteOutput"
+                  | Error(TerminationCleanupFailed { Cause = StdoutTerminal }) ->
+                      failwithf "expected TimedOut, got TerminationCleanupFailed StdoutTerminal"
                   | Error(StdoutReaderFailed _) -> failwithf "expected TimedOut, got StdoutReaderFailed"
                   | Error Cancelled -> failwithf "expected TimedOut, got Cancelled"
                   | Error e -> failwithf "expected TimedOut, got: %A" e
@@ -801,17 +875,26 @@ let tests =
           // ordering races.
           testTask "caller-cancellation participant and stderr already-cancelled race -> Cancelled (100 iterations)" {
               for _ in 1..100 do
-                  let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+                  let cancelTcs =
+                      TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
                   cancelTcs.SetResult(true)
-                  let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+                  let timeoutTcs =
+                      TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
                   let pendingExit = TaskCompletionSource<bool>()
-                  let seam = {
-                      ExitTask = pendingExit.Task
-                      Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
-                      HasExited = fun () -> true
-                      ReadExitCode = fun () -> 0
-                      Dispose = fun () -> ()
-                  }
+
+                  let seam =
+                      { ExitTask = pendingExit.Task
+                        Kill =
+                          fun () ->
+                              pendingExit.TrySetResult(true) |> ignore
+                              Ok()
+                        HasExited = fun () -> true
+                        ReadExitCode = fun () -> 0
+                        Dispose = fun () -> () }
+
                   let! result =
                       runWithSeamCustom
                           timeoutTcs
@@ -819,13 +902,17 @@ let tests =
                           seam
                           (Task.FromResult(EofReached [||]))
                           (Task.FromResult(ReadCancelled))
-                          (TimeSpan.FromSeconds 5.0) 1024 1024
+                          (TimeSpan.FromSeconds 5.0)
+                          1024
+                          1024
+
                   match result with
                   | Error Cancelled -> ()
                   | Error(TimedOut _) -> failwithf "expected Cancelled, got TimedOut"
-                  | Error(TerminationCleanupFailed { Cause = StderrTerminal }) -> failwithf "expected Cancelled, got TerminationCleanupFailed StderrTerminal"
+                  | Error(TerminationCleanupFailed { Cause = StderrTerminal }) ->
+                      failwithf "expected Cancelled, got TerminationCleanupFailed StderrTerminal"
                   | Error(StderrReaderFailed _) -> failwithf "expected Cancelled, got StderrReaderFailed"
-                  | Error(IncompleteOutput (_, _)) -> failwithf "expected Cancelled, got IncompleteOutput"
+                  | Error(IncompleteOutput(_, _)) -> failwithf "expected Cancelled, got IncompleteOutput"
                   | Error e -> failwithf "expected Cancelled, got: %A" e
                   | Ok s -> failwithf "expected Cancelled, got Ok: %A" s
           }
@@ -846,18 +933,16 @@ let tests =
               let pendingExit = TaskCompletionSource<bool>()
               let pendingStderr = TaskCompletionSource<ReadOutcome>()
               let okStdout = Task.FromResult(EofReached [||])
-              let seam = {
-                  ExitTask = pendingExit.Task
-                  Kill = fun () -> Ok ()
-                  HasExited = fun () -> false
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> disposeCount <- disposeCount + 1
-              }
+
+              let seam =
+                  { ExitTask = pendingExit.Task
+                    Kill = fun () -> Ok()
+                    HasExited = fun () -> false
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> disposeCount <- disposeCount + 1 }
+
               let lifecycle =
-                  runWithSeam seam
-                      okStdout
-                      pendingStderr.Task
-                      (TimeSpan.FromSeconds 30.0) 1024 1024
+                  runWithSeam seam okStdout pendingStderr.Task (TimeSpan.FromSeconds 30.0) 1024 1024
               // Yield long enough for the loop to consume okStdout
               do! Task.Delay(200)
               Expect.equal disposeCount 0 "stdoutTask completion alone must not dispose"
@@ -880,18 +965,17 @@ let tests =
               let pendingExit = TaskCompletionSource<bool>()
               let pendingStdout = TaskCompletionSource<ReadOutcome>()
               let pendingStderr = TaskCompletionSource<ReadOutcome>()
-              let seam = {
-                  ExitTask = pendingExit.Task
-                  Kill = fun () -> Ok ()
-                  HasExited = fun () -> false
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> disposeCount <- disposeCount + 1
-              }
+
+              let seam =
+                  { ExitTask = pendingExit.Task
+                    Kill = fun () -> Ok()
+                    HasExited = fun () -> false
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> disposeCount <- disposeCount + 1 }
+
               let lifecycle =
-                  runWithSeam seam
-                      pendingStdout.Task
-                      pendingStderr.Task
-                      (TimeSpan.FromSeconds 30.0) 1024 1024
+                  runWithSeam seam pendingStdout.Task pendingStderr.Task (TimeSpan.FromSeconds 30.0) 1024 1024
+
               do! Task.Delay(100)
               Expect.equal disposeCount 0 "no disposal before any task completes"
               // Complete all three simultaneously
@@ -913,24 +997,25 @@ let tests =
               let pendingExit = TaskCompletionSource<bool>()
               let pendingStderr = TaskCompletionSource<ReadOutcome>()
               let okStdout = Task.FromResult(EofReached [||])
-              let seam = {
-                  ExitTask = pendingExit.Task
-                  Kill = fun () -> Ok ()
-                  HasExited = fun () -> false
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> disposeCount <- disposeCount + 1
-              }
+
+              let seam =
+                  { ExitTask = pendingExit.Task
+                    Kill = fun () -> Ok()
+                    HasExited = fun () -> false
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> disposeCount <- disposeCount + 1 }
+
               let completion: Task<LifecycleCompletion> =
-                  runWithSeamCompletion seam
-                      okStdout
-                      pendingStderr.Task
-                      (TimeSpan.FromMilliseconds 100.0) 1024 1024
+                  runWithSeamCompletion seam okStdout pendingStderr.Task (TimeSpan.FromMilliseconds 100.0) 1024 1024
+
               let! c = completion
               let result = c.Result
+
               match result with
               | Error(TerminationCleanupFailed _) -> ()
               | Error e -> failtest "expected TerminationCleanupFailed, got: %A" e
               | Ok s -> failtest "expected TerminationCleanupFailed, got Ok: %A" s
+
               Expect.equal disposeCount 0 "no disposal when exitTask and stderrTask still pending"
               // Complete the outstanding tasks and the finalizer fires.
               pendingExit.SetResult(true) |> ignore
@@ -947,20 +1032,20 @@ let tests =
               let cts = new CancellationTokenSource()
               cts.Cancel()
               let okStdout = Task.FromResult(EofReached [||])
-              let faultedStderr = Task.FromException<ReadOutcome>(System.Exception "synthetic reader fault")
+
+              let faultedStderr =
+                  Task.FromException<ReadOutcome>(System.Exception "synthetic reader fault")
+
               let cancelledExit = Task.FromCanceled(cts.Token)
-              let seam = {
-                  ExitTask = cancelledExit
-                  Kill = fun () -> Ok ()
-                  HasExited = fun () -> true
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> disposeCount <- disposeCount + 1
-              }
-              let! result =
-                  runWithSeam seam
-                      okStdout
-                      faultedStderr
-                      (TimeSpan.FromSeconds 5.0) 1024 1024
+
+              let seam =
+                  { ExitTask = cancelledExit
+                    Kill = fun () -> Ok()
+                    HasExited = fun () -> true
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> disposeCount <- disposeCount + 1 }
+
+              let! result = runWithSeam seam okStdout faultedStderr (TimeSpan.FromSeconds 5.0) 1024 1024
               do! Task.Delay(200)
               // The public lifecycle reached a typed Result without
               // throwing despite one faulted and one cancelled task.
@@ -981,26 +1066,35 @@ let tests =
           testTask "disposed-seam state access is impossible after disposal" {
               let pendingExit = TaskCompletionSource<bool>()
               let mutable disposed = false
-              let seam = {
-                  ExitTask = pendingExit.Task
-                  Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
-                  HasExited =
+
+              let seam =
+                  { ExitTask = pendingExit.Task
+                    Kill =
+                      fun () ->
+                          pendingExit.TrySetResult(true) |> ignore
+                          Ok()
+                    HasExited =
                       fun () ->
                           if disposed then
                               failwith "HasExited called after dispose"
+
                           false
-                  ReadExitCode =
+                    ReadExitCode =
                       fun () ->
                           if disposed then
                               failwith "ReadExitCode called after dispose"
+
                           0
-                  Dispose = fun () -> disposed <- true
-              }
+                    Dispose = fun () -> disposed <- true }
+
               let completion: Task<LifecycleCompletion> =
-                  runWithSeamCompletion seam
+                  runWithSeamCompletion
+                      seam
                       (Task.FromResult(EofReached [||]))
                       (Task.FromResult(EofReached [||]))
-                      (TimeSpan.FromSeconds 5.0) 1024 1024
+                      (TimeSpan.FromSeconds 5.0)
+                      1024
+                      1024
               // Complete the exit task so the loop proceeds. All three
               // operations are then settled.
               pendingExit.SetResult(true) |> ignore
@@ -1011,6 +1105,7 @@ let tests =
               // If any state callback was invoked after dispose, the
               // failwith above would have been thrown.
               Expect.equal disposed true "dispose must be called exactly once"
+
               match result with
               | Ok _ -> ()
               | Error e -> failtest "expected Ok, got: %A" e
@@ -1023,13 +1118,14 @@ let tests =
           // failed to close.
           testTask "sequential real-process invocations complete in order (20 iterations)" {
               for _ in 1..20 do
-                  let! result1 =
-                      runFixture (Path.GetTempPath()) [ "empty" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+                  let! result1 = runFixture (Path.GetTempPath()) [ "empty" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+
                   match result1 with
                   | Ok _ -> ()
                   | Error e -> failtest "first invocation failed: %A" e
-                  let! result2 =
-                      runFixture (Path.GetTempPath()) [ "stdout"; "10" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+
+                  let! result2 = runFixture (Path.GetTempPath()) [ "stdout"; "10" ] (TimeSpan.FromSeconds 5.0) 1024 1024
+
                   match result2 with
                   | Ok _ -> ()
                   | Error e -> failtest "second invocation failed: %A" e
@@ -1043,18 +1139,27 @@ let tests =
           // CallerCancel if it is.
           testTask "simultaneous timeout and caller-cancellation -> caller-cancellation wins (100 iterations)" {
               for _ in 1..100 do
-                  let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+                  let timeoutTcs =
+                      TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
                   timeoutTcs.SetResult(true)
-                  let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+                  let cancelTcs =
+                      TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
                   cancelTcs.SetResult(true)
                   let pendingExit = TaskCompletionSource<bool>()
-                  let seam = {
-                      ExitTask = pendingExit.Task
-                      Kill = fun () -> pendingExit.TrySetResult(true) |> ignore; Ok ()
-                      HasExited = fun () -> true
-                      ReadExitCode = fun () -> 0
-                      Dispose = fun () -> ()
-                  }
+
+                  let seam =
+                      { ExitTask = pendingExit.Task
+                        Kill =
+                          fun () ->
+                              pendingExit.TrySetResult(true) |> ignore
+                              Ok()
+                        HasExited = fun () -> true
+                        ReadExitCode = fun () -> 0
+                        Dispose = fun () -> () }
+
                   let! result =
                       runWithSeamCustom
                           timeoutTcs
@@ -1062,13 +1167,17 @@ let tests =
                           seam
                           (Task.FromResult(EofReached [||]))
                           (Task.FromResult(EofReached [||]))
-                          (TimeSpan.FromSeconds 5.0) 1024 1024
+                          (TimeSpan.FromSeconds 5.0)
+                          1024
+                          1024
+
                   match result with
                   | Error Cancelled -> ()
                   | Error(TimedOut _) -> failtest "expected Cancelled, got TimedOut"
-                  | Error(TerminationCleanupFailed { Cause = StdoutTerminal }) -> failtest "expected Cancelled, got StdoutTerminal"
+                  | Error(TerminationCleanupFailed { Cause = StdoutTerminal }) ->
+                      failtest "expected Cancelled, got StdoutTerminal"
                   | Error(StdoutReaderFailed _) -> failtest "expected Cancelled, got StdoutReaderFailed"
-                  | Error(IncompleteOutput (_, _)) -> failtest "expected Cancelled, got IncompleteOutput"
+                  | Error(IncompleteOutput(_, _)) -> failtest "expected Cancelled, got IncompleteOutput"
                   | Error e -> failtest "expected Cancelled, got: %A" e
                   | Ok s -> failtest "expected Cancelled, got Ok: %A" s
           }
@@ -1101,43 +1210,49 @@ let tests =
               // thread, so the main test thread is not blocked by the
               // callback itself.
               let customCts = new CancellationTokenSource()
+
               let customReg =
-                customCts.Token.Register(fun () ->
-                    callbackStarted.TrySetResult(true) |> ignore
-                    // Block on the release task. The synchronous
-                    // GetResult mirrors the classic CancellationRegistration
-                    // deadlock pattern: a disposal cannot complete
-                    // until this callback returns, and this callback
-                    // cannot return until the test thread releases it.
-                    releaseCallback.Task.GetAwaiter().GetResult() |> ignore)
+                  customCts.Token.Register(fun () ->
+                      callbackStarted.TrySetResult(true) |> ignore
+                      // Block on the release task. The synchronous
+                      // GetResult mirrors the classic CancellationRegistration
+                      // deadlock pattern: a disposal cannot complete
+                      // until this callback returns, and this callback
+                      // cannot return until the test thread releases it.
+                      releaseCallback.Task.GetAwaiter().GetResult() |> ignore)
 
               // All three operations are pre-settled so the lifecycle
               // reaches the finalizer without any further input.
               let okExit = Task.FromResult(0)
               let okStdout = Task.FromResult(EofReached [||])
               let okStderr = Task.FromResult(EofReached [||])
-              let seam = {
-                  ExitTask = okExit
-                  Kill = fun () -> Ok ()
-                  HasExited = fun () -> true
-                  ReadExitCode = fun () -> 0
-                  Dispose = fun () -> disposeCount <- disposeCount + 1
-              }
-              let request = {
-                  Executable = "ignored"
-                  WorkingDirectory = "."
-                  Arguments = []
-                  Environment = []
-                  Limits = {
-                      Timeout = TimeSpan.FromSeconds 5.0
-                      StdoutLimitBytes = 1024
-                      StderrLimitBytes = 1024
-                  }
-              }
+
+              let seam =
+                  { ExitTask = okExit
+                    Kill = fun () -> Ok()
+                    HasExited = fun () -> true
+                    ReadExitCode = fun () -> 0
+                    Dispose = fun () -> disposeCount <- disposeCount + 1 }
+
+              let request =
+                  { Executable = "ignored"
+                    WorkingDirectory = "."
+                    Arguments = []
+                    Environment = []
+                    Limits =
+                      { Timeout = TimeSpan.FromSeconds 5.0
+                        StdoutLimitBytes = 1024
+                        StderrLimitBytes = 1024 } }
+
               let lcts = new CancellationTokenSource()
               let tcts = new CancellationTokenSource(TimeSpan.FromSeconds 5.0)
-              let timeoutTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
-              let cancelTcs = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+              let timeoutTcs =
+                  TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+              let cancelTcs =
+                  TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+
               let cReg = lcts.Token.Register(fun () -> cancelTcs.TrySetResult(true) |> ignore)
 
               // CORRECTION18: Fire-and-forget CancelAsync. Awaiting it here
@@ -1158,17 +1273,9 @@ let tests =
                   // Bounded wait for callback to start. If CancelAsync fails
                   // to schedule the callback, the timeout causes assertion
                   // failure rather than suite hang.
-                  let! callbackWinner =
-                      Task.WhenAny(
-                          callbackStarted.Task :> Task,
-                          Task.Delay(TimeSpan.FromSeconds 2.0)
-                      )
+                  let! callbackWinner = Task.WhenAny(callbackStarted.Task :> Task, Task.Delay(TimeSpan.FromSeconds 2.0))
 
-                  callbackStartedInTime <-
-                      Object.ReferenceEquals(
-                          callbackWinner,
-                          callbackStarted.Task
-                      )
+                  callbackStartedInTime <- Object.ReferenceEquals(callbackWinner, callbackStarted.Task)
 
                   if callbackStartedInTime then
                       // Run the lifecycle with the BLOCKING registration as
@@ -1177,23 +1284,22 @@ let tests =
                       // asynchronously for the blocking callback.
                       let lifecycleTask =
                           executeLifecycleWithSeam
-                              lcts request timeoutTcs cancelTcs
-                              okStdout okStderr seam
-                              customReg cReg tcts
+                              lcts
+                              request
+                              timeoutTcs
+                              cancelTcs
+                              okStdout
+                              okStderr
+                              seam
+                              customReg
+                              cReg
+                              tcts
 
                       // Bounded wait for lifecycle to return. A regression
                       // to synchronous disposal would block indefinitely here.
-                      let! completionWinner =
-                          Task.WhenAny(
-                              lifecycleTask :> Task,
-                              Task.Delay(TimeSpan.FromSeconds 2.0)
-                          )
+                      let! completionWinner = Task.WhenAny(lifecycleTask :> Task, Task.Delay(TimeSpan.FromSeconds 2.0))
 
-                      completionReturnedInTime <-
-                          Object.ReferenceEquals(
-                              completionWinner,
-                              lifecycleTask
-                          )
+                      completionReturnedInTime <- Object.ReferenceEquals(completionWinner, lifecycleTask)
 
                       if completionReturnedInTime then
                           let! c = lifecycleTask
@@ -1201,13 +1307,11 @@ let tests =
 
                           // Assertion: the finalizer is suspended because the
                           // callback is still blocked on the release task.
-                          finalizationSuspended <-
-                              not c.Finalization.IsCompleted
+                          finalizationSuspended <- not c.Finalization.IsCompleted
 
                           // Assertion: the test thread remains responsive.
                           do! Task.Delay(100)
-                          threadResponsive <-
-                              not c.Finalization.IsCompleted
+                          threadResponsive <- not c.Finalization.IsCompleted
               finally
                   // Release the callback. The disposal await resumes, the
                   // finalizer proceeds through the remaining disposals,
@@ -1215,17 +1319,10 @@ let tests =
                   releaseCallback.TrySetResult(true) |> ignore
 
               // Bounded wait for CancelAsync to complete after callback release.
-              let! cancellationWinner =
-                  Task.WhenAny(
-                      cancellationTask,
-                      Task.Delay(TimeSpan.FromSeconds 2.0)
-                  )
+              let! cancellationWinner = Task.WhenAny(cancellationTask, Task.Delay(TimeSpan.FromSeconds 2.0))
 
               Expect.isTrue
-                  (Object.ReferenceEquals(
-                      cancellationWinner,
-                      cancellationTask
-                  ))
+                  (Object.ReferenceEquals(cancellationWinner, cancellationTask))
                   "CancelAsync must finish after callback release"
 
               // Explicitly await the winning task to observe any fault.
@@ -1234,54 +1331,38 @@ let tests =
               match completionResult with
               | Some completion ->
                   // Bounded wait for finalization after callback release.
-                  let! finalizationWinner =
-                      Task.WhenAny(
-                          completion.Finalization,
-                          Task.Delay(TimeSpan.FromSeconds 2.0)
-                      )
+                  let! finalizationWinner = Task.WhenAny(completion.Finalization, Task.Delay(TimeSpan.FromSeconds 2.0))
 
                   Expect.isTrue
-                      (Object.ReferenceEquals(
-                          finalizationWinner,
-                          completion.Finalization
-                      ))
+                      (Object.ReferenceEquals(finalizationWinner, completion.Finalization))
                       "finalization must complete after callback release"
 
                   // Explicitly await the winning task to observe any fault.
                   do! completion.Finalization
 
-              | None ->
-                  ()
+              | None -> ()
 
               // Dispose after observing CancelAsync task completion.
               customCts.Dispose()
 
               // Assert recorded conditions after all cleanup is complete.
               // This ensures all paths through the try block are bounded.
-              Expect.isTrue callbackStartedInTime
-                  "callback must start within the bound"
+              Expect.isTrue callbackStartedInTime "callback must start within the bound"
 
-              Expect.isTrue completionReturnedInTime
-                  "lifecycle must return without waiting synchronously for disposal"
+              Expect.isTrue completionReturnedInTime "lifecycle must return without waiting synchronously for disposal"
 
-              Expect.isTrue finalizationSuspended
-                  "finalization must await the active callback"
+              Expect.isTrue finalizationSuspended "finalization must await the active callback"
 
-              Expect.isTrue threadResponsive
-                  "test thread must remain responsive"
+              Expect.isTrue threadResponsive "test thread must remain responsive"
 
               Expect.isTrue
-                  (Object.ReferenceEquals(
-                      cancellationWinner,
-                      cancellationTask
-                  ))
+                  (Object.ReferenceEquals(cancellationWinner, cancellationTask))
                   "CancelAsync must finish after callback release"
 
               Expect.equal disposeCount 1 "dispose exactly once"
-          }
-        ]
+          } ]
     // Intrinsic sequencing: the canonical gate is deterministic without
     // requiring an operator `--sequenced` flag, because the fixture
     // now spawns short-lived `dotnet <fixture.dll> <mode> ...` children
     // instead of the previous heavyweight `dotnet fsi --exec` compiles.
-    |> (fun t -> Test.Sequenced (SequenceMethod.Synchronous, t))
+    |> (fun t -> Test.Sequenced(SequenceMethod.Synchronous, t))

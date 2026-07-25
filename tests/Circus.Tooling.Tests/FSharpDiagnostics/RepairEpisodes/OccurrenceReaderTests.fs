@@ -9,10 +9,7 @@ open Circus.Tooling.FSharpDiagnostics.Serialization
 
 let private newTempDir () =
     let dir =
-        Path.Combine(
-            Path.GetTempPath(),
-            "fsharp-diagnostics-occurrence-reader-" + System.Guid.NewGuid().ToString("N")
-        )
+        Path.Combine(Path.GetTempPath(), "fsharp-diagnostics-occurrence-reader-" + System.Guid.NewGuid().ToString("N"))
 
     Directory.CreateDirectory dir |> ignore
     dir
@@ -29,8 +26,7 @@ let private writeBytes (dir: string) (name: string) (bytes: byte[]) : string =
     File.WriteAllBytes(path, bytes)
     path
 
-let private utf8NoBom : Encoding =
-    new UTF8Encoding(false)
+let private utf8NoBom: Encoding = new UTF8Encoding(false)
 
 let private writeText (dir: string) (name: string) (text: string) : string =
     let path = Path.Combine(dir, name)
@@ -86,9 +82,11 @@ let tests =
         "FSharpDiagnostics.RepairEpisodes.OccurrenceReader"
         [ test "complete valid occurrence parses to one record" {
               let dir = newTempDir ()
+
               try
                   let path = writeText dir "one.jsonl" (validJsonLine () + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok records ->
                       Expect.equal (List.length records) 1 "one record"
@@ -100,6 +98,7 @@ let tests =
 
           test "nested span with four coordinates parses correctly" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -117,8 +116,10 @@ let tests =
                       + ",\"span\":{\"start_line\":10,\"start_column\":5,\"end_line\":12,\"end_column\":15}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "span.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok records ->
                       let occ = List.head records
@@ -133,9 +134,11 @@ let tests =
 
           test "explicitly null span coordinates are preserved as None" {
               let dir = newTempDir ()
+
               try
                   let path = writeText dir "nullspan.jsonl" (validJsonLine () + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok records ->
                       let occ = List.head records
@@ -150,6 +153,7 @@ let tests =
 
           test "event ordinal above Int32.MaxValue is accepted as int64" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -162,11 +166,12 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "big.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
-                  | Result.Ok records ->
-                      Expect.equal (List.head records).EventOrdinal 3000000000L "ordinal"
+                  | Result.Ok records -> Expect.equal (List.head records).EventOrdinal 3000000000L "ordinal"
                   | Result.Error f -> failwithf "expected Ok, got %A" f
               finally
                   cleanup dir
@@ -174,6 +179,7 @@ let tests =
 
           test "missing required field returns MissingField" {
               let dir = newTempDir ()
+
               try
                   // extractor_version intentionally omitted.
                   let line =
@@ -186,11 +192,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "missing.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (MissingField (_, _, field)) ->
+                  | Result.Error(MissingField(_, _, field)) ->
                       Expect.equal field "extractor_version" "extractor_version missing"
                   | Result.Error f -> failwithf "expected MissingField, got %A" f
               finally
@@ -199,6 +207,7 @@ let tests =
 
           test "duplicate top-level field returns DuplicateField" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -211,12 +220,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "dup.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (DuplicateField (_, _, field)) ->
-                      Expect.equal field "schema_version" "schema_version"
+                  | Result.Error(DuplicateField(_, _, field)) -> Expect.equal field "schema_version" "schema_version"
                   | Result.Error f -> failwithf "expected DuplicateField, got %A" f
               finally
                   cleanup dir
@@ -224,6 +234,7 @@ let tests =
 
           test "duplicate span field returns DuplicateField" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -235,12 +246,13 @@ let tests =
                       + ",\"span\":{\"start_line\":10,\"start_line\":11,\"start_column\":5,\"end_line\":12,\"end_column\":15}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "dupspan.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (DuplicateField (_, _, field)) ->
-                      Expect.equal field "span.start_line" "span.start_line"
+                  | Result.Error(DuplicateField(_, _, field)) -> Expect.equal field "span.start_line" "span.start_line"
                   | Result.Error f -> failwithf "expected DuplicateField, got %A" f
               finally
                   cleanup dir
@@ -248,6 +260,7 @@ let tests =
 
           test "unknown field returns UnknownField" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -260,12 +273,13 @@ let tests =
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null"
                       + ",\"extra_field\":\"extra\"}"
+
                   let path = writeText dir "unknown.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (UnknownField (_, _, field)) ->
-                      Expect.equal field "extra_field" "extra_field"
+                  | Result.Error(UnknownField(_, _, field)) -> Expect.equal field "extra_field" "extra_field"
                   | Result.Error f -> failwithf "expected UnknownField, got %A" f
               finally
                   cleanup dir
@@ -273,6 +287,7 @@ let tests =
 
           test "unknown severity returns InvalidEnumToken" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -284,11 +299,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "badsev.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (InvalidEnumToken (_, _, field, token)) ->
+                  | Result.Error(InvalidEnumToken(_, _, field, token)) ->
                       Expect.equal field "severity" "severity"
                       Expect.equal token "not_a_severity" "token"
                   | Result.Error f -> failwithf "expected InvalidEnumToken, got %A" f
@@ -298,6 +315,7 @@ let tests =
 
           test "unknown source kind returns InvalidEnumToken" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -309,11 +327,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "badsk.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (InvalidEnumToken (_, _, field, token)) ->
+                  | Result.Error(InvalidEnumToken(_, _, field, token)) ->
                       Expect.equal field "source_kind" "source_kind"
                       Expect.equal token "not_a_source" "token"
                   | Result.Error f -> failwithf "expected InvalidEnumToken, got %A" f
@@ -323,6 +343,7 @@ let tests =
 
           test "unknown location kind returns InvalidEnumToken" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -334,11 +355,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "badlk.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (InvalidEnumToken (_, _, field, token)) ->
+                  | Result.Error(InvalidEnumToken(_, _, field, token)) ->
                       Expect.equal field "location_kind" "location_kind"
                       Expect.equal token "nowhere" "token"
                   | Result.Error f -> failwithf "expected InvalidEnumToken, got %A" f
@@ -348,6 +371,7 @@ let tests =
 
           test "wrong JSON kind (number for required string) returns WrongJsonKind" {
               let dir = newTempDir ()
+
               try
                   // capture_id is a required string but provided as a number.
                   let line =
@@ -360,12 +384,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "wrongkind.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (WrongJsonKind (_, _, field)) ->
-                      Expect.equal field "capture_id" "capture_id"
+                  | Result.Error(WrongJsonKind(_, _, field)) -> Expect.equal field "capture_id" "capture_id"
                   | Result.Error f -> failwithf "expected WrongJsonKind, got %A" f
               finally
                   cleanup dir
@@ -373,6 +398,7 @@ let tests =
 
           test "required field set to null returns WrongJsonKind" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -384,11 +410,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "requirednull.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (WrongJsonKind (_, _, field)) ->
+                  | Result.Error(WrongJsonKind(_, _, field)) ->
                       Expect.equal field "extractor_version" "extractor_version"
                   | Result.Error f -> failwithf "expected WrongJsonKind, got %A" f
               finally
@@ -397,6 +425,7 @@ let tests =
 
           test "fractional event ordinal returns IntegerOutOfRange" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -408,12 +437,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "frac.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (IntegerOutOfRange (_, _, field)) ->
-                      Expect.equal field "event_ordinal" "event_ordinal"
+                  | Result.Error(IntegerOutOfRange(_, _, field)) -> Expect.equal field "event_ordinal" "event_ordinal"
                   | Result.Error f -> failwithf "expected IntegerOutOfRange, got %A" f
               finally
                   cleanup dir
@@ -421,6 +451,7 @@ let tests =
 
           test "event ordinal outside Int64 returns IntegerOutOfRange" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -433,12 +464,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "bigeo.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (IntegerOutOfRange (_, _, field)) ->
-                      Expect.equal field "event_ordinal" "event_ordinal"
+                  | Result.Error(IntegerOutOfRange(_, _, field)) -> Expect.equal field "event_ordinal" "event_ordinal"
                   | Result.Error f -> failwithf "expected IntegerOutOfRange, got %A" f
               finally
                   cleanup dir
@@ -446,17 +478,15 @@ let tests =
 
           test "malformed JSON reports correct one-based line number" {
               let dir = newTempDir ()
+
               try
-                  let content =
-                      validJsonLine () + "\n"
-                      + validJsonLine () + "\n"
-                      + "{not valid json"
+                  let content = validJsonLine () + "\n" + validJsonLine () + "\n" + "{not valid json"
                   let path = writeText dir "malformed.jsonl" content
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (InvalidJson (_, lineNumber, _)) ->
-                      Expect.equal lineNumber 3 "line number"
+                  | Result.Error(InvalidJson(_, lineNumber, _)) -> Expect.equal lineNumber 3 "line number"
                   | Result.Error f -> failwithf "expected InvalidJson, got %A" f
               finally
                   cleanup dir
@@ -464,13 +494,12 @@ let tests =
 
           test "valid lines followed by invalid line return no partial list" {
               let dir = newTempDir ()
+
               try
-                  let content =
-                      validJsonLine () + "\n"
-                      + validJsonLine () + "\n"
-                      + "{\"oops\":true}"
+                  let content = validJsonLine () + "\n" + validJsonLine () + "\n" + "{\"oops\":true}"
                   let path = writeText dir "partial.jsonl" content
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error, not partial list"
                   | Result.Error _ -> ()
@@ -480,14 +509,16 @@ let tests =
 
           test "invalid UTF-8 bytes return InvalidUtf8" {
               let dir = newTempDir ()
+
               try
                   // 0xFF 0xFE 0xFD are not valid UTF-8 leading bytes.
                   let bytes = [| 0xFFuy; 0xFEuy; 0xFDuy |]
                   let path = writeBytes dir "badutf8.jsonl" bytes
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (InvalidUtf8 _) -> ()
+                  | Result.Error(InvalidUtf8 _) -> ()
                   | Result.Error f -> failwithf "expected InvalidUtf8, got %A" f
               finally
                   cleanup dir
@@ -495,6 +526,7 @@ let tests =
 
           test "CRLF and LF produce identical typed results" {
               let dir = newTempDir ()
+
               try
                   let lf = validJsonLine () + "\n" + validJsonLine () + "\n"
                   let crlf = lf.Replace("\n", "\r\n")
@@ -502,9 +534,9 @@ let tests =
                   let crlfPath = writeText dir "crlf.jsonl" crlf
                   let lfR = readOccurrences lfPath
                   let crlfR = readOccurrences crlfPath
+
                   match lfR, crlfR with
-                  | Result.Ok lfRecords, Result.Ok crlfRecords ->
-                      Expect.equal lfRecords crlfRecords "identical records"
+                  | Result.Ok lfRecords, Result.Ok crlfRecords -> Expect.equal lfRecords crlfRecords "identical records"
                   | _ -> failwith "expected both Ok"
               finally
                   cleanup dir
@@ -534,20 +566,22 @@ let tests =
                     EventTimestamp = Some "2024-01-01T00:00:00Z"
                     BuildContext =
                       Some
-                        { NodeId = Some 1
-                          ProjectContextId = Some 2
-                          TargetId = Some 3
-                          TaskId = Some 4
-                          EvaluationId = Some 5
-                          SubmissionId = Some 6 }
+                          { NodeId = Some 1
+                            ProjectContextId = Some 2
+                            TargetId = Some 3
+                            TaskId = Some 4
+                            EvaluationId = Some 5
+                            SubmissionId = Some 6 }
                     LegacySourceLineStart = Some 7
                     LegacySourceLineEnd = Some 8 }
 
               let rendered = renderOccurrence occ
               let dir = newTempDir ()
+
               try
                   let path = writeText dir "full.jsonl" (rendered + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok records ->
                       Expect.equal (List.length records) 1 "one record"
@@ -561,25 +595,26 @@ let tests =
               let make i =
                   { validOccurrence with
                       EventOrdinal = int64 i
-                      Code = Some (sprintf "FS%04d" i)
+                      Code = Some(sprintf "FS%04d" i)
                       MessageRaw = sprintf "raw-%d" i
                       MessageNormalized = sprintf "normalized-%d" i
-                      SourcePath = Some (sprintf "src/File%d.fs" i)
+                      SourcePath = Some(sprintf "src/File%d.fs" i)
                       Span =
-                        { StartLine = Some i
-                          StartColumn = Some (i * 2)
-                          EndLine = Some (i + 1)
-                          EndColumn = Some (i * 2 + 1) } }
+                          { StartLine = Some i
+                            StartColumn = Some(i * 2)
+                            EndLine = Some(i + 1)
+                            EndColumn = Some(i * 2 + 1) } }
 
-              let records = [ for i in 1 .. 3 -> make i ]
+              let records = [ for i in 1..3 -> make i ]
               let rendered = records |> List.map renderOccurrence |> String.concat "\n"
               let dir = newTempDir ()
+
               try
                   let path = writeText dir "round.jsonl" (rendered + "\n")
                   let r = readOccurrences path
+
                   match r with
-                  | Result.Ok got ->
-                      Expect.equal got records "round-trip equality"
+                  | Result.Ok got -> Expect.equal got records "round-trip equality"
                   | Result.Error f -> failwithf "expected Ok, got %A" f
               finally
                   cleanup dir
@@ -587,22 +622,23 @@ let tests =
 
           test "missing file returns FileMissing" {
               let path =
-                  Path.Combine(
-                      Path.GetTempPath(),
-                      "does-not-exist-" + System.Guid.NewGuid().ToString("N") + ".jsonl"
-                  )
+                  Path.Combine(Path.GetTempPath(), "does-not-exist-" + System.Guid.NewGuid().ToString("N") + ".jsonl")
+
               let r = readOccurrences path
+
               match r with
               | Result.Ok _ -> failwithf "expected Error"
-              | Result.Error (FileMissing _) -> ()
+              | Result.Error(FileMissing _) -> ()
               | Result.Error f -> failwithf "expected FileMissing, got %A" f
           }
 
           test "blank lines are skipped, file with only blank lines yields empty list" {
               let dir = newTempDir ()
+
               try
                   let path = writeText dir "blank.jsonl" "\n\n   \n\n"
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok records -> Expect.isEmpty records "no records"
                   | Result.Error f -> failwithf "expected Ok, got %A" f
@@ -612,6 +648,7 @@ let tests =
 
           test "escaped duplicate top-level field returns DuplicateField" {
               let dir = newTempDir ()
+
               try
                   // \u0073 is the lower-case letter s; both names decode to
                   // "schema_version" but the raw spellings differ.
@@ -626,12 +663,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "dup-esc.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (DuplicateField (_, _, field)) ->
-                      Expect.equal field "schema_version" "schema_version"
+                  | Result.Error(DuplicateField(_, _, field)) -> Expect.equal field "schema_version" "schema_version"
                   | Result.Error f -> failwithf "expected DuplicateField, got %A" f
               finally
                   cleanup dir
@@ -639,6 +677,7 @@ let tests =
 
           test "escaped duplicate span field returns DuplicateField" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -650,12 +689,13 @@ let tests =
                       + ",\"span\":{\"start_line\":10,\"\\u0073tart_line\":11,\"start_column\":5,\"end_line\":12,\"end_column\":15}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "dup-esc-span.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (DuplicateField (_, _, field)) ->
-                      Expect.equal field "span.start_line" "span.start_line"
+                  | Result.Error(DuplicateField(_, _, field)) -> Expect.equal field "span.start_line" "span.start_line"
                   | Result.Error f -> failwithf "expected DuplicateField, got %A" f
               finally
                   cleanup dir
@@ -663,6 +703,7 @@ let tests =
 
           test "escaped duplicate build_context field returns DuplicateField" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -675,11 +716,13 @@ let tests =
                       + ",\"sender_name\":null,\"event_timestamp\":null"
                       + ",\"build_context\":{\"\\u006eode_id\":1,\"node_id\":2}"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "dup-esc-bc.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (DuplicateField (_, _, field)) ->
+                  | Result.Error(DuplicateField(_, _, field)) ->
                       Expect.equal field "build_context.node_id" "build_context.node_id"
                   | Result.Error f -> failwithf "expected DuplicateField, got %A" f
               finally
@@ -688,6 +731,7 @@ let tests =
 
           test "omission of subcategory returns MissingField" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -699,12 +743,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "miss-subcat.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (MissingField (_, _, field)) ->
-                      Expect.equal field "subcategory" "subcategory"
+                  | Result.Error(MissingField(_, _, field)) -> Expect.equal field "subcategory" "subcategory"
                   | Result.Error f -> failwithf "expected MissingField, got %A" f
               finally
                   cleanup dir
@@ -712,6 +757,7 @@ let tests =
 
           test "omission of source_path returns MissingField" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -723,12 +769,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "miss-srcpath.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (MissingField (_, _, field)) ->
-                      Expect.equal field "source_path" "source_path"
+                  | Result.Error(MissingField(_, _, field)) -> Expect.equal field "source_path" "source_path"
                   | Result.Error f -> failwithf "expected MissingField, got %A" f
               finally
                   cleanup dir
@@ -736,6 +783,7 @@ let tests =
 
           test "omission of span.start_line returns MissingField" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -747,12 +795,13 @@ let tests =
                       + ",\"span\":{\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "miss-span.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (MissingField (_, _, field)) ->
-                      Expect.equal field "start_line" "start_line"
+                  | Result.Error(MissingField(_, _, field)) -> Expect.equal field "start_line" "start_line"
                   | Result.Error f -> failwithf "expected MissingField, got %A" f
               finally
                   cleanup dir
@@ -760,6 +809,7 @@ let tests =
 
           test "omission of build_context.node_id returns MissingField" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -772,12 +822,13 @@ let tests =
                       + ",\"sender_name\":null,\"event_timestamp\":null"
                       + ",\"build_context\":{\"project_context_id\":1}"
                       + ",\"legacy_source_line_start\":null,\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "miss-bcnode.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (MissingField (_, _, field)) ->
-                      Expect.equal field "node_id" "node_id"
+                  | Result.Error(MissingField(_, _, field)) -> Expect.equal field "node_id" "node_id"
                   | Result.Error f -> failwithf "expected MissingField, got %A" f
               finally
                   cleanup dir
@@ -785,6 +836,7 @@ let tests =
 
           test "omission of legacy_source_line_start returns MissingField" {
               let dir = newTempDir ()
+
               try
                   let line =
                       "{\"schema_version\":\"diagnostic-occurrence-v1\""
@@ -796,11 +848,13 @@ let tests =
                       + ",\"span\":{\"start_line\":null,\"start_column\":null,\"end_line\":null,\"end_column\":null}"
                       + ",\"sender_name\":null,\"event_timestamp\":null,\"build_context\":null"
                       + ",\"legacy_source_line_end\":null}"
+
                   let path = writeText dir "miss-legstart.jsonl" (line + "\n")
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (MissingField (_, _, field)) ->
+                  | Result.Error(MissingField(_, _, field)) ->
                       Expect.equal field "legacy_source_line_start" "legacy_source_line_start"
                   | Result.Error f -> failwithf "expected MissingField, got %A" f
               finally
@@ -809,15 +863,17 @@ let tests =
 
           test "UTF-8 BOM returns NonCanonicalEncoding" {
               let dir = newTempDir ()
+
               try
                   // UTF-8 BOM followed by a valid occurrence line.
-                  let jsonBytes = utf8NoBom.GetBytes (validJsonLine () + "\n")
+                  let jsonBytes = utf8NoBom.GetBytes(validJsonLine () + "\n")
                   let bytes = Array.append [| 0xEFuy; 0xBBuy; 0xBFuy |] jsonBytes
                   let path = writeBytes dir "bom.jsonl" bytes
                   let r = readOccurrences path
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (NonCanonicalEncoding _) -> ()
+                  | Result.Error(NonCanonicalEncoding _) -> ()
                   | Result.Error f -> failwithf "expected NonCanonicalEncoding, got %A" f
               finally
                   cleanup dir
@@ -825,11 +881,13 @@ let tests =
 
           test "directory path returns FileMissing" {
               let dir = newTempDir ()
+
               try
                   let r = readOccurrences dir
+
                   match r with
                   | Result.Ok _ -> failwithf "expected Error"
-                  | Result.Error (FileMissing _) -> ()
+                  | Result.Error(FileMissing _) -> ()
                   | Result.Error f -> failwithf "expected FileMissing, got %A" f
               finally
                   cleanup dir

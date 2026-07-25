@@ -18,36 +18,37 @@ open Circus.Tooling.CanonicalEvidence.Validation
 open Circus.Tooling.CanonicalEvidence.Provider
 
 let private tempDir () : string =
-    let dir = Path.Combine(Path.GetTempPath(), "circus-canonev-writer-" + Guid.NewGuid().ToString("n"))
+    let dir =
+        Path.Combine(Path.GetTempPath(), "circus-canonev-writer-" + Guid.NewGuid().ToString("n"))
+
     Directory.CreateDirectory dir |> ignore
     dir
 
 let private sampleCheck (id: string) (status: EvidenceStatus) : EvidenceCheckResult =
-    {
-        Id = id
-        CommandArgv = [ "dotnet"; "test" ]
-        WorkingDirectory = "/repo"
-        DurationMilliseconds = 100L
-        ExitCode = Some 0
-        Status = status
-        StdoutSha256 = Some (String.replicate 64 "a")
-        StderrSha256 = Some (String.replicate 64 "b")
-        FailureKind = None
-    }
+    { Id = id
+      CommandArgv = [ "dotnet"; "test" ]
+      WorkingDirectory = "/repo"
+      DurationMilliseconds = 100L
+      ExitCode = Some 0
+      Status = status
+      StdoutSha256 = Some(String.replicate 64 "a")
+      StderrSha256 = Some(String.replicate 64 "b")
+      FailureKind = None }
 
 let private sampleEvidence (commit: string) (tree: string) : CanonicalEvidence =
-    let doc = {
-        SchemaVersion = 1
-        ProviderName = "circus-canonical-evidence"
-        ProviderVersion = "1.0.0"
-        TestedCommitOid = commit
-        TestedTreeOid = tree
-        ObjectFormat = "sha1"
-        Checks = [ sampleCheck "tooling-build" Pass ]
-        OverallStatus = Pass
-        SemanticSha256 = ""
-    }
-    { doc with SemanticSha256 = computeSemanticHash doc }
+    let doc =
+        { SchemaVersion = 1
+          ProviderName = "circus-canonical-evidence"
+          ProviderVersion = "1.0.0"
+          TestedCommitOid = commit
+          TestedTreeOid = tree
+          ObjectFormat = "sha1"
+          Checks = [ sampleCheck "tooling-build" Pass ]
+          OverallStatus = Pass
+          SemanticSha256 = "" }
+
+    { doc with
+        SemanticSha256 = computeSemanticHash doc }
 
 [<Tests>]
 let tests =
@@ -60,15 +61,21 @@ let tests =
               let path = Path.Combine(dir, "evidence.json")
               let e = sampleEvidence (String.replicate 40 "a") (String.replicate 40 "b")
               let outcome = tryWriteAtomic path e
+
               match outcome.Failure with
               | Some f -> eprintfn "DEBUG FAILURE: %s" (writeFailureToString f)
               | None -> ()
+
               Expect.isTrue outcome.Success "write successful"
               Expect.isTrue (File.Exists path) "file exists"
               let written = File.ReadAllBytes path
               let expected = System.Text.Encoding.UTF8.GetBytes(renderWireJson e + "\n")
               Expect.equal written expected "bytes match wire form + newline"
-              Expect.equal outcome.CanonicalSha256 (Circus.Tooling.FSharpDiagnostics.Hashing.sha256Hex written) "sha matches"
+
+              Expect.equal
+                  outcome.CanonicalSha256
+                  (Circus.Tooling.FSharpDiagnostics.Hashing.sha256Hex written)
+                  "sha matches"
           }
 
           // 29. Temporary-file creation failure
@@ -103,18 +110,21 @@ let tests =
               // Hand-craft a tampered body whose hash does not match
               // the canonicalised form.
               let bad =
-                  renderWireJson {
-                      good with
-                          SemanticSha256 = "deadbeef"
-                  }
+                  renderWireJson
+                      { good with
+                          SemanticSha256 = "deadbeef" }
+
               File.WriteAllBytes(path, System.Text.Encoding.UTF8.GetBytes(bad + "\n"))
               // The provider's writeAtomic re-validates; a tampered
               // post-write artefact is rejected by the write path.
               let outcome2 = tryWriteAtomic path good
               Expect.isTrue outcome2.Success "second write succeeds with valid content"
               let after = File.ReadAllBytes path
-              Expect.equal (System.Text.Encoding.UTF8.GetString after)
-                  (renderWireJson good + "\n") "previous artifact rewritten"
+
+              Expect.equal
+                  (System.Text.Encoding.UTF8.GetString after)
+                  (renderWireJson good + "\n")
+                  "previous artifact rewritten"
           }
 
           // 31. Validation failure
@@ -126,11 +136,14 @@ let tests =
               Expect.isTrue outcome1.Success "first write ok"
               // Tamper bytes
               let tampered = renderWireJson good + "\n"
+
               let manipulated =
                   tampered.Replace("\"pass\"", "\"unknown\"")
                   |> fun s -> System.Text.Encoding.UTF8.GetBytes(s)
+
               File.WriteAllBytes(path, manipulated)
               let rawKeys = collectRawJsonKeys (File.ReadAllText path)
+
               match parseWireJson (File.ReadAllText path) with
               | Result.Error _ -> () // rejected as parse
               | Result.Ok e ->
@@ -159,10 +172,10 @@ let tests =
               // file must contain valid evidence.
               Expect.isTrue (File.Exists path) "file remains"
               let raw = File.ReadAllText path
+
               match parseWireJson raw with
               | Result.Error e -> failwithf "post-write parse failed: %s" e
-              | Result.Ok e ->
-                  Expect.equal e.SemanticSha256 good.SemanticSha256 "semantic hash preserved"
+              | Result.Ok e -> Expect.equal e.SemanticSha256 good.SemanticSha256 "semantic hash preserved"
           }
 
           // 33. Existing artifact survives failed regeneration
@@ -180,8 +193,12 @@ let tests =
               let outcome2 = tryWriteAtomic path good
               Expect.isTrue outcome2.Success "second write succeeds"
               let after = File.ReadAllBytes path
-              Expect.equal (System.Text.Encoding.UTF8.GetString after)
-                  (renderWireJson good + "\n") "file content validated and replaced"
+
+              Expect.equal
+                  (System.Text.Encoding.UTF8.GetString after)
+                  (renderWireJson good + "\n")
+                  "file content validated and replaced"
+
               Expect.equal before after "byte-identical regeneration"
           }
 
@@ -194,11 +211,15 @@ let tests =
               Expect.isTrue first.Success "first write ok"
               // Tamper with the file
               let bytes = File.ReadAllBytes path
-              let mutableArray = bytes |> Array.mapi (fun i b -> if i = 50 then (b ^^^ 0xFFuy) else b)
+
+              let mutableArray =
+                  bytes |> Array.mapi (fun i b -> if i = 50 then (b ^^^ 0xFFuy) else b)
+
               File.WriteAllBytes(path, mutableArray)
               // Read the tampered file and validate
               let raw = File.ReadAllText path
               let rawKeys = collectRawJsonKeys raw
+
               match parseWireJson raw with
               | Result.Error _ -> () // rejected as parse
               | Result.Ok e ->
@@ -219,17 +240,23 @@ let tests =
               // commit OID. The repo-root parameter is meaningless
               // here because we are exercising the verify path
               // directly.
-              let stale = {
-                  good with
-                      TestedCommitOid = String.replicate 40 "c"
-              }
-              let staleJson = renderWireJson { stale with SemanticSha256 = computeSemanticHash stale } + "\n"
+              let stale =
+                  { good with
+                      TestedCommitOid = String.replicate 40 "c" }
+
+              let staleJson =
+                  renderWireJson
+                      { stale with
+                          SemanticSha256 = computeSemanticHash stale }
+                  + "\n"
+
               File.WriteAllText(path, staleJson)
               // Hand-verify with a fake repoRoot that resolves to
               // the current repo. We only care about the structural
               // and semantic-hash branches here.
               let raw = File.ReadAllText path
               let rawKeys = collectRawJsonKeys raw
+
               match parseWireJson raw with
               | Result.Error e -> failwithf "parse failed: %s" e
               | Result.Ok e ->
@@ -247,14 +274,21 @@ let tests =
               let good = sampleEvidence commit tree
               let first = tryWriteAtomic path good
               Expect.isTrue first.Success "first write ok"
-              let stale = {
-                  good with
-                      TestedTreeOid = String.replicate 40 "d"
-              }
-              let staleJson = renderWireJson { stale with SemanticSha256 = computeSemanticHash stale } + "\n"
+
+              let stale =
+                  { good with
+                      TestedTreeOid = String.replicate 40 "d" }
+
+              let staleJson =
+                  renderWireJson
+                      { stale with
+                          SemanticSha256 = computeSemanticHash stale }
+                  + "\n"
+
               File.WriteAllText(path, staleJson)
               let raw = File.ReadAllText path
               let rawKeys = collectRawJsonKeys raw
+
               match parseWireJson raw with
               | Result.Error e -> failwithf "parse failed: %s" e
               | Result.Ok e ->
@@ -275,9 +309,13 @@ let tests =
                   psi.RedirectStandardOutput <- true
                   psi.RedirectStandardError <- true
                   psi.CreateNoWindow <- true
-                  for a in args do psi.ArgumentList.Add(a)
+
+                  for a in args do
+                      psi.ArgumentList.Add(a)
+
                   let p = System.Diagnostics.Process.Start psi
                   p.WaitForExit()
+
               runCmd [ "init"; "-q" ]
               runCmd [ "config"; "user.email"; "ci@local" ]
               runCmd [ "config"; "user.name"; "ci" ]
@@ -292,6 +330,7 @@ let tests =
               File.WriteAllText(Path.Combine(dir, "README.md"), "dirty")
               let dirty = resolveIdentity dir
               Expect.isError dirty "dirty worktree rejected"
+
               match dirty with
               | Result.Error IdentityDirtyWorktree -> ()
               | Result.Error other -> failwithf "expected dirty worktree error, got %s" (identityFailureToString other)
@@ -309,5 +348,4 @@ let tests =
               Expect.equal (computeSemanticHash a) (computeSemanticHash b) "hash stable"
               // And the wire form is byte-identical
               Expect.equal (renderWireJson a) (renderWireJson b) "wire form stable"
-          }
-        ]
+          } ]

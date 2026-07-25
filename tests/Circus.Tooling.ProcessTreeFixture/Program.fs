@@ -56,10 +56,10 @@ let private exitCodeForUnknownMode = 2
 let private exitCodeForFixtureError = 3
 
 let private makeStdoutBytes (count: int) : byte array =
-    Array.init count (fun i -> byte (97 + (i % 26)))  // 'a'..'z'
+    Array.init count (fun i -> byte (97 + (i % 26))) // 'a'..'z'
 
 let private makeStderrBytes (count: int) : byte array =
-    Array.init count (fun i -> byte (65 + (i % 26)))  // 'A'..'Z'
+    Array.init count (fun i -> byte (65 + (i % 26))) // 'A'..'Z'
 
 let private writeBytes (stream: Stream) (bytes: byte array) : unit =
     stream.Write(bytes, 0, bytes.Length)
@@ -98,8 +98,7 @@ let private runSleep (msStr: string) : int =
     Thread.Sleep(ms)
     0
 
-let private runExit (codeStr: string) : int =
-    Int32.Parse(codeStr)
+let private runExit (codeStr: string) : int = Int32.Parse(codeStr)
 
 let private runExitWithBoth (stdoutCountStr: string) (stderrCountStr: string) (codeStr: string) : int =
     let stdoutCount = Int32.Parse(stdoutCountStr)
@@ -113,8 +112,10 @@ let private runExitWithBoth (stdoutCountStr: string) (stderrCountStr: string) (c
 
 let private runEchoArgs (args: string[]) : int =
     let stdout = Console.OpenStandardOutput()
+
     for i in 1 .. args.Length - 1 do
         writeString stdout (args.[i] + " ")
+
     writeString stdout Environment.NewLine
     0
 
@@ -127,24 +128,16 @@ let private runWorkingDirectory () : int =
 let main (argv: string[]) : int =
     try
         match argv with
-        | [| "empty" |] ->
-            runEmpty ()
-        | [| "stdout"; countStr |] ->
-            runStdout countStr
-        | [| "stderr"; countStr |] ->
-            runStderr countStr
-        | [| "both"; stdoutCountStr; stderrCountStr |] ->
-            runBoth stdoutCountStr stderrCountStr
-        | [| "sleep"; msStr |] ->
-            runSleep msStr
-        | [| "exit"; codeStr |] ->
-            runExit codeStr
+        | [| "empty" |] -> runEmpty ()
+        | [| "stdout"; countStr |] -> runStdout countStr
+        | [| "stderr"; countStr |] -> runStderr countStr
+        | [| "both"; stdoutCountStr; stderrCountStr |] -> runBoth stdoutCountStr stderrCountStr
+        | [| "sleep"; msStr |] -> runSleep msStr
+        | [| "exit"; codeStr |] -> runExit codeStr
         | [| "exit-with-both"; stdoutCountStr; stderrCountStr; codeStr |] ->
             runExitWithBoth stdoutCountStr stderrCountStr codeStr
-        | array when Array.length array >= 1 && array.[0] = "echo-args" ->
-            runEchoArgs array
-        | [| "working-directory" |] ->
-            runWorkingDirectory ()
+        | array when Array.length array >= 1 && array.[0] = "echo-args" -> runEchoArgs array
+        | [| "working-directory" |] -> runWorkingDirectory ()
         | _ ->
             writeString (Console.OpenStandardError()) (sprintf "unknown fixture mode: %A" argv)
             exitCodeForUnknownMode

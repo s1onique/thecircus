@@ -23,36 +23,40 @@ let private fixturePath =
 let private resolveFixturePath () : string =
     if not (File.Exists fixturePath) then
         failwithf "precompiled process fixture not found at %s. Build the test project first." fixturePath
+
     fixturePath
 
 let private tempWorkDir () : string =
-    let dir = Path.Combine(Path.GetTempPath(), "circus-canonev-" + Guid.NewGuid().ToString("n"))
+    let dir =
+        Path.Combine(Path.GetTempPath(), "circus-canonev-" + Guid.NewGuid().ToString("n"))
+
     Directory.CreateDirectory dir |> ignore
     dir
 
 let private makeDef (id: string) (args: string list) (workingDir: string) : EvidenceCheckDefinition =
-    {
-        Id = id
-        Executable = "dotnet"
-        WorkingDirectory = workingDir
-        Arguments = (resolveFixturePath() :: args)
-        Required = true
-        Timeout = TimeSpan.FromSeconds(30.0)
-        StdoutLimitBytes = 1024 * 1024
-        StderrLimitBytes = 1024 * 1024
-    }
+    { Id = id
+      Executable = "dotnet"
+      WorkingDirectory = workingDir
+      Arguments = (resolveFixturePath () :: args)
+      Required = true
+      Timeout = TimeSpan.FromSeconds(30.0)
+      StdoutLimitBytes = 1024 * 1024
+      StderrLimitBytes = 1024 * 1024 }
 
-let private makeDefRaw (id: string) (executable: string) (args: string list) (workingDir: string) : EvidenceCheckDefinition =
-    {
-        Id = id
-        Executable = executable
-        WorkingDirectory = workingDir
-        Arguments = args
-        Required = true
-        Timeout = TimeSpan.FromSeconds(30.0)
-        StdoutLimitBytes = 1024 * 1024
-        StderrLimitBytes = 1024 * 1024
-    }
+let private makeDefRaw
+    (id: string)
+    (executable: string)
+    (args: string list)
+    (workingDir: string)
+    : EvidenceCheckDefinition =
+    { Id = id
+      Executable = executable
+      WorkingDirectory = workingDir
+      Arguments = args
+      Required = true
+      Timeout = TimeSpan.FromSeconds(30.0)
+      StdoutLimitBytes = 1024 * 1024
+      StderrLimitBytes = 1024 * 1024 }
 
 [<Tests>]
 let tests =
@@ -85,7 +89,10 @@ let tests =
           // 16. Missing executable
           test "missing executable => unavailable" {
               let wd = tempWorkDir ()
-              let def = makeDefRaw "missing" "/absolute/nonexistent/circus-tooling-binary" [ "empty" ] wd
+
+              let def =
+                  makeDefRaw "missing" "/absolute/nonexistent/circus-tooling-binary" [ "empty" ] wd
+
               let result = runCheck def
               Expect.equal result.Status Unavailable "missing executable => unavailable"
               Expect.isNone result.ExitCode "no exit code"
@@ -96,16 +103,17 @@ let tests =
           // 17. Timeout
           test "timeout => unavailable" {
               let wd = tempWorkDir ()
-              let def = {
-                  Id = "slow"
-                  Executable = "dotnet"
-                  WorkingDirectory = wd
-                  Arguments = (resolveFixturePath() :: [ "sleep"; "8000" ])
-                  Required = true
-                  Timeout = TimeSpan.FromMilliseconds(1500.0)
-                  StdoutLimitBytes = 1024 * 1024
-                  StderrLimitBytes = 1024 * 1024
-              }
+
+              let def =
+                  { Id = "slow"
+                    Executable = "dotnet"
+                    WorkingDirectory = wd
+                    Arguments = (resolveFixturePath () :: [ "sleep"; "8000" ])
+                    Required = true
+                    Timeout = TimeSpan.FromMilliseconds(1500.0)
+                    StdoutLimitBytes = 1024 * 1024
+                    StderrLimitBytes = 1024 * 1024 }
+
               let result = runCheck def
               Expect.equal result.Status Unavailable "timeout => unavailable"
               Expect.isSome result.FailureKind "failure kind set"
@@ -116,47 +124,44 @@ let tests =
           test "cancelled => unavailable" {
               let wd = tempWorkDir ()
               let cts = new System.Threading.CancellationTokenSource()
-              let request: BoundedProcessRequest = {
-                  Executable = "dotnet"
-                  WorkingDirectory = wd
-                  Arguments = (resolveFixturePath() :: [ "sleep"; "8000" ])
-                  Environment = []
-                  Limits = {
-                      Timeout = TimeSpan.FromSeconds(20.0)
-                      StdoutLimitBytes = 1024 * 1024
-                      StderrLimitBytes = 1024 * 1024
-                  }
-              }
-              let task =
-                  run request cts.Token
+
+              let request: BoundedProcessRequest =
+                  { Executable = "dotnet"
+                    WorkingDirectory = wd
+                    Arguments = (resolveFixturePath () :: [ "sleep"; "8000" ])
+                    Environment = []
+                    Limits =
+                      { Timeout = TimeSpan.FromSeconds(20.0)
+                        StdoutLimitBytes = 1024 * 1024
+                        StderrLimitBytes = 1024 * 1024 } }
+
+              let task = run request cts.Token
               cts.CancelAfter(200)
-              let result =
-                  task
-                  |> Async.AwaitTask
-                  |> Async.RunSynchronously
+              let result = task |> Async.AwaitTask |> Async.RunSynchronously
               let _ = task
               Expect.isError result "cancelled task returns error"
+
               match result with
               | Error failure ->
                   let kind = boundedFailureKind failure
                   Expect.stringContains kind "cancelled" "cancelled failure kind"
-              | Ok _ ->
-                  failwith "expected cancelled failure"
+              | Ok _ -> failwith "expected cancelled failure"
           }
 
           // 19. stdout exact limit
           test "stdout exact limit is allowed" {
               let wd = tempWorkDir ()
-              let def = {
-                  Id = "stdout-exact"
-                  Executable = "dotnet"
-                  WorkingDirectory = wd
-                  Arguments = (resolveFixturePath() :: [ "stdout"; "100" ])
-                  Required = true
-                  Timeout = TimeSpan.FromSeconds(15.0)
-                  StdoutLimitBytes = 100
-                  StderrLimitBytes = 1024 * 1024
-              }
+
+              let def =
+                  { Id = "stdout-exact"
+                    Executable = "dotnet"
+                    WorkingDirectory = wd
+                    Arguments = (resolveFixturePath () :: [ "stdout"; "100" ])
+                    Required = true
+                    Timeout = TimeSpan.FromSeconds(15.0)
+                    StdoutLimitBytes = 100
+                    StderrLimitBytes = 1024 * 1024 }
+
               let result = runCheck def
               Expect.equal result.Status Pass "exact limit passes"
               Expect.equal result.ExitCode (Some 0) "exit 0"
@@ -165,16 +170,17 @@ let tests =
           // 20. stdout limit plus one
           test "stdout limit plus one fails closed" {
               let wd = tempWorkDir ()
-              let def = {
-                  Id = "stdout-overflow"
-                  Executable = "dotnet"
-                  WorkingDirectory = wd
-                  Arguments = (resolveFixturePath() :: [ "stdout"; "101" ])
-                  Required = true
-                  Timeout = TimeSpan.FromSeconds(15.0)
-                  StdoutLimitBytes = 100
-                  StderrLimitBytes = 1024 * 1024
-              }
+
+              let def =
+                  { Id = "stdout-overflow"
+                    Executable = "dotnet"
+                    WorkingDirectory = wd
+                    Arguments = (resolveFixturePath () :: [ "stdout"; "101" ])
+                    Required = true
+                    Timeout = TimeSpan.FromSeconds(15.0)
+                    StdoutLimitBytes = 100
+                    StderrLimitBytes = 1024 * 1024 }
+
               let result = runCheck def
               Expect.equal result.Status Unavailable "overflow => unavailable"
               Expect.isSome result.FailureKind "failure kind set"
@@ -184,16 +190,17 @@ let tests =
           // 21. stderr exact limit
           test "stderr exact limit is allowed" {
               let wd = tempWorkDir ()
-              let def = {
-                  Id = "stderr-exact"
-                  Executable = "dotnet"
-                  WorkingDirectory = wd
-                  Arguments = (resolveFixturePath() :: [ "stderr"; "100" ])
-                  Required = true
-                  Timeout = TimeSpan.FromSeconds(15.0)
-                  StdoutLimitBytes = 1024 * 1024
-                  StderrLimitBytes = 100
-              }
+
+              let def =
+                  { Id = "stderr-exact"
+                    Executable = "dotnet"
+                    WorkingDirectory = wd
+                    Arguments = (resolveFixturePath () :: [ "stderr"; "100" ])
+                    Required = true
+                    Timeout = TimeSpan.FromSeconds(15.0)
+                    StdoutLimitBytes = 1024 * 1024
+                    StderrLimitBytes = 100 }
+
               let result = runCheck def
               Expect.equal result.Status Pass "exact limit passes"
           }
@@ -201,16 +208,17 @@ let tests =
           // 22. stderr limit plus one
           test "stderr limit plus one fails closed" {
               let wd = tempWorkDir ()
-              let def = {
-                  Id = "stderr-overflow"
-                  Executable = "dotnet"
-                  WorkingDirectory = wd
-                  Arguments = (resolveFixturePath() :: [ "stderr"; "101" ])
-                  Required = true
-                  Timeout = TimeSpan.FromSeconds(15.0)
-                  StdoutLimitBytes = 1024 * 1024
-                  StderrLimitBytes = 100
-              }
+
+              let def =
+                  { Id = "stderr-overflow"
+                    Executable = "dotnet"
+                    WorkingDirectory = wd
+                    Arguments = (resolveFixturePath () :: [ "stderr"; "101" ])
+                    Required = true
+                    Timeout = TimeSpan.FromSeconds(15.0)
+                    StdoutLimitBytes = 1024 * 1024
+                    StderrLimitBytes = 100 }
+
               let result = runCheck def
               Expect.equal result.Status Unavailable "overflow => unavailable"
               Expect.isSome result.FailureKind "failure kind set"
@@ -245,10 +253,16 @@ let tests =
               let def = makeDef "echo-meta" [ "echo-args"; "hello world"; "a;b&c"; "'quoted'" ] wd
               let result = runCheck def
               Expect.equal result.Status Pass "echo-args exits 0"
-              Expect.stringContains (result.CommandArgv |> List.fold (fun a b -> a + " " + b) "")
-                  "hello world" "spaces preserved in argv"
-              Expect.stringContains (result.CommandArgv |> List.fold (fun a b -> a + " " + b) "")
-                  "a;b&c" "metacharacters preserved literally"
+
+              Expect.stringContains
+                  (result.CommandArgv |> List.fold (fun a b -> a + " " + b) "")
+                  "hello world"
+                  "spaces preserved in argv"
+
+              Expect.stringContains
+                  (result.CommandArgv |> List.fold (fun a b -> a + " " + b) "")
+                  "a;b&c"
+                  "metacharacters preserved literally"
           }
 
           // 26. supplied working directory is honored
@@ -267,7 +281,20 @@ let tests =
 
           // 27. no provider-owned Process.Start exists
           test "no provider-owned Process.Start exists" {
-              let providerSrc = File.ReadAllText(Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "..", "tools", "Circus.Tooling", "CanonicalEvidence", "Provider.fs"))
+              let providerSrc =
+                  File.ReadAllText(
+                      Path.Combine(
+                          __SOURCE_DIRECTORY__,
+                          "..",
+                          "..",
+                          "..",
+                          "tools",
+                          "Circus.Tooling",
+                          "CanonicalEvidence",
+                          "Provider.fs"
+                      )
+                  )
+
               let hasForbidden =
                   providerSrc.Contains("Process.Start")
                   || providerSrc.Contains("DataReceivedEventHandler")
@@ -275,6 +302,6 @@ let tests =
                   || providerSrc.Contains("BeginErrorReadLine")
                   || providerSrc.Contains("StandardOutput.BaseStream")
                   || providerSrc.Contains("StandardError.BaseStream")
+
               Expect.isFalse hasForbidden "provider source must not invoke Process.Start directly"
-          }
-        ]
+          } ]
