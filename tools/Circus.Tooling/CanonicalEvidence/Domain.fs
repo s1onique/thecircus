@@ -117,6 +117,7 @@ let SupportedCheckIds : string list =
     [
         "tooling-build"
         "tooling-tests-build"
+        "postgres-runner-authority-tests"
         "bounded-process-tests"
         "git-adapter-tests"
         "repair-episodes-tests"

@@ -300,7 +300,17 @@ let CanonicalCheckDefinitions
         {
             Id = "tooling-tests-build"
             Executable = "dotnet"
-            Arguments = [ "run"; "--project"; "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj"; "-c"; "Release"; "--no-restore"; "--"; "--summary"; "--filter-test-list"; "PostgresTestRunnerAuthorities" ]
+            Arguments = [ "build"; "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj"; "-c"; "Release"; "--no-restore" ]
+            WorkingDirectory = workDir
+            Required = true
+            Timeout = shortTimeout
+            StdoutLimitBytes = stdOut
+            StderrLimitBytes = stdErr
+        }
+        {
+            Id = "postgres-runner-authority-tests"
+            Executable = "dotnet"
+            Arguments = [ "run"; "--project"; "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj"; "-c"; "Release"; "--no-build"; "--no-restore"; "--"; "--summary"; "--filter-test-list"; "PostgresTestRunnerAuthorities" ]
             WorkingDirectory = workDir
             Required = true
             Timeout = shortTimeout
