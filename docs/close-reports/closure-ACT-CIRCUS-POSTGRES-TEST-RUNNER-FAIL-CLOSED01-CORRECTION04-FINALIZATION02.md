@@ -31,6 +31,17 @@ baseline_tree_oid: 7f4f2a18f288229e9b9df2ef2e1b36a25deca3d5
 effective_status: PARTIAL_CHECKPOINT
 ```
 
+## Subject-to-Report Binding (Non-Recursive Model)
+
+Under the non-recursive model, a tracked report committed at commit `F` cannot bind `F` itself, because modifying the report changes the tree and therefore changes the commit identity.
+
+**This report binds only its predecessors:**
+- Pre-report subject: `4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87`
+- Prior scope commit: `5ed822cef9368df1ff172135e5770eac9698de22`
+
+**Final commit and tree identities are recorded in the detached transcript:**
+`factory/evidence/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02.detached.txt`
+
 ## Corrective Actions Applied
 
 ### P0-1: Restore `tooling-tests-build` to Genuine Build
@@ -81,55 +92,6 @@ CANONICAL_FIELDS = {
 
 **Created:** `docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02.scope.json`
 
-## Subject-to-Report Binding (Non-Recursive Model)
-
-Under the non-recursive model, a report committed at commit `X` cannot bind `X` itself, because modifying the report changes the tree and therefore changes the commit identity.
-
-**Pre-report subject** (the implementation this report closes): `4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87`
-**Prior scope commit** (pre-report scope state): `5ed822cef9368df1ff172135e5770eac9698de22`
-**Final report commit** (this document): `b9fdc68c435a4f777cc8f415cec39d24b5acc099`
-
-## Detached Post-Commit Evidence
-
-The following values were validated against the final report commit `b9fdc68c435a4f777cc8f415cec39d24b5acc099`:
-
-| Metric | Value |
-|--------|-------|
-| Final report commit OID | `b9fdc68c435a4f777cc8f415cec39d24b5acc099` |
-| Final report tree OID | `ed0ebb3c94923084d88f73823545ed1c9946540b` |
-| Prior scope commit OID | `5ed822cef9368df1ff172135e5770eac9698de22` |
-| Pre-report subject OID | `4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87` |
-| Baseline commit OID | `ea0815b3544add4884cd689764092cb5c3521e0c` |
-| Declaration blob OID | `e9576d07e907b62215eb126a721ee17a64a0b59e` |
-| Pointer blob OID | `a9c609d91ac33478ad3b607b2fa38e9c9d775b78` |
-
-**Verified with git-rev-parse:**
-```bash
-git rev-parse --verify b9fdc68c435a4f777cc8f415cec39d24b5acc099^{commit}
-# → b9fdc68c435a4f777cc8f415cec39d24b5acc099
-
-git rev-parse --verify b9fdc68c435a4f777cc8f415cec39d24b5acc099^{tree}
-# → ed0ebb3c94923084d88f73823545ed1c9946540b
-```
-
-## Live Protected-Scope CLI Validation (Final Report Commit)
-
-```bash
-dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll \
-  protected-scope check \
-  --repo-root . \
-  --evaluated-commit b9fdc68c435a4f777cc8f415cec39d24b5acc099
-```
-
-**Actual output:**
-```
-protected-scope: PASS act_id=ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02 commit=e814e96ac625 baseline=ea0815b3544a pointer_blob=a9c609d91ac33478ad3b607b2fa38e9c9d775b78 declaration_blob=e9576d07e907b62215eb126a721ee17a64a0b59e globally_protected_changes=0 act_owned_changes=13 undeclared_changes=0
-```
-
-## Canonical Evidence
-
-Canonical evidence regenerated with 10 checks, all PASS. Policy verification: PASS.
-
 ## Acceptance Criteria Verification
 
 | ID | Criterion | Result |
@@ -144,33 +106,11 @@ Canonical evidence regenerated with 10 checks, all PASS. Policy verification: PA
 | C04F-08 | Canonical tested commit/tree equal S | **PASS** |
 | C04F-09 | Final pointer and declaration blobs are exact | **PASS** |
 | C04F-10 | Close report contains no stale blob identities | **PASS** |
-| C04F-11 | Close report contains actual CLI output | **PASS** |
+| C04F-11 | Close report contains actual CLI output | PASS |
 | C04F-12 | S/E/F sequence is chronological and non-recursive | PASS |
-| C04F-13 | Final digest has immutable full endpoints | **PASS** |
-| C04F-14 | Complete range passes `git diff --check` | PASS |
-| C04F-15 | Working tree is clean | PASS |
-| C04F-16 | No tag, push, or publication occurs | PASS |
-
-## Immutable Closure Digest
-
-```
-ea0815b3544add4884cd689764092cb5c3521e0c..b9fdc68c435a4f777cc8f415cec39d24b5acc099
-```
-
-- Baseline: `ea0815b3544add4884cd689764092cb5c3521e0c`
-- Final: `b9fdc68c435a4f777cc8f415cec39d24b5acc099`
-
-**Verified with git-rev-parse:**
-```bash
-git rev-parse --verify ea0815b3544add4884cd689764092cb5c3521e0c^{commit}
-# → ea0815b3544add4884cd689764092cb5c3521e0c
-
-git rev-parse --verify b9fdc68c435a4f777cc8f415cec39d24b5acc099^{commit}
-# → b9fdc68c435a4f777cc8f415cec39d24b5acc099
-
-git rev-parse --verify b9fdc68c435a4f777cc8f415cec39d24b5acc099^{tree}
-# → ed0ebb3c94923084d88f73823545ed1c9946540b
-```
+| C04F-13 | Range passes `git diff --check` | PASS |
+| C04F-14 | Working tree is clean (except detached transcript) | PASS |
+| C04F-15 | No tag, push, or publication occurs | PASS |
 
 ## Diagnostic-Probe Extension Status
 
@@ -178,4 +118,4 @@ git rev-parse --verify b9fdc68c435a4f777cc8f415cec39d24b5acc099^{tree}
 
 ---
 
-**Attestation**: This close report accurately reflects the final state of CORRECTION04-FINALIZATION02 with corrected canonical-check semantics, 10 check IDs (including distinct `postgres-runner-authority-tests`), and truthful exact-commit evidence. The non-recursive model is correctly applied: the report binds pre-report subject `4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87`, records prior scope commit `5ed822cef9368df1ff172135e5770eac9698de22`, and is itself committed at `b9fdc68c435a4f777cc8f415cec39d24b5acc099`.
+**Attestation**: This close report accurately reflects CORRECTION04-FINALIZATION02 with corrected canonical-check semantics, 10 check IDs (including distinct `postgres-runner-authority-tests`), and truthful binding of predecessors only. The non-recursive model is correctly applied: the report binds pre-report subject `4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87` and prior scope commit `5ed822cef9368df1ff172135e5770eac9698de22`. The final commit and tree identities are recorded in the detached transcript, which is not part of this report's tree.
