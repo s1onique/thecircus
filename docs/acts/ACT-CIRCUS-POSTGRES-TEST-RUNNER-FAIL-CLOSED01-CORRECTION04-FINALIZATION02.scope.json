@@ -33,7 +33,8 @@
     "tests/Circus.Tooling.Tests/ScopeAuthorityTests.fs",
     "tests/Circus.Tooling.Tests/EvidenceValidatorTests.fs",
     "factory/evidence/postgres-test-runner-fail-closed/hermetic-smoke.txt",
-    "factory/evidence/postgres-test-runner-fail-closed/hermetic-negative-scan.json"
+    "factory/evidence/postgres-test-runner-fail-closed/hermetic-negative-scan.json",
+    "factory/evidence/tooling-full-suite-transcript.txt"
   ],
   "baseline_commit_oid": "ea0815b3544add4884cd689764092cb5c3521e0c",
   "do_not_authorize_production_or_migration_paths": true,
