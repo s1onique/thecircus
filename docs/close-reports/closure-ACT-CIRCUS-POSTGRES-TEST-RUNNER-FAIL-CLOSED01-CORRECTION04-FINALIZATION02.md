@@ -21,12 +21,12 @@ FINALIZATION01 contained these defects:
 4. Leamas gate script rejected ACT-specific fields as "unknown"
 5. Close report path not in act_owned
 
-This finalization corrects all five defects.
+FINALIZATION02 (this report) corrects all five defects and binds the actual final repository state.
 
 ## Entry State
 
 ```yaml
-baseline_commit_oid: ea0815b3544add4884cd689764092cb5c3521e0c
+baseline_commit_oid: ea0815b3544add4884cdcd689764092cb5c3521e0c
 baseline_tree_oid: 7f4f2a18f288229e9b9df2ef2e1b36a25deca3d5
 effective_status: PARTIAL_CHECKPOINT
 ```
@@ -85,30 +85,19 @@ CANONICAL_FIELDS = {
 
 Key differences from CORRECTION03:
 - `baseline_commit_oid`: `ea0815b...` (was `90d36bb...`)
-- Close report path in `act_owned`
+- Close report paths in `act_owned`
 - Leamas gate script in `act_owned`
-
-### P0-5: Regenerate Canonical Evidence Post-Implementation
-
-Command:
-```bash
-dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll \
-  canonical-evidence regenerate \
-  --repo-root . \
-  --output .factory/canonical-evidence.json \
-  --baseline-commit ea0815b3544add4884cd689764092cb5c3521e0c
-```
 
 ## Exact-Commit Proof
 
 | Metric | Value |
 |--------|-------|
-| Final evidence commit OID (S) | `7fc82e6728aab7f2ac88897a12c9a85d199c3c3f` |
-| Final evidence tree OID (S) | `82c4c4f67973e3c2f6a0c2e0c9a4e7b5d8f3a1c6` |
+| Final evidence commit OID (F) | `8341b07e810b3068636350968209064dd2e02b82` |
+| Final evidence tree OID (F) | `e00ab05ea2710f3537151871cb6e3017b744c3e0` |
 | Baseline commit OID | `ea0815b3544add4884cd689764092cb5c3521e0c` |
 | Baseline tree OID | `7f4f2a18f288229e9b9df2ef2e1b36a25deca3d5` |
-| Declaration blob OID | `e61883ab994c8f695e59b3361d7a743526dce397` |
-| Pointer blob OID | `ad870b536ac8ed7fdab51fda8fc0ae0bd1698855` |
+| Declaration blob OID | `7cba53cf3e3e8f0ae51db35daa7d5e6fdb5993c2` |
+| Pointer blob OID | `b92b205ce613e1d818b7624e6c70c54c591914b9` |
 
 ## Live Protected-Scope CLI Validation
 
@@ -116,12 +105,12 @@ dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll \
 dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll \
   protected-scope check \
   --repo-root . \
-  --evaluated-commit 7fc82e6728aab7f2ac88897a12c9a85d199c3c3f
+  --evaluated-commit 8341b07e810b3068636350968209064dd2e02b82
 ```
 
 **Actual output:**
 ```
-protected-scope: PASS act_id=ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02 commit=7fc82e6728aa baseline=ea0815b3544a pointer_blob=ad870b536ac8ed7fdab51fda8fc0ae0bd1698855 declaration_blob=e61883ab994c8f695e59b3361d7a743526dce397 globally_protected_changes=0 act_owned_changes=8 undeclared_changes=0
+protected-scope: PASS act_id=ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02 commit=8341b07e810b baseline=ea0815b3544a pointer_blob=b92b205ce613e1d818b7624e6c70c54c591914b9 declaration_blob=7cba53cf3e3e8f0ae51db35daa7d5e6fdb5993c2 globally_protected_changes=0 act_owned_changes=9 undeclared_changes=0
 ```
 
 ## Canonical Evidence Checks (10 Total)
@@ -150,8 +139,8 @@ protected-scope: PASS act_id=ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRE
 | C04F-03 | Exact committed-evidence validation passes | PASS |
 | C04F-04 | `tooling-tests-build` performs a complete build | **PASS (dotnet build)** |
 | C04F-05 | Focused authority suite has a distinct check ID | **PASS (postgres-runner-authority-tests)** |
-| C04F-06 | Full tooling-test suite passes | PASS |
-| C04F-07 | Canonical evidence is regenerated after S | **PASS (timestamp 02:00:48)** |
+| C04F-06 | Full tooling-test suite passes | **NOT_PROVEN (build proven; full suite not executed)** |
+| C04F-07 | Canonical evidence is regenerated after S | **PASS** |
 | C04F-08 | Canonical tested commit/tree equal S | **PASS** |
 | C04F-09 | Final pointer and declaration blobs are exact | **PASS** |
 | C04F-10 | Close report contains no stale blob identities | **PASS** |
@@ -165,11 +154,20 @@ protected-scope: PASS act_id=ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRE
 ## Immutable Closure Digest
 
 ```
-ea0815b3544add4884cd689764092cb5c3521e0c..7fc82e6728aab7f2ac88897a12c9a85d199c3c3f
+ea0815b3544add4884cd689764092cb5c3521e0c..8341b07e810b3068636350968209064dd2e02b82
 ```
 
 - Baseline: `ea0815b3544add4884cd689764092cb5c3521e0c`
-- Final implementation: `7fc82e6728aab7f2ac88897a12c9a85d199c3c3f`
+- Final: `8341b07e810b3068636350968209064dd2e02b82`
+
+**Verified with git-rev-parse:**
+```bash
+git rev-parse --verify ea0815b3544add4884cd689764092cb5c3521e0c^{commit}
+# → ea0815b3544add4884cd689764092cb5c3521e0c
+
+git rev-parse --verify 8341b07e810b3068636350968209064dd2e02b82^{commit}
+# → 8341b07e810b3068636350968209064dd2e02b82
+```
 
 ## Diagnostic-Probe Extension Status
 
@@ -177,4 +175,4 @@ ea0815b3544add4884cd689764092cb5c3521e0c..7fc82e6728aab7f2ac88897a12c9a85d199c3c
 
 ---
 
-**Attestation**: This close report accurately reflects the final state of CORRECTION04-FINALIZATION02 with corrected canonical-check semantics, 10 check IDs (including distinct `postgres-runner-authority-tests`), and truthful exact-commit evidence.
+**Attestation**: This close report accurately reflects the final state of CORRECTION04-FINALIZATION02 with corrected canonical-check semantics, 10 check IDs (including distinct `postgres-runner-authority-tests`), and truthful exact-commit evidence binding final HEAD `8341b07e810b3068636350968209064dd2e02b82`.
