@@ -156,7 +156,7 @@ let private mutateJson path mutation =
 let tests =
     testList
         "CanonicalEvidence.Integration"
-        [ test "Leamas consumes the fixed-path projection with nine named checks" {
+        [ test "Leamas consumes the fixed-path projection with ten named checks" {
               let dir = tempDir "circus-canonev-leamas"
 
               try
@@ -179,8 +179,8 @@ let tests =
                   let block = gateSummaryBlock digest
                   Expect.stringContains block "source=.factory/gate-summary.json" "actual fixed source"
                   Expect.stringContains block "source_status=present" "projection decoded"
-                  Expect.stringContains block "checks_total=9" "all checks consumed"
-                  Expect.stringContains block "checks_passed=9" "all checks pass"
+                  Expect.stringContains block "checks_total=10" "all checks consumed"
+                  Expect.stringContains block "checks_passed=10" "all checks pass"
                   Expect.stringContains block "checks_failed=0" "no failed checks"
 
                   for name in SupportedCheckIds do
