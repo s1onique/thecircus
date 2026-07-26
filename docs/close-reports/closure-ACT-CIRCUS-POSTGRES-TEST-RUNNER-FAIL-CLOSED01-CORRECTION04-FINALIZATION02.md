@@ -81,26 +81,21 @@ CANONICAL_FIELDS = {
 
 **Created:** `docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02.scope.json`
 
-Key differences from CORRECTION03:
-- `baseline_commit_oid`: `ea0815b...` (was `90d36bb...`)
-- Close report paths in `act_owned`
-- Leamas gate script in `act_owned`
-
 ## Subject-to-Report Binding (Non-Recursive Model)
 
 Under the non-recursive model, a report committed at commit `X` cannot bind `X` itself, because modifying the report changes the tree and therefore changes the commit identity.
 
 **Pre-report subject** (the implementation this report closes): `4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87`
-**Report commit** (this document): `f95755bb5ab2bd52352816dc77ce77b9914dc93c`
+**Report commit** (this document): `902e5b900562ecff4db87e4c1e4fec61c199391e`
 
 ## Detached Post-Commit Evidence
 
-The following values were validated against the final report commit `f95755bb5ab2bd52352816dc77ce77b9914dc93c`:
+The following values were validated against the final report commit `902e5b900562ecff4db87e4c1e4fec61c199391e`:
 
 | Metric | Value |
 |--------|-------|
-| Final report commit OID | `f95755bb5ab2bd52352816dc77ce77b9914dc93c` |
-| Final report tree OID | `667be010904e11031e6171231daaceeb1e1d0c6c` |
+| Final report commit OID | `902e5b900562ecff4db87e4c1e4fec61c199391e` |
+| Final report tree OID | `caf7efe9a4b8b6216d955a36259231aa04b4ca67` |
 | Pre-report subject OID | `4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87` |
 | Baseline commit OID | `ea0815b3544add4884cd689764092cb5c3521e0c` |
 | Declaration blob OID | `5ab1879cf4bc40ce6dd79cbf42f78d91c2f0f940` |
@@ -112,12 +107,12 @@ The following values were validated against the final report commit `f95755bb5ab
 dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll \
   protected-scope check \
   --repo-root . \
-  --evaluated-commit f95755bb5ab2bd52352816dc77ce77b9914dc93c
+  --evaluated-commit 902e5b900562ecff4db87e4c1e4fec61c199391e
 ```
 
 **Actual output:**
 ```
-protected-scope: PASS act_id=ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02 commit=f95755bb5ab2 baseline=ea0815b3544a pointer_blob=7de5467d477ff7a800893a4a8417f63c3a76eff1 declaration_blob=5ab1879cf4bc40ce6dd79cbf42f78d91c2f0f940 globally_protected_changes=0 act_owned_changes=11 undeclared_changes=0
+protected-scope: PASS act_id=ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02 commit=902e5b900562 baseline=ea0815b3544a pointer_blob=7de5467d477ff7a800893a4a8417f63c3a76eff1 declaration_blob=5ab1879cf4bc40ce6dd79cbf42f78d91c2f0f940 globally_protected_changes=0 act_owned_changes=11 undeclared_changes=0
 ```
 
 ## Canonical Evidence
@@ -148,19 +143,19 @@ Canonical evidence regenerated against HEAD with 10 checks, all PASS.
 ## Immutable Closure Digest
 
 ```
-ea0815b3544add4884cd689764092cb5c3521e0c..f95755bb5ab2bd52352816dc77ce77b9914dc93c
+ea0815b3544add4884cd689764092cb5c3521e0c..902e5b900562ecff4db87e4c1e4fec61c199391e
 ```
 
 - Baseline: `ea0815b3544add4884cd689764092cb5c3521e0c`
-- Final: `f95755bb5ab2bd52352816dc77ce77b9914dc93c`
+- Final: `902e5b900562ecff4db87e4c1e4fec61c199391e`
 
 **Verified with git-rev-parse:**
 ```bash
 git rev-parse --verify ea0815b3544add4884cd689764092cb5c3521e0c^{commit}
 # → ea0815b3544add4884cd689764092cb5c3521e0c
 
-git rev-parse --verify f95755bb5ab2bd52352816dc77ce77b9914dc93c^{commit}
-# → f95755bb5ab2bd52352816dc77ce77b9914dc93c
+git rev-parse --verify 902e5b900562ecff4db87e4c1e4fec61c199391e^{commit}
+# → 902e5b900562ecff4db87e4c1e4fec61c199391e
 ```
 
 ## Diagnostic-Probe Extension Status
@@ -169,4 +164,4 @@ git rev-parse --verify f95755bb5ab2bd52352816dc77ce77b9914dc93c^{commit}
 
 ---
 
-**Attestation**: This close report accurately reflects the final state of CORRECTION04-FINALIZATION02 with corrected canonical-check semantics, 10 check IDs (including distinct `postgres-runner-authority-tests`), and truthful exact-commit evidence. The non-recursive model is correctly applied: the report binds pre-report subject `4e823f8...` while being committed at `f95755bb5ab2bd52352816dc77ce77b9914dc93c`.
+**Attestation**: This close report accurately reflects the final state of CORRECTION04-FINALIZATION02 with corrected canonical-check semantics, 10 check IDs (including distinct `postgres-runner-authority-tests`), and truthful exact-commit evidence. The non-recursive model is correctly applied: the report binds pre-report subject `4e823f8...` while being committed at `902e5b900562ecff4db87e4c1e4fec61c199391e`.
