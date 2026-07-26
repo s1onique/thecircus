@@ -61,14 +61,15 @@
     "origin_main_oid"
   ],
   "supported_check_ids": [
-    "tooling-build",
-    "tooling-tests-build",
     "bounded-process-tests",
-    "git-adapter-tests",
-    "repair-episodes-tests",
-    "fsharp-diagnostics-tests",
-    "repair-episodes-gate",
     "committed-range-diff-check",
-    "protected-scope"
+    "fsharp-diagnostics-tests",
+    "git-adapter-tests",
+    "postgres-runner-authority-tests",
+    "protected-scope",
+    "repair-episodes-gate",
+    "repair-episodes-tests",
+    "tooling-build",
+    "tooling-tests-build"
   ]
 }

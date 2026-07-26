@@ -15,15 +15,16 @@
   "required_gate": true,
   "ownership": "circus-tooling",
   "checks": [
-    "tooling-build",
-    "tooling-tests-build",
     "bounded-process-tests",
-    "git-adapter-tests",
-    "repair-episodes-tests",
-    "fsharp-diagnostics-tests",
-    "repair-episodes-gate",
     "committed-range-diff-check",
-    "protected-scope"
+    "fsharp-diagnostics-tests",
+    "git-adapter-tests",
+    "postgres-runner-authority-tests",
+    "protected-scope",
+    "repair-episodes-gate",
+    "repair-episodes-tests",
+    "tooling-build",
+    "tooling-tests-build"
   ],
   "act_source": "ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION03"
 }
