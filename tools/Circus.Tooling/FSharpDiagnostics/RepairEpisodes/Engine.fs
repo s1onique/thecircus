@@ -55,6 +55,61 @@ let private lookupStringList (fields: (string * JsonValue) list) (name: string) 
         else None)
     |> Option.defaultValue []
 
+let private lookupInt (fields: (string * JsonValue) list) (name: string) : int option =
+    fields
+    |> List.tryPick (fun (k, v) ->
+        if k = name then
+            match v with
+            | JsonNumber n -> Some (int n)
+            | _ -> None
+        else None)
+
+/// Parse a verification evidence record from JSON.
+let private parseVerificationEvidence (json: string) (source: string option) : VerificationEvidence option =
+    try
+        let v = parseJson json
+        match v with
+        | JsonObject fields ->
+            let evId = lookupString fields "verification_evidence_id"
+            let epId = lookupString fields "episode_id"
+            let kindStr = lookupString fields "verification_kind"
+            let cmd = lookupString fields "verification_command"
+            let statusStr = lookupString fields "verification_result"
+            let exitCode = lookupInt fields "verification_exit_code"
+            match evId, epId, kindStr, cmd, statusStr with
+            | Some eid, Some eid2, Some kindToken, Some cmdStr, Some statusToken ->
+                let parsedKind = match tryParseVerificationKind kindToken with Some k -> k | None -> Build
+                let parsedStatus = match tryParseVerificationStatus statusToken with Some s -> s | None -> MissingLogs
+                let parsedExitCode = exitCode |> Option.defaultValue 0
+                Some { SchemaVersion = VerificationEvidenceSchemaVersion
+                       EvidenceId = eid
+                       EpisodeId = eid2
+                       Kind = parsedKind
+                       Command = cmdStr
+                       WorkingDirectory = ""
+                       TestedCommitOid = ""
+                       TestedTreeOid = ""
+                       ExitCode = parsedExitCode
+                       StdoutSha256 = None
+                       StderrSha256 = None
+                       CombinedLogPath = None
+                       Status = parsedStatus }
+            | _ -> None
+        | _ -> None
+    with
+    | _ -> None
+
+/// Load verification evidence from the canonical evidence file.
+let loadVerificationEvidence (repoRoot: string) : VerificationEvidence list =
+    let path = repoRelative repoRoot verificationEvidenceCanonicalPath
+    if not (File.Exists path) then []
+    else
+        let lines = File.ReadAllLines path
+        lines
+        |> Array.filter (fun l -> not (System.String.IsNullOrWhiteSpace l))
+        |> Array.choose (fun l -> parseVerificationEvidence l (Some path))
+        |> Array.toList
+
 /// Render a single declaration JSON file into a typed record.  Performs
 /// schema-level validation and returns the list of issues found.
 let parseDeclaration (json: string) (source: string option) : DeclarationValidation =
@@ -309,6 +364,9 @@ let runEpisodeEngine
 
     let declarations = loadDeclarations repoRoot
 
+    // Load verification evidence once, outside the episode loop
+    let allEvidence = loadVerificationEvidence repoRoot
+
     let keyCounts =
         declarations
         |> List.choose (fun (_, d) -> d.Declaration |> Option.map (fun d -> d.EpisodeKey))
@@ -372,7 +430,6 @@ let runEpisodeEngine
                 let compat = computeCompatibility beforeCap.Manifest afterCap.Manifest
                 let projectPath = afterCap.Manifest.WorkingDirectory
                 let afterOk = afterScopeOk changeSet.Entries projectPath
-                let verificationLevel = verificationLevelFromEvidence []
                 let episodeId =
                     buildEpisodeId decl.BeforeCaptureId decl.AfterCaptureId
                         identity.BeforeTreeOid identity.AfterTreeOid changeSet.ChangeSetId
@@ -387,6 +444,9 @@ let runEpisodeEngine
                         beforeCap.Occurrences
                         afterCap.Occurrences
                 transitions <- transitionResult.Transitions @ transitions
+                // Filter evidence for this episode
+                let episodeEvidence = allEvidence |> List.filter (fun e -> e.EpisodeId = episodeId)
+                let verificationLevel = verificationLevelFromEvidence episodeEvidence
                 let qual =
                     qualification compat changeSet.Entries afterOk verificationLevel transitions
                 let contractBefore = commandContract beforeCap.Manifest
@@ -412,6 +472,7 @@ let runEpisodeEngine
                       VerificationEvidenceIds = decl.VerificationEvidenceIds
                       Qualification = qual }
                 episodes <- episode :: episodes
+                evidence <- episodeEvidence @ evidence
                 let beforeCommitOk =
                     match beforeCap.Manifest.RepositoryCommitOid with
                     | Some c -> c = identity.BeforeCommitOid
