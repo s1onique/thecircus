@@ -9,6 +9,7 @@ open Circus.Tooling.FSharpDiagnostics.Manifest
 open Circus.Tooling.FSharpDiagnostics.OccurrenceIdentity
 open Circus.Tooling.FSharpDiagnostics.Paths
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
+open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.OccurrenceReader
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Paths
 
 // =============================================================================
@@ -75,6 +76,32 @@ let private rawArtifactHashes
             dict.[raw] <- sha256OfFile p
     dict |> Seq.toList |> List.map (fun kv -> kv.Key, kv.Value) |> Map.ofList
 
+/// Load occurrence artifacts declared in the capture manifest.
+/// For legacy captures, this reads the capture-specific occurrence file
+/// (e.g., legacy-occurrences.jsonl) if declared in raw_artifacts.
+let private loadCaptureOccurrences
+    (repoRoot: string)
+    (captureId: string)
+    (manifest: CaptureManifest)
+    : DiagnosticOccurrence list =
+    let captureRelativeDir = rawSubdir + "/" + captureId
+    let mutable occurrences : DiagnosticOccurrence list = []
+    for rawArtifact in manifest.RawArtifacts do
+        // Look for occurrence artifacts by extension
+        let fullPath = repoRelative repoRoot (captureRelativeDir + "/" + rawArtifact)
+        if rawArtifact.EndsWith("-occurrences.jsonl", System.StringComparison.OrdinalIgnoreCase)
+           && File.Exists fullPath then
+            match readOccurrences fullPath with
+            | Result.Ok occs ->
+                // Filter to only occurrences for this capture
+                let filtered = occs |> List.filter (fun o -> o.CaptureId = captureId)
+                occurrences <- occurrences @ filtered
+            | Result.Error _ ->
+                // If we can't read the occurrence file, continue without occurrences
+                // The failure will be caught by the binding layer
+                ()
+    occurrences
+
 /// Load one capture manifest by its capture id.  Returns ``None`` when the
 /// capture directory or its manifest is absent.
 let tryLoadCapture
@@ -87,11 +114,12 @@ let tryLoadCapture
     else
         let manifest = readCaptureManifest manifestPath
         let hashes = rawArtifactHashes repoRoot captureRelativeDir manifest
+        let occurrences = loadCaptureOccurrences repoRoot captureId manifest
         Some
             { CaptureId = captureId
               CaptureRelativeDir = captureRelativeDir
               Manifest = manifest
-              Occurrences = []
+              Occurrences = occurrences
               BinlogReplayFailure = None
               LegacyParseResult = None
               RawArtifactHashes = hashes }

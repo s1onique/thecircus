@@ -40,14 +40,38 @@ let private applyAliases
             result <- "<REPO>" + result.Substring(absExact.Length)
     result
 
-/// Convert path separators to '/' only in substrings that look like paths
-/// containing directory components (i.e. contain at least one '/').  All
-/// backslashes in such substrings are replaced.
+/// Convert path separators to '/' in path-like substrings only.
+/// A path-like substring is identified as text bounded by path separators
+/// or whitespace that contains at least one forward slash or drive letter,
+/// and at least one backslash.  Backslash-only text (e.g. in error messages
+/// like "Unexpected character '\'") is preserved unchanged.
 let private normalizePathSeparators (text: string) : string =
-    if text.Contains("\\") then
-        text.Replace('\\', '/')
+    if not (text.Contains("\\")) then text
+    elif not (text.Contains("/")) then text
     else
-        text
+        // Split on forward slashes and process each segment.
+        // If a segment contains backslashes, replace them with forward slashes.
+        let sb = System.Text.StringBuilder()
+        let mutable lastStart = 0
+        let mutable i = 0
+        while i < text.Length do
+            if text.[i] = '/' then
+                // Process segment from lastStart to i (exclusive)
+                let segment = text.Substring(lastStart, i - lastStart)
+                if segment.Contains("\\") then
+                    sb.Append(segment.Replace('\\', '/')) |> ignore
+                else
+                    sb.Append(segment) |> ignore
+                sb.Append('/') |> ignore
+                lastStart <- i + 1
+            i <- i + 1
+        // Process final segment
+        let finalSegment = text.Substring(lastStart)
+        if finalSegment.Contains("\\") then
+            sb.Append(finalSegment.Replace('\\', '/')) |> ignore
+        else
+            sb.Append(finalSegment) |> ignore
+        sb.ToString()
 
 /// Pure message normalization pipeline. The pipeline performs ONLY:
 ///   1. CRLF and CR → LF

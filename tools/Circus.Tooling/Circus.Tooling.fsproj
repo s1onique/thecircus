@@ -92,10 +92,11 @@
     <Compile Include="ProtectedScope\Domain.fs" />
     <Compile Include="ProtectedScope\Check.fs" />
     <Compile Include="ProtectedScope\Cli.fs" />
+    <!-- Strict occurrence reader must precede capture and episode consumers. -->
+    <Compile Include="FSharpDiagnostics\RepairEpisodes\OccurrenceReader.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Episodes.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Transitions.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Serialization.fs" />
-    <Compile Include="FSharpDiagnostics\RepairEpisodes\OccurrenceReader.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\CaptureBinding.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Engine.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Cli.fs" />

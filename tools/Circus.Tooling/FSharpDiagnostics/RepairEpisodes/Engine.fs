@@ -378,11 +378,20 @@ let runEpisodeEngine
                         identity.BeforeTreeOid identity.AfterTreeOid changeSet.ChangeSetId
                 if not (episodeIds.Add episodeId) then
                     duplicateIds <- duplicateIds + 1
+                let transitionResult =
+                    Transitions.buildTransitions
+                        episodeId
+                        compat
+                        changeSet.Entries
+                        decl.DeclaredRelevantPaths
+                        beforeCap.Occurrences
+                        afterCap.Occurrences
+                transitions <- transitionResult.Transitions @ transitions
                 let qual =
                     qualification compat changeSet.Entries afterOk verificationLevel transitions
                 let contractBefore = commandContract beforeCap.Manifest
                 let contractAfter = commandContract afterCap.Manifest
-                let counts = emptyTransitionCounts ()
+                let counts = transitionResult.Counts
                 let episode : RepairEpisode =
                     { SchemaVersion = RepairEpisodeSchemaVersion
                       EpisodeId = episodeId
