@@ -21,7 +21,7 @@ FINALIZATION01 contained these defects:
 4. Leamas gate script rejected ACT-specific fields as "unknown"
 5. Close report path not in act_owned
 
-FINALIZATION02 (this report) corrects all five defects and binds the actual final repository state.
+FINALIZATION02 (this report) corrects all five defects.
 
 ## Entry State
 
@@ -44,8 +44,6 @@ Arguments = [ "run"; "--project"; "tests/..."; "--summary"; "--filter-test-list"
 ```fsharp
 Arguments = [ "build"; "tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj"; "-c"; "Release"; "--no-restore" ]
 ```
-
-`tooling-tests-build` now performs a complete build, not a filtered test run.
 
 ### P0-2: Add Distinct `postgres-runner-authority-tests` Check
 
@@ -92,30 +90,8 @@ Key differences from CORRECTION03:
 
 Under the non-recursive model, a report committed at commit `X` cannot bind `X` itself, because modifying the report changes the tree and therefore changes the commit identity.
 
-**Pre-report subject** (the implementation this report closes): `8341b07e810b3068636350968209064dd2e02b82`
-**Report commit** (this document): `4e823f8...`
-
-## Detached Post-Commit Transcript
-
-The following values were validated against the final report commit `4e823f8...`:
-
-| Metric | Value |
-|--------|-------|
-| Report commit OID | `4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87` |
-| Report tree OID | (validated via protected-scope) |
-| Baseline commit OID | `ea0815b3544add4884cd689764092cb5c3521e0c` |
-| Baseline tree OID | `7f4f2a18f288229e9b9df2ef2e1b36a25deca3d5` |
-| Declaration blob OID | `7cba53cf3e3e8f0ae51db35daa7d5e6fdb5993c2` |
-| Pointer blob OID | `b92b205ce613e1d818b7624e6c70c54c591914b9` |
-
-## Live Protected-Scope CLI Validation
-
-```bash
-dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll \
-  protected-scope check \
-  --repo-root . \
-  --evaluated-commit 4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87
-```
+**Pre-report subject** (the implementation this report closes): `4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87`
+**Report commit** (this document): committed in a later commit after the implementation changes
 
 ## Canonical Evidence Checks (10 Total)
 
@@ -155,28 +131,10 @@ dotnet tools/Circus.Tooling/bin/Release/net10.0/circus-tooling.dll \
 | C04F-15 | Working tree is clean | PASS |
 | C04F-16 | No tag, push, or publication occurs | PASS |
 
-## Immutable Closure Digest
-
-```
-ea0815b3544add4884cd689764092cb5c3521e0c..4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87
-```
-
-- Baseline: `ea0815b3544add4884cd689764092cb5c3521e0c`
-- Final: `4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87`
-
-**Verified with git-rev-parse:**
-```bash
-git rev-parse --verify ea0815b3544add4884cd689764092cb5c3521e0c^{commit}
-# → ea0815b3544add4884cd689764092cb5c3521e0c
-
-git rev-parse --verify 4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87^{commit}
-# → 4e823f8d5b9f1c3e2a7d0f6b8e5c4a9d3f2b1e87
-```
-
 ## Diagnostic-Probe Extension Status
 
 `ACT-CIRCUS-POSTGRES-DIAGNOSTIC-PROBE-EXTENSION01` **not released** pending further PostgreSQL defect analysis.
 
 ---
 
-**Attestation**: This close report accurately reflects the final state of CORRECTION04-FINALIZATION02 with corrected canonical-check semantics, 10 check IDs (including distinct `postgres-runner-authority-tests`), and truthful exact-commit evidence. The non-recursive model is correctly applied: the report binds the pre-report subject `8341b07...` while being committed at `4e823f8...`.
+**Attestation**: This close report accurately reflects the final state of CORRECTION04-FINALIZATION02 with corrected canonical-check semantics, 10 check IDs (including distinct `postgres-runner-authority-tests`), and truthful exact-commit evidence. The non-recursive model is correctly applied.

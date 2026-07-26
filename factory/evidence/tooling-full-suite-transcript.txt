@@ -1,0 +1,157 @@
+[37m[[37m03:17:48 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[37m[[37m03:17:48 [31mERR[37m] [36mCanonicalEvidence.Integration.gate policy verifies and removal mutation is detected[37m failed in [32m00:00:00.1830000[37m. [36m
+canonical-evidence policy: FAIL (registry/artifact check catalogs differ)
+.
+[32mexpected[36m: [32m0[36m
+[31m  actual[36m: [31m1[36m
+   at Circus.Tooling.Tests.CanonicalEvidence.IntegrationTests.tests@290-5.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Tooling.Tests/CanonicalEvidence/IntegrationTests.fs:line 293
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m03:17:48 [31mERR[37m] [36mCanonicalEvidence.Integration.Leamas consumes the fixed-path projection with nine named checks[37m failed in [32m00:00:00.2830000[37m. [36m
+all checks consumed. Expected subject string 'source=.factory/gate-summary.json
+source_status=present
+schema_version=1
+generated_at=2026-07-25T00:00:00Z
+overall_status=pass
+checks_total=10
+checks_passed=10
+checks_failed=0
+checks_skipped=0
+checks_unavailable=0
+checks:
+  - name=bounded-process-tests status=pass duration_ms=1 evidence=canonical=.factory/canonical-evidence.json;semantic_sha256=e567fdd33b8e4efd4a154403d54c70f243b60376137d6dfbe9a6482b8eeae36e;stdout_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;stderr_sha256=bbbbbbbbbbbbbbbbbbbbbbb
+  - name=committed-range-diff-check status=pass duration_ms=1 evidence=canonical=.factory/canonical-evidence.json;semantic_sha256=e567fdd33b8e4efd4a154403d54c70f243b60376137d6dfbe9a6482b8eeae36e;stdout_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;stderr_sha256=bbbbbbbbbbbbbbbbbbbbbbb
+  - name=fsharp-diagnostics-tests status=pass duration_ms=1 evidence=canonical=.factory/canonical-evidence.json;semantic_sha256=e567fdd33b8e4efd4a154403d54c70f243b60376137d6dfbe9a6482b8eeae36e;stdout_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;stderr_sha256=bbbbbbbbbbbbbbbbbbbbbbb
+  - name=git-adapter-tests status=pass duration_ms=1 evidence=canonical=.factory/canonical-evidence.json;semantic_sha256=e567fdd33b8e4efd4a154403d54c70f243b60376137d6dfbe9a6482b8eeae36e;stdout_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;stderr_sha256=bbbbbbbbbbbbbbbbbbbbbbb
+  - name=postgres-runner-authority-tests status=pass duration_ms=1 evidence=canonical=.factory/canonical-evidence.json;semantic_sha256=e567fdd33b8e4efd4a154403d54c70f243b60376137d6dfbe9a6482b8eeae36e;stdout_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;stderr_sha256=bbbbbbbbbbbbbbbbbbbbbbb
+  - name=protected-scope status=pass duration_ms=1 evidence=canonical=.factory/canonical-evidence.json;semantic_sha256=e567fdd33b8e4efd4a154403d54c70f243b60376137d6dfbe9a6482b8eeae36e;stdout_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;stderr_sha256=bbbbbbbbbbbbbbbbbbbbbbb
+  - name=repair-episodes-gate status=pass duration_ms=1 evidence=canonical=.factory/canonical-evidence.json;semantic_sha256=e567fdd33b8e4efd4a154403d54c70f243b60376137d6dfbe9a6482b8eeae36e;stdout_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;stderr_sha256=bbbbbbbbbbbbbbbbbbbbbbb
+  - name=repair-episodes-tests status=pass duration_ms=1 evidence=canonical=.factory/canonical-evidence.json;semantic_sha256=e567fdd33b8e4efd4a154403d54c70f243b60376137d6dfbe9a6482b8eeae36e;stdout_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;stderr_sha256=bbbbbbbbbbbbbbbbbbbbbbb
+  - name=tooling-build status=pass duration_ms=1 evidence=canonical=.factory/canonical-evidence.json;semantic_sha256=e567fdd33b8e4efd4a154403d54c70f243b60376137d6dfbe9a6482b8eeae36e;stdout_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;stderr_sha256=bbbbbbbbbbbbbbbbbbbbbbb
+  - name=tooling-tests-build status=pass duration_ms=1 evidence=canonical=.factory/canonical-evidence.json;semantic_sha256=e567fdd33b8e4efd4a154403d54c70f243b60376137d6dfbe9a6482b8eeae36e;stdout_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;stderr_sha256=bbbbbbbbbbbbbbbbbbbbbbb' to contain substring 'checks_total=9'.
+   at Circus.Tooling.Tests.CanonicalEvidence.IntegrationTests.f@1-152(String dir, Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Tooling.Tests/CanonicalEvidence/IntegrationTests.fs:line 182
+   at Circus.Tooling.Tests.CanonicalEvidence.IntegrationTests.tests@160.Invoke(Unit unitVar) in /home/thecircus/Projects/thecircus/tests/Circus.Tooling.Tests/CanonicalEvidence/IntegrationTests.fs:line 160
+   at Expecto.Impl.execTestAsync@579-1.Invoke(Unit unitVar)
+   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T,TResult](AsyncActivation`1 ctxt, TResult result1, FSharpFunc`2 part2) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 510
+   at Microsoft.FSharp.Control.Trampoline.Execute(FSharpFunc`2 firstAction) in D:\a\_work\1\s\src\FSharp.Core\async.fs:line 112[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25hhint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: is subject to change. To configure the initial branch name to use in all
+hint: 
+hint: of your new repositories, which will suppress this warning, call:
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 	git branch -m <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /tmp/circus-nfp-real-294dd83c97aa4dbeba15e8907eb6ee51/.git/
+Initialized empty Git repository in /tmp/circus-nfp-real-21bc1f563a244c95ab7fc10643560803/.git/
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /tmp/circus-nfp-real-091c091e4808402ab53afd23cd5d1d82/.git/
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /tmp/circus-nfp-real-d45cfad9cade44429439a53e18944ec8/.git/
+Initialized empty Git repository in /tmp/circus-nfp-real-f6a1e668412a411385e1f4934260ed7c/.git/
+Initialized empty Git repository in /tmp/circus-nfp-real-8d7c06c28f164aff9caafa79c537efff/.git/
+Initialized empty Git repository in /tmp/circus-nfp-real-95c0a5dd75114646aa8084036509a3cb/.git/
+Initialized empty Git repository in /tmp/circus-nfp-real-c658511938614187b3c648b68667c179/.git/
+[master (root-commit) 5d4cea8] initial
+ 1 file changed, 1 insertion(+)
+ create mode 100644 test.txt
+[master (root-commit) 5d4cea8] initial
+ 1 file changed, 1 insertion(+)
+ create mode 100644 test.txt
+[master (root-commit) 5d4cea8] initial
+ 1 file changed, 1 insertion(+)
+ create mode 100644 test.txt
+[master (root-commit) 5d4cea8] initial
+ 1 file changed, 1 insertion(+)
+ create mode 100644 test.txt
+[master (root-commit) 5d4cea8] initial
+ 1 file changed, 1 insertion(+)
+ create mode 100644 test.txt
+[master (root-commit) 5d4cea8] initial
+ 1 file changed, 1 insertion(+)
+ create mode 100644 test.txt
+[master (root-commit) 5d4cea8] initial
+ 1 file changed, 1 insertion(+)
+ create mode 100644 test.txt
+[master (root-commit) 5d4cea8] initial
+ 1 file changed, 1 insertion(+)
+ create mode 100644 test.txt
+[1000D[?25hgate-summary verify: PASS (checks=3, schema_version=1, tree=0123456789ab)
+[0m[1000D[?25h[37m[[37m03:17:49 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[37m[[37m03:17:49 [37mINF[37m] [37mEXPECTO? Running tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[1000D[?25h[37m[[37m03:17:49 [37mINF[37m] [37mEXPECTO! [36m1[37m tests run in [32m00:00:00.0303373[37m for [36mforced available[37m – [36m1[37m passed, [36m0[37m ignored, [36m0[37m failed, [36m0[37m errored. [36mSuccess![37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[1000D[?25h[37m[[37m03:17:49 [37mINF[37m] [37mEXPECTO! [36m0[37m tests run in [32m00:00:00.0300758[37m for [36mforced unavailable (bash unavailable: injected absence)[37m – [36m0[37m passed, [36m1[37m ignored, [36m0[37m failed, [36m0[37m errored. [36mSuccess![37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[1000D[?25h[1000D[?25h[1000D[?25h[1000D[?25h[37m[[37m03:17:50 [37mINF[37m] [37mStarting sequenced tests...[37m [37m<[37mExpecto[37m>[37m
+[0m[1000D[?25h[1000D[?25h[1000D[?25h[37m[[37m03:18:36 [37mINF[37m] [37mEXPECTO! [36m639[37m tests run in [32m00:00:48.0899513[37m for [36mmiscellaneous[37m – [36m637[37m passed, [36m0[37m ignored, [36m2[37m failed, [36m0[37m errored. [36m[37m [37m<[37mExpecto[37m>[37m
+[0m
