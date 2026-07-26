@@ -52,6 +52,8 @@ let rec private parseValue (s: string) (i: int) : JsonValue * int =
     | c -> raise (JsonParseException(i, sprintf "unexpected character '%c'" c))
 
 and private parseString (s: string) (i: int) : JsonValue * int =
+    let i = skipWs s i
+    if i >= s.Length then raise (JsonParseException(i, "unexpected EOF"))
     if s.[i] <> '"' then raise (JsonParseException(i, "expected '\"'"))
     let sb = System.Text.StringBuilder()
     let mutable j = i + 1

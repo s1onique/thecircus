@@ -1,0 +1,17 @@
+{
+  "schema_version": "repair-episode-declaration-v1",
+  "episode_key": "fsb-0025",
+  "before_capture_id": "fsb-0025-before-c79f0ec",
+  "after_capture_id": "fsb-0025-after-c79f0ec",
+  "before_commit_oid": "be84cb3cb0b540fa0c895afd7f7c6a41c01c81c6",
+  "after_commit_oid": "c79f0ecfff6b7e4c34ae469ea55a4a4b60adca91",
+  "expected_before_tree_oid": "111de4f330d2076f2b7e96d683a3f4b142c3bee4",
+  "expected_after_tree_oid": "2cf1c11e8e6f3c9c950affa87706361c9601755b",
+  "verification_evidence_ids": ["canonical-gate-placeholder"],
+  "declared_relevant_paths": [
+    "tools/Circus.Tooling/NoForcePush/Types.fs",
+    "tools/Circus.Tooling/NoForcePush/SurfaceInventory.fs",
+    "tools/Circus.Tooling/NoForcePush/GitHubRules.fs"
+  ],
+  "notes": "Production repair episode. Commit c79f0ec restored NoForcePush tooling that was inadvertently broken. 16 diagnostic occurrences in before capture, 0 in after capture."
+}

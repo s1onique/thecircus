@@ -1,0 +1,25 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/Types.fs(95,5): error FS0010: Unexpected keyword 'member' in definition. Expected incomplete structured construct at or before this point or other token. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/SurfaceInventory.fs(191,35): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint). [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/SurfaceInventory.fs(191,34): error FS0010: Unexpected character '\' in expression. Expected identifier or other token. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/SurfaceInventory.fs(191,30): error FS0603: Unmatched '[|' [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/GitHubRules.fs(392,37): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/GitHubRules.fs(391,33): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/GitHubRules.fs(393,33): error FS0010: Incomplete structured construct at or before this point in expression. Expected incomplete structured construct at or before this point or other token. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/GitHubRules.fs(395,9): error FS0010: Incomplete structured construct at or before this point in expression. Expected 'finally', 'with' or other token. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+
+Build FAILED.
+
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/Types.fs(95,5): error FS0010: Unexpected keyword 'member' in definition. Expected incomplete structured construct at or before this point or other token. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/SurfaceInventory.fs(191,35): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint). [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/SurfaceInventory.fs(191,34): error FS0010: Unexpected character '\' in expression. Expected identifier or other token. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/SurfaceInventory.fs(191,30): error FS0603: Unmatched '[|' [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/GitHubRules.fs(392,37): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/GitHubRules.fs(391,33): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/GitHubRules.fs(393,33): error FS0010: Incomplete structured construct at or before this point in expression. Expected incomplete structured construct at or before this point or other token. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+/tmp/before-c79f0ec/tools/Circus.Tooling/NoForcePush/GitHubRules.fs(395,9): error FS0010: Incomplete structured construct at or before this point in expression. Expected 'finally', 'with' or other token. [/tmp/before-c79f0ec/tools/Circus.Tooling/Circus.Tooling.fsproj]
+    0 Warning(s)
+    8 Error(s)
+
+Time Elapsed 00:00:03.80

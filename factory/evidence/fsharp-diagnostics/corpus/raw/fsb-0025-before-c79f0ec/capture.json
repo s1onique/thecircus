@@ -1,0 +1,35 @@
+{
+  "schema_version": "capture-manifest-v1",
+  "capture_id": "fsb-0025-before-c79f0ec",
+  "capture_kind": "legacy_text",
+  "raw_artifacts": [
+    "build.log",
+    "legacy-occurrences.jsonl"
+  ],
+  "command": "dotnet build tools/Circus.Tooling/Circus.Tooling.fsproj -c Release",
+  "working_directory": null,
+  "repository_commit_oid": "be84cb3cb0b540fa0c895afd7f7c6a41c01c81c6",
+  "repository_tree_oid": "111de4f330d2076f2b7e96d683a3f4b142c3bee4",
+  "working_tree_state": "detached",
+  "source_root_aliases": [
+    {
+      "absolute_root": "/tmp/before-c79f0ec",
+      "canonical_root": "/home/thecircus/Projects/thecircus"
+    }
+  ],
+  "dotnet_sdk_version": "10.0.202",
+  "msbuild_version": null,
+  "fsharp_compiler_version": null,
+  "operating_system": "Linux",
+  "architecture": "x86_64",
+  "culture": "en-US",
+  "started_at": null,
+  "completed_at": null,
+  "exit_code": 1,
+  "metadata_gaps": [
+    "msbuild_version",
+    "fsharp_compiler_version",
+    "started_at",
+    "completed_at"
+  ]
+}
