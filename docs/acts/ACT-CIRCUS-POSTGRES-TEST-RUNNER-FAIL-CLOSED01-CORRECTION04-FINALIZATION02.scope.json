@@ -4,6 +4,8 @@
   "act_owned": [
     ".factory/active-scope.json",
     ".factory/canonical-evidence.json",
+    ".factory/evidence-provider-registry.json",
+    ".factory/evidence-provider-schema.json",
     ".factory/gate-summary.json",
     "docs/acts/ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION02.scope.json",
     "docs/close-reports/closure-ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION04-FINALIZATION01.md",
