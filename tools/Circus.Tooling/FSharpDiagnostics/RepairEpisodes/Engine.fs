@@ -456,8 +456,9 @@ type EpisodeEngineResult = {
     Transitions: DiagnosticTransition list
     ChangeSets: GitChangeSet list
     Verification: VerificationEvidence list
-    Outcome: PublishOutcome
+    Outcome: bool
     Declarations: (string * DeclarationValidation) list
+    EvidenceLoadErrors: VerificationEvidenceLoadError list
 }
 
 let private buildEpisodeId
@@ -485,19 +486,15 @@ let private verificationIdFor
     prefix cmd
     sha256OfUtf8 (sb.ToString())
 
-let runEpisodeEngine
+/// Internal helper: run episode computation with pre-loaded evidence.
+/// Returns an EpisodeEngineResult with any evidence load errors embedded.
+let private runEpisodesWithEvidence
     (repoRoot: string)
     (options: EpisodeEngineOptions)
+    (declarations: (string * DeclarationValidation) list)
+    (allEvidence: VerificationEvidence list)
+    (evidenceErrors: VerificationEvidenceLoadError list)
     : EpisodeEngineResult =
-    clearObjectFormatCache ()
-
-    let declarations = loadDeclarations repoRoot
-
-    // Load verification evidence using strict loader (fail-closed on any parse error)
-    let allEvidence =
-        match loadVerificationEvidenceStrict repoRoot with
-        | Result.Ok records -> records
-        | Result.Error _ -> []
 
     let keyCounts =
         declarations
@@ -687,8 +684,61 @@ let runEpisodeEngine
       Transitions = sortedTransitions
       ChangeSets = sortedChangeSets
       Verification = sortedEvidence
-      Outcome = outcome
-      Declarations = declarations }
+      Outcome = outcome.Success
+      Declarations = declarations
+      EvidenceLoadErrors = evidenceErrors }
+
+/// Run the episode engine with fail-closed error propagation.
+/// If evidence loading fails, we return a result with empty episodes and the errors embedded.
+let runEpisodeEngine
+    (repoRoot: string)
+    (options: EpisodeEngineOptions)
+    : EpisodeEngineResult =
+    clearObjectFormatCache ()
+
+    let declarations = loadDeclarations repoRoot
+
+    // Load verification evidence using strict loader - FAIL CLOSED on any error
+    match loadVerificationEvidenceStrict repoRoot with
+    | Result.Error loadErrors ->
+        // Return result with empty episodes and errors embedded
+        let emptySummary = {
+            SchemaVersion = RepairEpisodeSummarySchemaVersion
+            DeclarationsTotal = List.length declarations
+            ValidDeclarations = 0
+            InvalidDeclarations = 0
+            MissingCaptures = 0
+            MissingGitObjects = 0
+            DuplicateEpisodeKeys = 0
+            DuplicateEpisodeIds = 0
+            EpisodesTotal = 0
+            EpisodesQualified = 0
+            EpisodesQualifiedWithLimitations = 0
+            EpisodesAmbiguous = 0
+            EpisodesRejected = 0
+            ChangeSetsTotal = 0
+            TransitionsTotal = 0
+            PersistedSameCount = 0
+            PersistedCountDecreased = 0
+            PersistedCountIncreased = 0
+            EliminatedAfter = 0
+            IntroducedAfter = 0
+            ResolutionCandidates = 0
+            RegressionCandidates = 0
+            UnassessableTransitions = 0
+            VerificationEvidenceTotal = 0
+        }
+        { Summary = emptySummary
+          RepairEpisodes = []
+          Transitions = []
+          ChangeSets = []
+          Verification = []
+          Outcome = false
+          Declarations = declarations
+          EvidenceLoadErrors = loadErrors }
+    | Result.Ok allEvidence ->
+        // Evidence loaded successfully, proceed with episode computation
+        runEpisodesWithEvidence repoRoot options declarations allEvidence []
 
 type VerificationIssue =
     | EpisodeIdMismatch
@@ -712,7 +762,15 @@ let verifyPipeline
     (options: EpisodeEngineOptions)
     : VerificationResult =
     let r = runEpisodeEngine repoRoot options
-    let mutable issues : VerificationIssue list = []
+    
+    // Check for evidence load errors - fail closed
+    let issuesFromEvidenceErrors =
+        if not (List.isEmpty r.EvidenceLoadErrors) then
+            [ DeclarationInvalid 0 ] // Signal evidence loading failure
+        else
+            []
+    
+    let mutable issues : VerificationIssue list = issuesFromEvidenceErrors
     let expectedPaths =
         [ repairEpisodesCanonicalPath
           diagnosticTransitionsCanonicalPath

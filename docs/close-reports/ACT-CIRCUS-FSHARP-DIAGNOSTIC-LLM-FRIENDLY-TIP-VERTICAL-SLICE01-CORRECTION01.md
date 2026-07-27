@@ -2,10 +2,10 @@
 
 ## Classification
 
-**Authority**: ACT-CIRCUS-FSHARP-DIAGNOSTIC-LLM-FRIENDLY-TIP-VERTICAL-SLICE01  
-**Type**: Code Quality Correction  
-**Status**: CLOSED  
-**Date**: 2026-07-27  
+**Authority**: ACT-CIRCUS-FSHARP-DIAGNOSTIC-LLM-FRIENDLY-TIP-VERTICAL-SLICE01
+**Type**: Code Quality Correction
+**Status**: CLOSED
+**Date**: 2026-07-27
 **Commit**: 1f63217
 
 ---

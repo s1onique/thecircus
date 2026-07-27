@@ -409,6 +409,28 @@ type VerificationEvidence = {
 }
 
 // -----------------------------------------------------------------------------
+// Engine errors (fail-closed)
+// -----------------------------------------------------------------------------
+
+/// Engine errors that prevent successful episode processing.
+/// These errors cause the engine to fail closed - no qualified or ambiguous
+/// episodes are emitted when these errors occur.
+[<RequireQualifiedAccess>]
+type RepairEpisodeEngineError =
+    /// Evidence file is missing entirely.
+    | EvidenceFileMissing of path: string
+    /// Evidence file exists but could not be read.
+    | EvidenceFileUnreadable of path: string * message: string
+    /// One or more evidence records failed to parse.
+    | EvidenceParseError of errors: VerificationEvidenceParseError list
+    /// Duplicate evidence IDs found in the evidence file.
+    | DuplicateEvidenceId of path: string * evidenceId: string * lineNumber1: int * lineNumber2: int
+    /// Conflicting evidence records for the same ID with different content.
+    | ConflictingEvidenceRecord of path: string * evidenceId: string * lineNumber1: int * lineNumber2: int
+    /// Evidence file has unsupported schema version.
+    | UnsupportedEvidenceSchemaVersion of path: string * version: string
+
+// -----------------------------------------------------------------------------
 // Episode record
 // -----------------------------------------------------------------------------
 
