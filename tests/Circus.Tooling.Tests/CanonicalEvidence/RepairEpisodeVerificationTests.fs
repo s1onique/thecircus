@@ -3,7 +3,7 @@ module Circus.Tooling.Tests.CanonicalEvidence.RepairEpisodeVerificationTests
 // =============================================================================
 // Verification evidence loading tests for the repair-episode linker
 //
-// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION02
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION05-RUNNER-INTEGRITY01
 //
 // These tests verify that evidence loading failures are correctly identified
 // and categorized, with exact error patterns preserved and exposed through the CLI.
@@ -49,6 +49,18 @@ let private evidenceRecordInvalidTreeOid (evId: string) (epId: string) : string 
     sprintf
         """{"schema_version":"verification-evidence-v1","verification_evidence_id":"%s","episode_id":"%s","verification_kind":"build","verification_command":"dotnet build","verification_result":"pass","verification_exit_code":0,"tested_commit_oid":"%s","tested_tree_oid":"not-a-valid-oid-123456789012345678901234"}"""
         evId epId validCommitOid
+
+/// Build an evidence record with wrong field type (string instead of int)
+let private evidenceRecordWrongFieldType (evId: string) (epId: string) : string =
+    sprintf
+        """{"schema_version":"verification-evidence-v1","verification_evidence_id":"%s","episode_id":"%s","verification_kind":"build","verification_command":"dotnet build","verification_result":"pass","verification_exit_code":"zero","tested_commit_oid":"%s","tested_tree_oid":"%s"}"""
+        evId epId validCommitOid validTreeOid
+
+/// Build two evidence records with same ID but different content (conflicting)
+let private conflictingEvidenceRecords (evId: string) : string * string =
+    let rec1 = sprintf """{"schema_version":"verification-evidence-v1","verification_evidence_id":"%s","episode_id":"ep-001","verification_kind":"build","verification_command":"dotnet build","verification_result":"pass","verification_exit_code":0,"tested_commit_oid":"%s","tested_tree_oid":"%s"}""" evId validCommitOid validTreeOid
+    let rec2 = sprintf """{"schema_version":"verification-evidence-v1","verification_evidence_id":"%s","episode_id":"ep-002","verification_kind":"build","verification_command":"dotnet build","verification_result":"fail","verification_exit_code":1,"tested_commit_oid":"%s","tested_tree_oid":"%s"}""" evId validCommitOid validTreeOid
+    rec1, rec2
 
 let private tempDir (label: string) : string =
     let dir = Path.Combine(Path.GetTempPath(), label + "-" + Guid.NewGuid().ToString("N"))
@@ -374,13 +386,12 @@ let tests =
           }
 
           // Test 16: wrong field type (verification_exit_code as string instead of number)
-          // Note: The parser uses lookupInt which returns None for wrong type, producing InvalidExitCode
+          // The parser uses lookupInt which returns None for wrong type, producing InvalidExitCode
           test "wrong field type (string instead of int) => invalid_exit_code error" {
               let dir = tempDir "verify-wrong-field-type"
               try
                   createMinimalStructure dir
-                  let bad = validEvidenceRecord validEvidenceId "ep-001"
-                              |> fun s -> s.Replace("\"verification_exit_code\":0", "\"verification_exit_code\":\"zero\"")
+                  let bad = evidenceRecordWrongFieldType validEvidenceId "ep-001"
                   writeEvidence dir [ bad ]
                   let vr = runVerify dir
                   Expect.isTrue (List.length vr.Issues > 0) "should have issues"
@@ -477,5 +488,49 @@ let tests =
                   Expect.equal (List.length vr.Issues) 0 "valid evidence should have no issues"
               finally
                   cleanup dir
+          }
+
+          // Test 21: conflicting evidence records (same ID, different content)
+          // Current implementation detects as DuplicateEvidenceId (same ID with different content).
+          // ConflictingEvidenceRecord type exists but requires explicit content comparison.
+          test "conflicting evidence records => duplicate_evidence_id error" {
+              let dir = tempDir "verify-conflicting-evidence"
+              try
+                  createMinimalStructure dir
+                  let rec1, rec2 = conflictingEvidenceRecords validEvidenceId
+                  writeEvidence dir [ rec1; rec2 ]
+                  let vr = runVerify dir
+                  Expect.isTrue (List.length vr.Issues > 0) "should have issues"
+                  match vr.Issues with
+                  | [ VerificationIssue.VerificationEvidenceLoadFailed errors ] ->
+                      let hasDuplicate = errors |> List.exists (function
+                          | VerificationEvidenceLoadError.DuplicateEvidenceId _ -> true
+                          | _ -> false)
+                      Expect.isTrue hasDuplicate "should have DuplicateEvidenceId error (same ID detected regardless of content)"
+                  | _ -> failwithf "expected VerificationEvidenceLoadFailed, got %A" vr.Issues
+              finally
+                  cleanup dir
+          }
+
+          // Test 22: CLI rendering handles conflicting evidence error
+          test "renderVerificationEvidenceLoadIssues handles conflicting evidence" {
+              let errors = [
+                  VerificationEvidenceLoadError.ConflictingEvidenceRecord("/path/file.jsonl", "evid123", 3, 7)
+              ]
+              let rendered = renderVerificationEvidenceLoadIssues errors
+              Expect.stringContains rendered "conflicting_evidence" "should contain conflicting error"
+              Expect.stringContains rendered "evid123" "should contain evidence ID"
+          }
+
+          // Test 23: CLI rendering handles wrong_field_type error
+          test "renderVerificationEvidenceLoadIssues handles wrong_field_type" {
+              let errors = [
+                  VerificationEvidenceLoadError.ParseError(
+                      VerificationEvidenceParseError.WrongFieldType("/path/file.jsonl", 5, "verification_exit_code", "an integer"))
+              ]
+              let rendered = renderVerificationEvidenceLoadIssues errors
+              Expect.stringContains rendered "wrong_field_type" "should contain wrong_field_type error"
+              Expect.stringContains rendered "verification_exit_code" "should contain field name"
+              Expect.stringContains rendered "an integer" "should contain expected type"
           }
         ]
