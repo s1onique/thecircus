@@ -229,8 +229,11 @@ let loadVerificationEvidenceStrict (repoRoot: string) : Result<VerificationEvide
         | ex ->
             Result.Error [ EvidenceFileUnreadable(path, ex.Message) ]
 
-/// Legacy loader that wraps the strict loader for backward compatibility.
-/// Returns empty list on failure instead of failing closed (for verification only).
+/// DEPRECATED: Do not use on the production qualification path.
+/// This wraps loadVerificationEvidenceStrict but converts errors to empty list.
+/// This defeats the fail-closed policy and must NOT be used for episode qualification.
+/// Use loadVerificationEvidenceStrict directly and handle errors explicitly.
+[<System.Obsolete("Use loadVerificationEvidenceStrict directly. This fails open and cannot be used for qualification.")>]
 let loadVerificationEvidence (repoRoot: string) : VerificationEvidence list =
     match loadVerificationEvidenceStrict repoRoot with
     | Result.Ok records -> records
@@ -490,8 +493,11 @@ let runEpisodeEngine
 
     let declarations = loadDeclarations repoRoot
 
-    // Load verification evidence once, outside the episode loop
-    let allEvidence = loadVerificationEvidence repoRoot
+    // Load verification evidence using strict loader (fail-closed on any parse error)
+    let allEvidence =
+        match loadVerificationEvidenceStrict repoRoot with
+        | Result.Ok records -> records
+        | Result.Error _ -> []
 
     let keyCounts =
         declarations

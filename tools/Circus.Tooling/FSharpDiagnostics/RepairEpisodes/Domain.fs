@@ -324,6 +324,7 @@ type DiagnosticTransition = {
 let VerificationEvidenceSchemaVersion = "verification-evidence-v1"
 
 /// Typed parse errors for verification evidence records.
+[<RequireQualifiedAccess>]
 type VerificationEvidenceParseError =
     | MalformedJson of source: string * lineNumber: int * message: string
     | ExpectedObject of source: string * lineNumber: int
