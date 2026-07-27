@@ -64,51 +64,177 @@ let private lookupInt (fields: (string * JsonValue) list) (name: string) : int o
             | _ -> None
         else None)
 
-/// Parse a verification evidence record from JSON.
-let private parseVerificationEvidence (json: string) (source: string option) : VerificationEvidence option =
+/// Strict regex patterns for validation.
+open System.Text.RegularExpressions
+
+let private sha256Regex = Regex(@"^[a-f0-9]{64}$", RegexOptions.Compiled)
+let private oid40Regex = Regex(@"^[a-f0-9]{40}$", RegexOptions.Compiled)
+let private oid64Regex = Regex(@"^[a-f0-9]{64}$", RegexOptions.Compiled)
+let private placeholderIdRegex = Regex(@"^[0]+$", RegexOptions.Compiled)
+
+/// Helper to construct VerificationEvidence record after all validations pass.
+let private buildVerificationEvidenceRecord
+        (evId: string)
+        (epId: string)
+        (parsedKind: VerificationKind)
+        (cmd: string)
+        (parsedStatus: VerificationStatus)
+        (testedCommitOid: string)
+        (testedTreeOid: string)
+        (ec: int)
+        (stdoutSha: string option)
+        (stderrSha: string option)
+        : VerificationEvidence =
+    { SchemaVersion = VerificationEvidenceSchemaVersion
+      EvidenceId = evId
+      EpisodeId = epId
+      Kind = parsedKind
+      Command = cmd
+      WorkingDirectory = ""
+      TestedCommitOid = testedCommitOid
+      TestedTreeOid = testedTreeOid
+      ExitCode = ec
+      StdoutSha256 = stdoutSha
+      StderrSha256 = stderrSha
+      CombinedLogPath = None
+      Status = parsedStatus }
+
+/// Parse a verification evidence record from JSON with strict validation.
+/// Returns Result to preserve exact failure information.
+let private parseVerificationEvidenceStrict (json: string) (source: string) (lineNumber: int) : Result<VerificationEvidence, VerificationEvidenceParseError> =
     try
         let v = parseJson json
         match v with
         | JsonObject fields ->
-            let evId = lookupString fields "verification_evidence_id"
-            let epId = lookupString fields "episode_id"
-            let kindStr = lookupString fields "verification_kind"
-            let cmd = lookupString fields "verification_command"
-            let statusStr = lookupString fields "verification_result"
-            let exitCode = lookupInt fields "verification_exit_code"
-            match evId, epId, kindStr, cmd, statusStr with
-            | Some eid, Some eid2, Some kindToken, Some cmdStr, Some statusToken ->
-                let parsedKind = match tryParseVerificationKind kindToken with Some k -> k | None -> Build
-                let parsedStatus = match tryParseVerificationStatus statusToken with Some s -> s | None -> MissingLogs
-                let parsedExitCode = exitCode |> Option.defaultValue 0
-                Some { SchemaVersion = VerificationEvidenceSchemaVersion
-                       EvidenceId = eid
-                       EpisodeId = eid2
-                       Kind = parsedKind
-                       Command = cmdStr
-                       WorkingDirectory = ""
-                       TestedCommitOid = ""
-                       TestedTreeOid = ""
-                       ExitCode = parsedExitCode
-                       StdoutSha256 = None
-                       StderrSha256 = None
-                       CombinedLogPath = None
-                       Status = parsedStatus }
-            | _ -> None
-        | _ -> None
+            // Validate schema version first
+            match lookupOptString fields "schema_version" with
+            | Some sv when sv <> VerificationEvidenceSchemaVersion ->
+                Result.Error (VerificationEvidenceParseError.UnsupportedSchemaVersion(source, lineNumber, sv))
+            | _ ->
+                // Get required fields
+                match lookupString fields "verification_evidence_id" with
+                | None -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_evidence_id"))
+                | Some evId ->
+                    // Validate evidence ID format
+                    if not (sha256Regex.IsMatch(evId)) then
+                        Result.Error (VerificationEvidenceParseError.InvalidEvidenceId(source, lineNumber, evId))
+                    elif placeholderIdRegex.IsMatch(evId) then
+                        Result.Error (VerificationEvidenceParseError.PlaceholderEvidenceId(source, lineNumber, evId))
+                    else
+                        match lookupString fields "episode_id" with
+                        | None -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "episode_id"))
+                        | Some epId ->
+                            match lookupString fields "verification_kind" with
+                            | None -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_kind"))
+                            | Some kindToken ->
+                                match tryParseVerificationKind kindToken with
+                                | None -> Result.Error (VerificationEvidenceParseError.UnknownVerificationKind(source, lineNumber, kindToken))
+                                | Some parsedKind ->
+                                    match lookupString fields "verification_command" with
+                                    | None -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_command"))
+                                    | Some cmd ->
+                                        match lookupString fields "verification_result" with
+                                        | None -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_result"))
+                                        | Some statusToken ->
+                                            match tryParseVerificationStatus statusToken with
+                                            | None -> Result.Error (VerificationEvidenceParseError.UnknownVerificationStatus(source, lineNumber, statusToken))
+                                            | Some parsedStatus ->
+                                                // Exit code is required and must be non-negative
+                                                match lookupInt fields "verification_exit_code" with
+                                                | None -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, "null"))
+                                                | Some ec when ec < 0 -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, string ec))
+                                                | Some ec ->
+                                                    // Validate commit OID if present
+                                                    let testedCommitOid = lookupOptString fields "tested_commit_oid" |> Option.defaultValue ""
+                                                    if testedCommitOid.Length > 0 && not (oid40Regex.IsMatch(testedCommitOid) || oid64Regex.IsMatch(testedCommitOid)) then
+                                                        Result.Error (VerificationEvidenceParseError.InvalidCommitOid(source, lineNumber, "tested_commit_oid", testedCommitOid))
+                                                    else
+                                                        // Validate tree OID if present
+                                                        let testedTreeOid = lookupOptString fields "tested_tree_oid" |> Option.defaultValue ""
+                                                        if testedTreeOid.Length > 0 && not (oid40Regex.IsMatch(testedTreeOid) || oid64Regex.IsMatch(testedTreeOid)) then
+                                                            Result.Error (VerificationEvidenceParseError.InvalidTreeOid(source, lineNumber, "tested_tree_oid", testedTreeOid))
+                                                        else
+                                                            // Validate SHA-256 fields if present
+                                                            let stdoutSha = lookupOptString fields "stdout_sha256"
+                                                            match stdoutSha with
+                                                            | Some v when not (sha256Regex.IsMatch(v)) ->
+                                                                Result.Error (VerificationEvidenceParseError.InvalidSha256(source, lineNumber, "stdout_sha256", v))
+                                                            | _ ->
+                                                                let stderrSha = lookupOptString fields "stderr_sha256"
+                                                                match stderrSha with
+                                                                | Some v when not (sha256Regex.IsMatch(v)) ->
+                                                                    Result.Error (VerificationEvidenceParseError.InvalidSha256(source, lineNumber, "stderr_sha256", v))
+                                                                | _ ->
+                                                                    let wd = lookupOptString fields "working_directory" |> Option.defaultValue ""
+                                                                    let logPath = lookupOptString fields "combined_log_path"
+                                                                    let record = buildVerificationEvidenceRecord evId epId parsedKind cmd parsedStatus testedCommitOid testedTreeOid ec stdoutSha stderrSha
+                                                                    Result.Ok { record with WorkingDirectory = wd; CombinedLogPath = logPath }
+        | _ -> Result.Error (VerificationEvidenceParseError.ExpectedObject(source, lineNumber))
     with
-    | _ -> None
+    | JsonParseException (_, msg) ->
+        Result.Error (VerificationEvidenceParseError.MalformedJson(source, lineNumber, msg))
+    | :? System.Text.Json.JsonException as ex ->
+        Result.Error (VerificationEvidenceParseError.JsonException(source, lineNumber, ex.Message))
+    | ex ->
+        Result.Error (VerificationEvidenceParseError.JsonException(source, lineNumber, ex.Message))
 
-/// Load verification evidence from the canonical evidence file.
-let loadVerificationEvidence (repoRoot: string) : VerificationEvidence list =
+/// Load verification evidence with strict all-or-nothing semantics.
+/// - Missing file fails
+/// - Unreadable file fails
+/// - One malformed line fails the whole load
+/// - Duplicate IDs fail
+/// - Conflicting records fail
+let loadVerificationEvidenceStrict (repoRoot: string) : Result<VerificationEvidence list, VerificationEvidenceLoadError list> =
     let path = repoRelative repoRoot verificationEvidenceCanonicalPath
-    if not (File.Exists path) then []
+    if not (File.Exists path) then
+        Result.Error [ EvidenceFileMissing path ]
     else
-        let lines = File.ReadAllLines path
-        lines
-        |> Array.filter (fun l -> not (System.String.IsNullOrWhiteSpace l))
-        |> Array.choose (fun l -> parseVerificationEvidence l (Some path))
-        |> Array.toList
+        try
+            let lines = File.ReadAllLines path
+            let results =
+                lines
+                |> Array.mapi (fun idx line ->
+                    let lineNumber = idx + 1
+                    if System.String.IsNullOrWhiteSpace line then
+                        Result.Ok None
+                    else
+                        match parseVerificationEvidenceStrict line path lineNumber with
+                        | Result.Ok v -> Result.Ok (Some v)
+                        | Result.Error e -> Result.Error e)
+                |> Array.toList
+            
+            // Separate successes and errors
+            let errors = results |> List.choose (function Result.Error e -> Some e | Result.Ok _ -> None)
+            if not (List.isEmpty errors) then
+                Result.Error (errors |> List.map ParseError)
+            else
+                let records = results |> List.choose (function Result.Ok v -> v | _ -> None)
+                
+                // Check for duplicate IDs
+                let idGroups = records |> List.groupBy (fun r -> r.EvidenceId)
+                let duplicates =
+                    idGroups
+                    |> List.filter (fun (_, rs) -> List.length rs > 1)
+                    |> List.map (fun (id, _) -> DuplicateEvidenceId(path, id, 0, 0))
+                
+                if not (List.isEmpty duplicates) then
+                    Result.Error duplicates
+                else
+                    Result.Ok records
+        with
+        | :? IOException as ex ->
+            Result.Error [ EvidenceFileUnreadable(path, ex.Message) ]
+        | :? System.UnauthorizedAccessException as ex ->
+            Result.Error [ EvidenceFileUnreadable(path, ex.Message) ]
+        | ex ->
+            Result.Error [ EvidenceFileUnreadable(path, ex.Message) ]
+
+/// Legacy loader that wraps the strict loader for backward compatibility.
+/// Returns empty list on failure instead of failing closed (for verification only).
+let loadVerificationEvidence (repoRoot: string) : VerificationEvidence list =
+    match loadVerificationEvidenceStrict repoRoot with
+    | Result.Ok records -> records
+    | Result.Error _ -> []
 
 /// Render a single declaration JSON file into a typed record.  Performs
 /// schema-level validation and returns the list of issues found.

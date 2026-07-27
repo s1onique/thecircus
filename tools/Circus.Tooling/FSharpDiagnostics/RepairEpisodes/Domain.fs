@@ -323,6 +323,32 @@ type DiagnosticTransition = {
 
 let VerificationEvidenceSchemaVersion = "verification-evidence-v1"
 
+/// Typed parse errors for verification evidence records.
+type VerificationEvidenceParseError =
+    | MalformedJson of source: string * lineNumber: int * message: string
+    | ExpectedObject of source: string * lineNumber: int
+    | MissingField of source: string * lineNumber: int * fieldName: string
+    | WrongFieldType of source: string * lineNumber: int * fieldName: string * expectedType: string
+    | UnsupportedSchemaVersion of source: string * lineNumber: int * version: string
+    | UnknownVerificationKind of source: string * lineNumber: int * value: string
+    | UnknownVerificationStatus of source: string * lineNumber: int * value: string
+    | InvalidExitCode of source: string * lineNumber: int * value: string
+    | InvalidCommitOid of source: string * lineNumber: int * fieldName: string * value: string
+    | InvalidTreeOid of source: string * lineNumber: int * fieldName: string * value: string
+    | InvalidSha256 of source: string * lineNumber: int * fieldName: string * value: string
+    | InvalidEvidenceId of source: string * lineNumber: int * value: string
+    | PlaceholderEvidenceId of source: string * lineNumber: int * value: string
+    | JsonException of source: string * lineNumber: int * message: string
+
+/// Load errors for verification evidence files.
+type VerificationEvidenceLoadError =
+    | EvidenceFileMissing of path: string
+    | EvidenceFileUnreadable of path: string * message: string
+    | DuplicateEvidenceId of path: string * evidenceId: string * lineNumbers: int * int
+    | ConflictingEvidenceRecord of path: string * evidenceId: string * lineNumbers: int * int
+    | UnsupportedEvidenceSchemaVersion of path: string * version: string
+    | ParseError of error: VerificationEvidenceParseError
+
 type VerificationKind =
     | Build
     | FocusedTest
