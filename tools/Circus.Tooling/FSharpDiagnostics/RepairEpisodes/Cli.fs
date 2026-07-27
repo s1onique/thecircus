@@ -42,7 +42,7 @@ let parse (argv: string list) : Result<Command, string> =
         Result.Error
             "usage: circus-tooling fsharp-diagnostics repair-episodes {inventory|regenerate|verify|show <episode-id>|help}"
 
-let private renderInventoryHuman (result: Engine.EpisodeEngineResult) : string =
+let private renderInventoryHuman (result: EpisodeEngineResult) : string =
     let s = result.Summary
     let sb = System.Text.StringBuilder()
     let append (line: string) = sb.AppendLine(line) |> ignore
@@ -58,68 +58,80 @@ let private renderInventoryHuman (result: Engine.EpisodeEngineResult) : string =
     append(sprintf "  episodes_qualified: %d" s.EpisodesQualified)
     append(sprintf "  change_sets_total: %d" s.ChangeSetsTotal)
     append(sprintf "  transitions_total: %d" s.TransitionsTotal)
-    // Report evidence load errors if any
-    if not (List.isEmpty result.EvidenceLoadErrors) then
-        append(sprintf "  evidence_load_errors: %d" (List.length result.EvidenceLoadErrors))
     ignore (sb.ToString())
     sb.ToString()
 
 /// Render evidence load errors in human-readable form for CLI output.
-let private renderEvidenceLoadErrors (errors: Domain.VerificationEvidenceLoadError list) : string =
+let private renderEvidenceLoadErrors (errors: VerificationEvidenceLoadError list) : string =
     let sb = System.Text.StringBuilder()
     sb.AppendLine("error: verification evidence loading failed") |> ignore
     for err in errors do
         match err with
-        | Domain.VerificationEvidenceLoadError.EvidenceFileMissing path ->
+        | VerificationEvidenceLoadError.EvidenceFileMissing path ->
             sb.AppendLine(sprintf "  evidence_file_missing: %s" path) |> ignore
-        | Domain.VerificationEvidenceLoadError.EvidenceFileUnreadable (path, msg) ->
+        | VerificationEvidenceLoadError.EvidenceFileUnreadable (path, msg) ->
             sb.AppendLine(sprintf "  evidence_file_unreadable: %s (%s)" path msg) |> ignore
-        | Domain.VerificationEvidenceLoadError.DuplicateEvidenceId (path, evid, l1, l2) ->
+        | VerificationEvidenceLoadError.DuplicateEvidenceId (path, evid, l1, l2) ->
             sb.AppendLine(sprintf "  duplicate_evidence_id: %s %s (lines %d, %d)" path evid l1 l2) |> ignore
-        | Domain.VerificationEvidenceLoadError.ConflictingEvidenceRecord (path, evid, l1, l2) ->
+        | VerificationEvidenceLoadError.ConflictingEvidenceRecord (path, evid, l1, l2) ->
             sb.AppendLine(sprintf "  conflicting_evidence: %s %s (lines %d, %d)" path evid l1 l2) |> ignore
-        | Domain.VerificationEvidenceLoadError.UnsupportedEvidenceSchemaVersion (path, ver) ->
+        | VerificationEvidenceLoadError.UnsupportedEvidenceSchemaVersion (path, ver) ->
             sb.AppendLine(sprintf "  unsupported_evidence_schema: %s %s" path ver) |> ignore
-        | Domain.VerificationEvidenceLoadError.ParseError parseErr ->
+        | VerificationEvidenceLoadError.ParseError parseErr ->
             match parseErr with
-            | Domain.VerificationEvidenceParseError.MalformedJson (src, line, msg) ->
+            | VerificationEvidenceParseError.MalformedJson (src, line, msg) ->
                 sb.AppendLine(sprintf "  malformed_json: %s:%d %s" src line msg) |> ignore
-            | Domain.VerificationEvidenceParseError.MissingField (src, line, field) ->
+            | VerificationEvidenceParseError.MissingField (src, line, field) ->
                 sb.AppendLine(sprintf "  missing_field: %s:%d %s" src line field) |> ignore
-            | Domain.VerificationEvidenceParseError.InvalidEvidenceId (src, line, evid) ->
+            | VerificationEvidenceParseError.InvalidEvidenceId (src, line, evid) ->
                 sb.AppendLine(sprintf "  invalid_evidence_id: %s:%d %s" src line evid) |> ignore
-            | Domain.VerificationEvidenceParseError.UnsupportedSchemaVersion (src, line, ver) ->
+            | VerificationEvidenceParseError.UnsupportedSchemaVersion (src, line, ver) ->
                 sb.AppendLine(sprintf "  unsupported_schema: %s:%d %s" src line ver) |> ignore
-            | Domain.VerificationEvidenceParseError.UnknownVerificationKind (src, line, v) ->
+            | VerificationEvidenceParseError.UnknownVerificationKind (src, line, v) ->
                 sb.AppendLine(sprintf "  unknown_verification_kind: %s:%d %s" src line v) |> ignore
-            | Domain.VerificationEvidenceParseError.UnknownVerificationStatus (src, line, v) ->
+            | VerificationEvidenceParseError.UnknownVerificationStatus (src, line, v) ->
                 sb.AppendLine(sprintf "  unknown_verification_status: %s:%d %s" src line v) |> ignore
-            | Domain.VerificationEvidenceParseError.InvalidExitCode (src, line, ec) ->
+            | VerificationEvidenceParseError.InvalidExitCode (src, line, ec) ->
                 sb.AppendLine(sprintf "  invalid_exit_code: %s:%d %s" src line ec) |> ignore
-            | Domain.VerificationEvidenceParseError.InvalidCommitOid (src, line, field, oid) ->
+            | VerificationEvidenceParseError.InvalidCommitOid (src, line, field, oid) ->
                 sb.AppendLine(sprintf "  invalid_commit_oid: %s:%d %s %s" src line field oid) |> ignore
-            | Domain.VerificationEvidenceParseError.InvalidTreeOid (src, line, field, oid) ->
+            | VerificationEvidenceParseError.InvalidTreeOid (src, line, field, oid) ->
                 sb.AppendLine(sprintf "  invalid_tree_oid: %s:%d %s %s" src line field oid) |> ignore
-            | Domain.VerificationEvidenceParseError.InvalidSha256 (src, line, field, hash) ->
+            | VerificationEvidenceParseError.InvalidSha256 (src, line, field, hash) ->
                 sb.AppendLine(sprintf "  invalid_sha256: %s:%d %s %s" src line field hash) |> ignore
-            | Domain.VerificationEvidenceParseError.PlaceholderEvidenceId (src, line, evid) ->
+            | VerificationEvidenceParseError.PlaceholderEvidenceId (src, line, evid) ->
                 sb.AppendLine(sprintf "  placeholder_evidence_id: %s:%d %s" src line evid) |> ignore
-            | Domain.VerificationEvidenceParseError.ExpectedObject (src, line) ->
+            | VerificationEvidenceParseError.ExpectedObject (src, line) ->
                 sb.AppendLine(sprintf "  expected_object: %s:%d" src line) |> ignore
-            | Domain.VerificationEvidenceParseError.JsonException (src, line, msg) ->
+            | VerificationEvidenceParseError.JsonException (src, line, msg) ->
                 sb.AppendLine(sprintf "  json_exception: %s:%d %s" src line msg) |> ignore
-            | Domain.VerificationEvidenceParseError.WrongFieldType (src, line, field, expected) ->
+            | VerificationEvidenceParseError.WrongFieldType (src, line, field, expected) ->
                 sb.AppendLine(sprintf "  wrong_field_type: %s:%d %s expected %s" src line field expected) |> ignore
     sb.ToString()
 
+/// Render engine failure in human-readable form for CLI output.
+let private renderEngineFailure (failure: EpisodeEngineFailure) : string =
+    let sb = System.Text.StringBuilder()
+    match failure with
+    | EpisodeEngineFailure.VerificationEvidenceLoadFailed errors ->
+        sb.AppendLine("error: verification evidence loading failed") |> ignore
+        sb.Append(renderEvidenceLoadErrors errors) |> ignore
+    | EpisodeEngineFailure.DeclarationLoadFailed issues ->
+        sb.AppendLine("error: declaration loading failed") |> ignore
+        for issue in issues do
+            sb.AppendLine(sprintf "  declaration_issue: %A" issue) |> ignore
+    | EpisodeEngineFailure.PublicationFailed (canonical, msg) ->
+        sb.AppendLine(sprintf "error: publication failed (canonical=%b): %s" canonical msg) |> ignore
+    | EpisodeEngineFailure.InternalFailure (op, msg) ->
+        sb.AppendLine(sprintf "error: internal engine failure in %s: %s" op msg) |> ignore
+    sb.ToString()
+
 let runInventory (repoRoot: string) : int =
-    let result = Engine.runEpisodeEngine repoRoot Engine.defaultEngineOptions
-    
-    // Check for evidence load errors first (fail-closed)
-    if not (List.isEmpty result.EvidenceLoadErrors) then
-        stderr.WriteLine(renderEvidenceLoadErrors result.EvidenceLoadErrors)
+    match runEpisodeEngine repoRoot defaultEngineOptions with
+    | EpisodeEngineExecution.Failed failure ->
+        stderr.WriteLine(renderEngineFailure failure)
         ExitCode.policyFailure
-    else
+    | EpisodeEngineExecution.Completed result ->
         stdout.WriteLine(renderInventoryHuman result)
         if result.Summary.InvalidDeclarations > 0
            || result.Summary.MissingCaptures > 0
@@ -132,26 +144,25 @@ let runInventory (repoRoot: string) : int =
             ExitCode.pass
 
 let runRegenerate (repoRoot: string) : int =
-    let result = Engine.runEpisodeEngine repoRoot Engine.defaultEngineOptions
-    
-    // Check for evidence load errors first (fail-closed)
-    if not (List.isEmpty result.EvidenceLoadErrors) then
-        stderr.WriteLine(renderEvidenceLoadErrors result.EvidenceLoadErrors)
+    match runEpisodeEngine repoRoot defaultEngineOptions with
+    | EpisodeEngineExecution.Failed failure ->
+        stderr.WriteLine(renderEngineFailure failure)
         ExitCode.policyFailure
-    elif not result.Outcome then
-        stderr.WriteLine "error: atomic publication failed"
-        ExitCode.operationalError
-    else
-        stdout.WriteLine
-            (sprintf
-                "fsharp-diagnostics repair-episodes regenerate: episodes=%d transitions=%d change_sets=%d"
-                result.RepairEpisodes.Length
-                result.Transitions.Length
-                result.ChangeSets.Length)
-        ExitCode.pass
+    | EpisodeEngineExecution.Completed result ->
+        if not result.Outcome then
+            stderr.WriteLine "error: atomic publication failed"
+            ExitCode.operationalError
+        else
+            stdout.WriteLine
+                (sprintf
+                    "fsharp-diagnostics repair-episodes regenerate: episodes=%d transitions=%d change_sets=%d"
+                    result.RepairEpisodes.Length
+                    result.Transitions.Length
+                    result.ChangeSets.Length)
+            ExitCode.pass
 
 let runVerify (repoRoot: string) : int =
-    let vr = Engine.verifyPipeline repoRoot Engine.defaultEngineOptions
+    let vr = verifyPipeline repoRoot defaultEngineOptions
     let issueCount = List.length vr.Issues
     stdout.WriteLine
         (sprintf
@@ -162,26 +173,24 @@ let runVerify (repoRoot: string) : int =
     if issueCount = 0 then ExitCode.pass else ExitCode.policyFailure
 
 let runShow (repoRoot: string) (episodeId: string) : int =
-    let result = Engine.runEpisodeEngine repoRoot Engine.defaultEngineOptions
-    
-    // Check for evidence load errors first (fail-closed)
-    if not (List.isEmpty result.EvidenceLoadErrors) then
-        stderr.WriteLine(renderEvidenceLoadErrors result.EvidenceLoadErrors)
+    match runEpisodeEngine repoRoot defaultEngineOptions with
+    | EpisodeEngineExecution.Failed failure ->
+        stderr.WriteLine(renderEngineFailure failure)
         ExitCode.policyFailure
-    else
+    | EpisodeEngineExecution.Completed result ->
         match result.RepairEpisodes |> List.tryFind (fun e -> e.EpisodeId = episodeId) with
-        | Some e ->
+        | Some episode ->
             let sb = System.Text.StringBuilder()
             sb.AppendLine("fsharp-diagnostics repair-episodes show") |> ignore
-            sb.AppendLine(sprintf "  episode_id: %s" e.EpisodeId) |> ignore
-            sb.AppendLine(sprintf "  episode_key: %s" e.EpisodeKey) |> ignore
-            sb.AppendLine(sprintf "  before_capture_id: %s" e.BeforeCaptureId) |> ignore
-            sb.AppendLine(sprintf "  after_capture_id: %s" e.AfterCaptureId) |> ignore
-            sb.AppendLine(sprintf "  before_tree_oid: %s" e.BeforeTreeOid) |> ignore
-            sb.AppendLine(sprintf "  after_tree_oid: %s" e.AfterTreeOid) |> ignore
-            sb.AppendLine(sprintf "  change_set_id: %s" e.ChangeSetId) |> ignore
-            sb.AppendLine(sprintf "  verification_level: %s" (verificationLevelToken e.VerificationLevel)) |> ignore
-            sb.AppendLine(sprintf "  qualification: %s" (episodeQualificationStatusToken e.Qualification.Status)) |> ignore
+            sb.AppendLine(sprintf "  episode_id: %s" episode.EpisodeId) |> ignore
+            sb.AppendLine(sprintf "  episode_key: %s" episode.EpisodeKey) |> ignore
+            sb.AppendLine(sprintf "  before_capture_id: %s" episode.BeforeCaptureId) |> ignore
+            sb.AppendLine(sprintf "  after_capture_id: %s" episode.AfterCaptureId) |> ignore
+            sb.AppendLine(sprintf "  before_tree_oid: %s" episode.BeforeTreeOid) |> ignore
+            sb.AppendLine(sprintf "  after_tree_oid: %s" episode.AfterTreeOid) |> ignore
+            sb.AppendLine(sprintf "  change_set_id: %s" episode.ChangeSetId) |> ignore
+            sb.AppendLine(sprintf "  verification_level: %s" (verificationLevelToken episode.VerificationLevel)) |> ignore
+            sb.AppendLine(sprintf "  qualification: %s" (episodeQualificationStatusToken episode.Qualification.Status)) |> ignore
             stdout.WriteLine(sb.ToString())
             ExitCode.pass
         | None ->

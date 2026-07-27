@@ -450,6 +450,7 @@ let verificationLevelFromEvidence (items: VerificationEvidence list) : Verificat
     elif anyPass then SourceLinked
     else TransitionObserved
 
+/// Result type for successful episode engine execution.
 type EpisodeEngineResult = {
     Summary: RepairEpisodeSummary
     RepairEpisodes: RepairEpisode list
@@ -458,8 +459,30 @@ type EpisodeEngineResult = {
     Verification: VerificationEvidence list
     Outcome: bool
     Declarations: (string * DeclarationValidation) list
-    EvidenceLoadErrors: VerificationEvidenceLoadError list
 }
+
+/// Failure cases for the episode engine.
+/// An EpisodeEngineResult MUST NOT be produced when evidence loading fails.
+[<RequireQualifiedAccess>]
+type EpisodeEngineFailure =
+    /// Evidence loading failed with specific errors.
+    | VerificationEvidenceLoadFailed of VerificationEvidenceLoadError list
+    /// Declaration loading produced issues.
+    | DeclarationLoadFailed of DeclarationIssue list
+    /// Publication failed with atomic outcome details.
+    | PublicationFailed of canonicalByteIdentical: bool * message: string
+    /// Internal engine failure.
+    | InternalFailure of operation: string * message: string
+
+/// Execution outcome of the episode engine.
+/// Separates success (EpisodeEngineResult) from failure (EpisodeEngineFailure).
+/// Required invariant: EpisodeEngineResult exists ⇔ episode computation completed.
+[<RequireQualifiedAccess>]
+type EpisodeEngineExecution =
+    /// Successful completion with result.
+    | Completed of EpisodeEngineResult
+    /// Engine failed with specific failure reason.
+    | Failed of EpisodeEngineFailure
 
 let private buildEpisodeId
     (beforeCap: string)
@@ -487,13 +510,11 @@ let private verificationIdFor
     sha256OfUtf8 (sb.ToString())
 
 /// Internal helper: run episode computation with pre-loaded evidence.
-/// Returns an EpisodeEngineResult with any evidence load errors embedded.
 let private runEpisodesWithEvidence
     (repoRoot: string)
     (options: EpisodeEngineOptions)
     (declarations: (string * DeclarationValidation) list)
     (allEvidence: VerificationEvidence list)
-    (evidenceErrors: VerificationEvidenceLoadError list)
     : EpisodeEngineResult =
 
     let keyCounts =
@@ -685,15 +706,14 @@ let private runEpisodesWithEvidence
       ChangeSets = sortedChangeSets
       Verification = sortedEvidence
       Outcome = outcome.Success
-      Declarations = declarations
-      EvidenceLoadErrors = evidenceErrors }
+      Declarations = declarations }
 
 /// Run the episode engine with fail-closed error propagation.
-/// If evidence loading fails, we return a result with empty episodes and the errors embedded.
+/// If evidence loading fails, return EpisodeEngineExecution.Failed to preserve exact errors.
 let runEpisodeEngine
     (repoRoot: string)
     (options: EpisodeEngineOptions)
-    : EpisodeEngineResult =
+    : EpisodeEngineExecution =
     clearObjectFormatCache ()
 
     let declarations = loadDeclarations repoRoot
@@ -701,44 +721,11 @@ let runEpisodeEngine
     // Load verification evidence using strict loader - FAIL CLOSED on any error
     match loadVerificationEvidenceStrict repoRoot with
     | Result.Error loadErrors ->
-        // Return result with empty episodes and errors embedded
-        let emptySummary = {
-            SchemaVersion = RepairEpisodeSummarySchemaVersion
-            DeclarationsTotal = List.length declarations
-            ValidDeclarations = 0
-            InvalidDeclarations = 0
-            MissingCaptures = 0
-            MissingGitObjects = 0
-            DuplicateEpisodeKeys = 0
-            DuplicateEpisodeIds = 0
-            EpisodesTotal = 0
-            EpisodesQualified = 0
-            EpisodesQualifiedWithLimitations = 0
-            EpisodesAmbiguous = 0
-            EpisodesRejected = 0
-            ChangeSetsTotal = 0
-            TransitionsTotal = 0
-            PersistedSameCount = 0
-            PersistedCountDecreased = 0
-            PersistedCountIncreased = 0
-            EliminatedAfter = 0
-            IntroducedAfter = 0
-            ResolutionCandidates = 0
-            RegressionCandidates = 0
-            UnassessableTransitions = 0
-            VerificationEvidenceTotal = 0
-        }
-        { Summary = emptySummary
-          RepairEpisodes = []
-          Transitions = []
-          ChangeSets = []
-          Verification = []
-          Outcome = false
-          Declarations = declarations
-          EvidenceLoadErrors = loadErrors }
+        // Return failure with exact errors - do NOT produce EpisodeEngineResult
+        EpisodeEngineExecution.Failed (EpisodeEngineFailure.VerificationEvidenceLoadFailed loadErrors)
     | Result.Ok allEvidence ->
         // Evidence loaded successfully, proceed with episode computation
-        runEpisodesWithEvidence repoRoot options declarations allEvidence []
+        EpisodeEngineExecution.Completed (runEpisodesWithEvidence repoRoot options declarations allEvidence)
 
 type VerificationIssue =
     | EpisodeIdMismatch
@@ -750,6 +737,8 @@ type VerificationIssue =
     | ManifestMissing of path: string
     | SummaryMismatch
     | DeclarationInvalid of issues: int
+    | VerificationEvidenceLoadFailed of errors: VerificationEvidenceLoadError list
+    | EpisodeEngineFailed of failure: EpisodeEngineFailure
 
 type VerificationResult = {
     Issues: VerificationIssue list
@@ -761,35 +750,48 @@ let verifyPipeline
     (repoRoot: string)
     (options: EpisodeEngineOptions)
     : VerificationResult =
-    let r = runEpisodeEngine repoRoot options
-    
-    // Check for evidence load errors - fail closed
-    let issuesFromEvidenceErrors =
-        if not (List.isEmpty r.EvidenceLoadErrors) then
-            [ DeclarationInvalid 0 ] // Signal evidence loading failure
-        else
-            []
-    
-    let mutable issues : VerificationIssue list = issuesFromEvidenceErrors
-    let expectedPaths =
-        [ repairEpisodesCanonicalPath
-          diagnosticTransitionsCanonicalPath
-          gitChangeSetsCanonicalPath
-          repairEpisodeSummaryCanonicalPath
-          verificationEvidenceCanonicalPath ]
-    for p in expectedPaths do
-        let full = repoRelative repoRoot p
-        if not (File.Exists full) then
-            issues <- FileMissing p :: issues
-    let invalidDecls =
-        r.Declarations
-        |> List.filter (fun (_, d) -> not (List.isEmpty d.Issues))
-        |> List.length
-    if invalidDecls > 0 then
-        issues <- DeclarationInvalid invalidDecls :: issues
-    { Issues = issues
-      RepairEpisodesValidated = r.RepairEpisodes |> List.length
-      TransitionsValidated = r.Transitions |> List.length }
+    match runEpisodeEngine repoRoot options with
+    | EpisodeEngineExecution.Failed failure ->
+        match failure with
+        | EpisodeEngineFailure.VerificationEvidenceLoadFailed errors ->
+            // Preserve exact verification evidence load errors
+            { Issues = [ VerificationEvidenceLoadFailed errors ]
+              RepairEpisodesValidated = 0
+              TransitionsValidated = 0 }
+        | EpisodeEngineFailure.DeclarationLoadFailed _ ->
+            { Issues = [ EpisodeEngineFailed failure ]
+              RepairEpisodesValidated = 0
+              TransitionsValidated = 0 }
+        | EpisodeEngineFailure.PublicationFailed _ ->
+            { Issues = [ EpisodeEngineFailed failure ]
+              RepairEpisodesValidated = 0
+              TransitionsValidated = 0 }
+        | EpisodeEngineFailure.InternalFailure _ ->
+            { Issues = [ EpisodeEngineFailed failure ]
+              RepairEpisodesValidated = 0
+              TransitionsValidated = 0 }
+    | EpisodeEngineExecution.Completed result ->
+        // Successful completion - perform ordinary corpus verification
+        let mutable issues : VerificationIssue list = []
+        let expectedPaths =
+            [ repairEpisodesCanonicalPath
+              diagnosticTransitionsCanonicalPath
+              gitChangeSetsCanonicalPath
+              repairEpisodeSummaryCanonicalPath
+              verificationEvidenceCanonicalPath ]
+        for p in expectedPaths do
+            let full = repoRelative repoRoot p
+            if not (File.Exists full) then
+                issues <- FileMissing p :: issues
+        let invalidDecls =
+            result.Declarations
+            |> List.filter (fun (_, d) -> not (List.isEmpty d.Issues))
+            |> List.length
+        if invalidDecls > 0 then
+            issues <- DeclarationInvalid invalidDecls :: issues
+        { Issues = issues
+          RepairEpisodesValidated = result.RepairEpisodes |> List.length
+          TransitionsValidated = result.Transitions |> List.length }
 
 let publicChangeSetId
     (beforeTree: string)
