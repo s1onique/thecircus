@@ -484,6 +484,39 @@ type EpisodeEngineExecution =
     /// Engine failed with specific failure reason.
     | Failed of EpisodeEngineFailure
 
+
+// =============================================================================
+// Failure semantics documentation
+// =============================================================================
+//
+// This section documents the current behavior of each EpisodeEngineFailure case
+// and the semantic distinction from EpisodeEngineResult.
+//
+// DeclarationLoadFailed:
+//   CURRENT BEHAVIOR: Invalid declarations produce a Completed result with the
+//   issues recorded in the summary's InvalidDeclarations count. The engine does
+//   NOT currently return EpisodeEngineFailure.DeclarationLoadFailed. Instead,
+//   it skips invalid declarations and continues processing valid ones. This
+//   means the result's Summary.InvalidDeclarations > 0 is the policy signal,
+//   not a separate failure path.
+//
+// PublicationFailed:
+//   CURRENT BEHAVIOR: Publication failures are represented in the Completed
+//   result with Outcome = false. The engine does NOT currently return
+//   EpisodeEngineFailure.PublicationFailed. The Outcome field is the signal,
+//   not a separate failure path. The canonicalByteIdentical and message details
+//   are captured in the EpisodeEngineFailure.PublicationFailed type for future
+//   use when the publication path is made fail-closed.
+//
+// InternalFailure:
+//   CURRENT BEHAVIOR: There is no production path that returns
+//   EpisodeEngineFailure.InternalFailure. The type exists for future error
+//   handling. All current internal errors are either caught and handled
+//   gracefully or propagated as other failure types.
+//
+// VerificationEvidenceLoadFailed:
+//   PRODUCTION BEHAVIOR: Evidence loading failures DO return Failed with
+//   VerificationEvidenceLoadFailed. This is the primary fail-closed path
 let private buildEpisodeId
     (beforeCap: string)
     (afterCap: string)

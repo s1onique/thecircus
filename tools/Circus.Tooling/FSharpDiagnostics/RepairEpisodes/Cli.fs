@@ -126,6 +126,11 @@ let private renderEngineFailure (failure: EpisodeEngineFailure) : string =
         sb.AppendLine(sprintf "error: internal engine failure in %s: %s" op msg) |> ignore
     sb.ToString()
 
+/// Render verification evidence load issues in human-readable form for CLI output.
+/// This handles the VerificationIssue discriminated union case specifically.
+let renderVerificationEvidenceLoadIssues (errors: VerificationEvidenceLoadError list) : string =
+    renderEvidenceLoadErrors errors
+
 let runInventory (repoRoot: string) : int =
     match runEpisodeEngine repoRoot defaultEngineOptions with
     | EpisodeEngineExecution.Failed failure ->
@@ -164,13 +169,46 @@ let runRegenerate (repoRoot: string) : int =
 let runVerify (repoRoot: string) : int =
     let vr = verifyPipeline repoRoot defaultEngineOptions
     let issueCount = List.length vr.Issues
-    stdout.WriteLine
-        (sprintf
-            "fsharp-diagnostics repair-episodes verify: episodes_validated=%d transitions_validated=%d issues=%d"
-            vr.RepairEpisodesValidated
-            vr.TransitionsValidated
-            issueCount)
-    if issueCount = 0 then ExitCode.pass else ExitCode.policyFailure
+    if issueCount > 0 then
+        // Render exact issues to stderr for visibility
+        for issue in vr.Issues do
+            match issue with
+            | VerificationIssue.VerificationEvidenceLoadFailed errors ->
+                stderr.WriteLine(renderVerificationEvidenceLoadIssues errors)
+            | VerificationIssue.EpisodeEngineFailed failure ->
+                stderr.WriteLine(renderEngineFailure failure)
+            | VerificationIssue.FileMissing path ->
+                stderr.WriteLine(sprintf "error: canonical file missing: %s" path)
+            | VerificationIssue.DeclarationInvalid count ->
+                stderr.WriteLine(sprintf "error: %d invalid declarations" count)
+            | VerificationIssue.HashMismatch path ->
+                stderr.WriteLine(sprintf "error: hash mismatch in %s" path)
+            | VerificationIssue.ManifestMissing path ->
+                stderr.WriteLine(sprintf "error: manifest missing: %s" path)
+            | VerificationIssue.SummaryMismatch ->
+                stderr.WriteLine(sprintf "error: summary mismatch")
+            | VerificationIssue.EpisodeIdMismatch ->
+                stderr.WriteLine(sprintf "error: episode ID mismatch")
+            | VerificationIssue.ChangeSetIdMismatch ->
+                stderr.WriteLine(sprintf "error: change set ID mismatch")
+            | VerificationIssue.TransitionCountMismatch ->
+                stderr.WriteLine(sprintf "error: transition count mismatch")
+            | VerificationIssue.TransitionEpisodeIdMismatch ->
+                stderr.WriteLine(sprintf "error: transition episode ID mismatch")
+        stdout.WriteLine
+            (sprintf
+                "fsharp-diagnostics repair-episodes verify: episodes_validated=%d transitions_validated=%d issues=%d"
+                vr.RepairEpisodesValidated
+                vr.TransitionsValidated
+                issueCount)
+        ExitCode.policyFailure
+    else
+        stdout.WriteLine
+            (sprintf
+                "fsharp-diagnostics repair-episodes verify: episodes_validated=%d transitions_validated=%d issues=0"
+                vr.RepairEpisodesValidated
+                vr.TransitionsValidated)
+        ExitCode.pass
 
 let runShow (repoRoot: string) (episodeId: string) : int =
     match runEpisodeEngine repoRoot defaultEngineOptions with
