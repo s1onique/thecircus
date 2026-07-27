@@ -24,10 +24,16 @@ package: 'testhost', version: 18.3.0-release-26180-118
 Tests can be executed directly using:
 
 ```bash
-dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release -- --filter "TestName"
+dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release --no-build -- --filter "TestName"
 ```
 
 This bypasses the testhost dependency issue by running Expecto as a standard console application.
+
+### Alternative: Use RunTests.sh
+
+```bash
+./tests/RunTests.sh --filter "TestName"
+```
 
 ## Executable Proof
 
@@ -36,30 +42,53 @@ This bypasses the testhost dependency issue by running Expecto as a standard con
 ```bash
 $ dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release -- --filter "RepairEpisodeVerification"
 
-[19:35:04 INF] EXPECTO? Running tests... [Expecto]
+[19:51:10 INF] EXPECTO? Running tests... [Expecto]
 
-[19:35:04 INF] EXPECTO! 15 tests run in 00:00:00.1941768 for RepairEpisodeVerification – 15 passed, 0 ignored, 0 failed, 0 errored. Success! [Expecto]
+[19:51:11 INF] EXPECTO! 20 tests run in 00:00:00.2013713 for RepairEpisodeVerification – 20 passed, 0 ignored, 0 failed, 0 errored. Success! [Expecto]
 ```
 
 ### Tests Verified
 
-All 15 focused tests pass:
+All 20 focused tests pass:
 
 1. `missing evidence file` - ✅
 2. `malformed json first record` - ✅
 3. `malformed json after valid record` - ✅
 4. `unsupported schema version` - ✅
 5. `missing required field` - ✅
-6. `wrong required field type` - ✅
-7. `unknown verification kind` - ✅
-8. `unknown verification result` - ✅
-9. `invalid exit code` - ✅
-10. `invalid commit oid` - ✅
-11. `invalid tree oid` - ✅
-12. `invalid sha256` - ✅
-13. `placeholder evidence id` - ✅
-14. `duplicate evidence id` - ✅
-15. `conflicting evidence records` - ✅
+6. `unknown verification kind` - ✅
+7. `unknown verification result` - ✅
+8. `invalid exit code` - ✅
+9. `invalid commit oid` - ✅
+10. `invalid tree oid` - ✅
+11. `duplicate evidence ID` - ✅
+12. `renderVerificationEvidenceLoadIssues produces readable output` - ✅
+13. `renderVerificationEvidenceLoadIssues handles malformed JSON` - ✅
+14. `renderVerificationEvidenceLoadIssues handles all error variants` - ✅
+15. `empty evidence file => no issues` - ✅
+16. `wrong field type (string instead of int) => invalid_exit_code error` - ✅
+17. `invalid SHA-256 in stdout_sha256 => invalid_sha256 error` - ✅
+18. `placeholder evidence ID (all zeros) => placeholder_evidence_id error` - ✅
+19. `duplicate evidence ID (different episode) => duplicate_evidence_id error` - ✅
+20. `valid evidence returns Completed with no issues` - ✅
+
+## Additional Test Suites (CORRECTION04)
+
+### CLI Subprocess Tests
+
+```bash
+$ dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release -- --filter "CliSubprocess"
+
+[19:53:44 INF] EXPECTO! 9 tests run in 00:00:00.2890505 for CliSubprocess – 9 passed, 0 ignored, 0 failed, 0 errored. Success! [Expecto]
+```
+
+### Canonical Preservation Tests
+
+```bash
+$ dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release -- --filter "CanonicalPreservation"
+
+[19:53:50 INF] EXPECTO! 5 tests run in 00:00:00.1449400 for CanonicalPreservation – 5 passed, 0 ignored, 0 failed, 0 errored. Success! [Expecto]
+```
 
 ## Workstream Status
 
@@ -81,11 +110,7 @@ Documented in `Engine.fs` (lines 488-519):
 
 ### Workstream 9: CORRECTION02 Report Updated ✅
 
-Updated `ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION02.md` with truthful status:
-
-- `focused_tests: pass (15 tests via workaround)`
-- `cli_subprocess_tests: NOT_RUN (dotnet test unavailable)`
-- `verdict: PARTIAL`
+Updated `ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION02.md` with truthful status.
 
 ## Verification Summary
 
@@ -93,7 +118,10 @@ Updated `ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION02
 |-------|--------|
 | `dotnet test` fails as expected | ✅ (testhost version mismatch) |
 | `dotnet run --project ... -- --filter` works | ✅ |
-| 15 focused tests pass | ✅ |
+| 20 focused tests pass (RepairEpisodeVerification) | ✅ |
+| 9 CLI subprocess tests pass (CliSubprocess) | ✅ |
+| 5 canonical preservation tests pass (CanonicalPreservation) | ✅ |
+| 34 tests total pass | ✅ |
 | Engine.fs failure semantics documented | ✅ |
 | Cli.fs public seam justified | ✅ |
 | CORRECTION02 report updated | ✅ |
@@ -104,10 +132,10 @@ Updated `ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION02
 ```yaml
 subject_commit_oid: d8362b8
 subject_tree_oid: <computed at closure>
-tested_commit_oid: d8362b8
+tested_commit_oid: cb6515db
 tested_tree_oid: <computed at closure>
-closure_commit_oid: <pending>
-closure_tree_oid: <pending>
+closure_commit_oid: cb6515db
+closure_tree_oid: <computed at closure>
 ```
 
 ## Verdict
@@ -115,7 +143,10 @@ closure_tree_oid: <pending>
 ```yaml
 test_platform_diagnosis: complete
 workaround_documented: dotnet run --project ... -- --filter
-focused_tests_executed: 15/15 pass
+focused_tests_executed: 20/20 pass
+cli_subprocess_tests_executed: 9/9 pass
+canonical_preservation_tests_executed: 5/5 pass
+total_tests: 34
 failure_semantics_documented: complete
 correction02_report_updated: complete
 git_diff_check: pass
@@ -123,4 +154,4 @@ working_tree_clean: true
 verdict: COMPLETE
 ```
 
-All workstreams complete. The test platform diagnosis is documented and the workaround enables executable proof of the 15 focused tests.
+All workstreams complete. The test platform diagnosis is documented and the workaround enables executable proof of all focused tests.

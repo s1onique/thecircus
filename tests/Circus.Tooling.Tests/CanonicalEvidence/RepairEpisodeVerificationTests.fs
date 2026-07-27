@@ -372,4 +372,110 @@ let tests =
               finally
                   cleanup dir
           }
+
+          // Test 16: wrong field type (verification_exit_code as string instead of number)
+          // Note: The parser uses lookupInt which returns None for wrong type, producing InvalidExitCode
+          test "wrong field type (string instead of int) => invalid_exit_code error" {
+              let dir = tempDir "verify-wrong-field-type"
+              try
+                  createMinimalStructure dir
+                  let bad = validEvidenceRecord validEvidenceId "ep-001"
+                              |> fun s -> s.Replace("\"verification_exit_code\":0", "\"verification_exit_code\":\"zero\"")
+                  writeEvidence dir [ bad ]
+                  let vr = runVerify dir
+                  Expect.isTrue (List.length vr.Issues > 0) "should have issues"
+                  match vr.Issues with
+                  | [ VerificationIssue.VerificationEvidenceLoadFailed errors ] ->
+                      match errors with
+                      | [ VerificationEvidenceLoadError.ParseError e ] ->
+                          match e with
+                          | VerificationEvidenceParseError.InvalidExitCode _ -> ()
+                          | _ -> failwithf "expected InvalidExitCode error, got %A" e
+                      | _ -> failwithf "expected ParseError, got %A" errors
+                  | _ -> failwithf "expected VerificationEvidenceLoadFailed, got %A" vr.Issues
+              finally
+                  cleanup dir
+          }
+
+          // Test 17: invalid SHA-256 in stdout_sha256 field
+          test "invalid SHA-256 in stdout_sha256 => invalid_sha256 error" {
+              let dir = tempDir "verify-invalid-sha256"
+              try
+                  createMinimalStructure dir
+                  let bad = validEvidenceRecord validEvidenceId "ep-001"
+                              |> fun s -> s.Replace("}", ",\"stdout_sha256\":\"not-a-valid-sha256-hash-value-for-test\"}")
+                  writeEvidence dir [ bad ]
+                  let vr = runVerify dir
+                  Expect.isTrue (List.length vr.Issues > 0) "should have issues"
+                  match vr.Issues with
+                  | [ VerificationIssue.VerificationEvidenceLoadFailed errors ] ->
+                      let hasInvalidSha = errors |> List.exists (function
+                          | VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.InvalidSha256 _) -> true
+                          | _ -> false)
+                      Expect.isTrue hasInvalidSha "should have InvalidSha256 error"
+                  | _ -> failwithf "expected VerificationEvidenceLoadFailed, got %A" vr.Issues
+              finally
+                  cleanup dir
+          }
+
+          // Test 18: placeholder evidence ID (all zeros)
+          test "placeholder evidence ID (all zeros) => placeholder_evidence_id error" {
+              let dir = tempDir "verify-placeholder-evidence-id"
+              try
+                  createMinimalStructure dir
+                  let placeholderId = String.replicate 64 "0"
+                  let bad = validEvidenceRecord placeholderId "ep-001"
+                  writeEvidence dir [ bad ]
+                  let vr = runVerify dir
+                  Expect.isTrue (List.length vr.Issues > 0) "should have issues"
+                  match vr.Issues with
+                  | [ VerificationIssue.VerificationEvidenceLoadFailed errors ] ->
+                      match errors with
+                      | [ VerificationEvidenceLoadError.ParseError e ] ->
+                          match e with
+                          | VerificationEvidenceParseError.PlaceholderEvidenceId _ -> ()
+                          | _ -> failwithf "expected PlaceholderEvidenceId error, got %A" e
+                      | _ -> failwithf "expected ParseError, got %A" errors
+                  | _ -> failwithf "expected VerificationEvidenceLoadFailed, got %A" vr.Issues
+              finally
+                  cleanup dir
+          }
+
+          // Test 19: duplicate evidence ID (same ID, different episode) is detected as DuplicateEvidenceId
+          // Note: The current implementation detects duplicate IDs without content comparison
+          test "duplicate evidence ID (different episode) => duplicate_evidence_id error" {
+              let dir = tempDir "verify-duplicate-different-episode"
+              try
+                  createMinimalStructure dir
+                  // Two records with same evidence ID but different episode IDs
+                  let rec1 = validEvidenceRecord validEvidenceId "ep-001"
+                  let rec2 = validEvidenceRecord validEvidenceId "ep-002"
+                  writeEvidence dir [ rec1; rec2 ]
+                  let vr = runVerify dir
+                  Expect.isTrue (List.length vr.Issues > 0) "should have issues"
+                  match vr.Issues with
+                  | [ VerificationIssue.VerificationEvidenceLoadFailed errors ] ->
+                      match errors with
+                      | [ VerificationEvidenceLoadError.DuplicateEvidenceId _ ] -> ()
+                      | _ -> failwithf "expected DuplicateEvidenceId error, got %A" errors
+                  | _ -> failwithf "expected VerificationEvidenceLoadFailed, got %A" vr.Issues
+              finally
+                  cleanup dir
+          }
+
+          // Test 20: valid evidence returns Completed with no issues
+          test "valid evidence returns Completed with no issues" {
+              let dir = tempDir "verify-valid-evidence"
+              try
+                  createMinimalStructure dir
+                  let valid = validEvidenceRecord validEvidenceId "ep-001"
+                  writeEvidence dir [ valid ]
+                  let vr = runVerify dir
+                  // Valid evidence should have no issues (empty file or no evidence is also valid)
+                  // Since we have evidence that parses correctly, empty evidence file test covered above
+                  // This test ensures we can load valid evidence without issues
+                  Expect.equal (List.length vr.Issues) 0 "valid evidence should have no issues"
+              finally
+                  cleanup dir
+          }
         ]
