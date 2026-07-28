@@ -1,14 +1,39 @@
 module Circus.Tooling.Tests.CanonicalEvidence.ClosureEvidenceTests
 
 // =============================================================================
-// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION16-CLOSURE-EVIDENCE-ONLY01
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION17-HERMETIC-CLOSURE-PROOF01
 //
-// Workstream 1: Git-backed fixture with matching evidence
-// Workstream 2: Strict resolveCommitGeometryWithSubject validation
-// Workstream 3: Bind authority consumers
-// Workstream 4: Geometry tests
-// Workstream 5-6: Evidence generation
-// Workstream 7: Correct CORRECTION15 report
+// Hermetic closure proof. Repair hygiene, build authoritative consumption fixture,
+// detect repository storage format.
+//
+// Workstream 1: Repair hygiene
+//   - Remove trailing whitespace from ClosureEvidenceTests.fs
+//   - Run git diff --check
+//
+// Workstream 2: Build authoritative consumption fixture
+//   - Create hermetic Git repository with:
+//     * real before and after commits with exact trees
+//     * valid capture manifests
+//     * one valid episode declaration
+//     * one verification-evidence record with matching EpisodeId
+//   - Assert: evidence file written correctly, evidence loads without parse errors
+//
+// Workstream 3: Detect repository storage format
+//   - Use git rev-parse --show-object-format=storage
+//   - Map: sha1 → 40 chars, sha256 → 64 chars
+//
+// Workstream 4: Hermetic geometry tests
+//   - Create temp Git repo with real commit, tree, blob
+//   - Test: full commit OID → accepted, abbreviated → rejected, HEAD → rejected,
+//           branch/tag → rejected, blob → rejected
+//
+// Workstream 5: Bind authority consumer
+//   - Evidence producer must call resolveCommitGeometryWithSubjectStrict
+//   - Remove implicit-HEAD geometry from authority paths
+//
+// Workstream 6-8: Generate records and correct reports
+//   - Generate 5 suite records, compute S/E/C OIDs via git
+//   - Reclassify CORRECTION15 and CORRECTION16 as PARTIAL_CHECKPOINT
 // =============================================================================
 
 open System
@@ -21,6 +46,35 @@ open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Paths
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Cli
 open Circus.Tooling.FSharpDiagnostics.Hashing
+
+// -----------------------------------------------------------------------------
+// Workstream 3: Git object format detection
+// -----------------------------------------------------------------------------
+
+/// Detect repository storage format using git rev-parse --show-object-format=storage
+/// Maps: sha1 → 40 chars, sha256 → 64 chars
+let detectGitObjectFormat (repoRoot: string) : GitObjectFormat =
+    let psi = System.Diagnostics.ProcessStartInfo()
+    psi.FileName <- "git"
+    psi.Arguments <- "rev-parse --show-object-format=storage"
+    psi.WorkingDirectory <- repoRoot
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    use proc = System.Diagnostics.Process.Start(psi)
+    let output = proc.StandardOutput.ReadToEnd().Trim()
+    proc.WaitForExit() |> ignore
+    match output with
+    | "sha1" -> Sha1
+    | "sha256" -> Sha256
+    | _ -> Sha1 // default fallback
+
+/// Get the expected OID width for the repository's object format
+let expectedOidWidth (repoRoot: string) : int =
+    match detectGitObjectFormat repoRoot with
+    | Sha1 -> 40
+    | Sha256 -> 64
 
 // -----------------------------------------------------------------------------
 // Test helpers
