@@ -283,6 +283,37 @@ let resolveCommitGeometryWithSubject (repoRoot: string) (subjectCommitOid: strin
         | Result.Error other ->
             Result.Error(CommitGeometryError.GitFailure(sprintf "git error: %A" other))
 
+
+/// Resolve commit geometry with strict validation of subject commit OID.
+/// Workstream 2: Requires complete object ID - rejects empty, abbreviated, symbolic refs, etc.
+/// Returns Result<CommitGeometry, CommitGeometryError>.
+let resolveCommitGeometryWithSubjectStrict (repoRoot: string) (subjectCommitOid: string) : Result<CommitGeometry, CommitGeometryError> =
+    // Step 0: Validate input is not empty
+    if String.IsNullOrWhiteSpace subjectCommitOid then
+        Result.Error(CommitGeometryError.GitFailure "subject commit OID must not be empty")
+    else
+        // Validate it's not a symbolic ref (branch, tag, HEAD, etc.)
+        let symbolicRefs = [ "HEAD"; "master"; "main"; "develop"; "origin/master" ]
+        if List.exists (fun ref -> subjectCommitOid.Equals(ref, StringComparison.OrdinalIgnoreCase)) symbolicRefs then
+            Result.Error(CommitGeometryError.GitFailure (sprintf "subject must be a commit OID, not a symbolic ref: %s" subjectCommitOid))
+        else
+            // Validate length is exactly 40 (SHA-1) or 64 (SHA-256) characters
+            let len = subjectCommitOid.Length
+            if len <> 40 && len <> 64 then
+                Result.Error(CommitGeometryError.GitFailure (sprintf "subject commit OID must be exactly 40 (SHA-1) or 64 (SHA-256) hex chars, got %d: %s" len subjectCommitOid))
+            else
+                // Validate all characters are lowercase hexadecimal
+                let allHex = subjectCommitOid |> Seq.forall (fun c -> (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))
+                if not allHex then
+                    Result.Error(CommitGeometryError.GitFailure (sprintf "subject commit OID must contain only lowercase hexadecimal characters: %s" subjectCommitOid))
+                else
+                    // Check for abbreviated ID (could be any length from 4 to 39)
+                    if len < 40 then
+                        Result.Error(CommitGeometryError.GitFailure (sprintf "abbreviated commit OID not allowed, must be full 40 or 64 chars: %s" subjectCommitOid))
+                    else
+                        // Now call the existing function for actual Git validation (existence, tree resolution, etc.)
+                        resolveCommitGeometryWithSubject repoRoot subjectCommitOid
+
 /// Strict regex patterns for validation.
 open System.Text.RegularExpressions
 

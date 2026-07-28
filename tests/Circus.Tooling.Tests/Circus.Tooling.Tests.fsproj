@@ -68,6 +68,7 @@
     <Compile Include="CanonicalEvidence/CliSubprocessTests.fs" />
     <Compile Include="CanonicalEvidence/CanonicalPreservationTests.fs" />
     <Compile Include="CanonicalEvidence/PerSuiteEvidenceTests.fs" />
+    <Compile Include="CanonicalEvidence/ClosureEvidenceTests.fs" />
 
     <!-- Dedicated executable authority suites for CORRECTION 03. -->
     <Compile Include="ScopeAuthorityTests.fs" />
