@@ -486,23 +486,34 @@ let loadVerificationEvidenceStrict (repoRoot: string) : Result<LocatedVerificati
                 let idGroups = evidenceWithLines |> List.groupBy (fun (eid, _, _) -> eid)
 
                 // Separate true duplicates (same ID, same content) from conflicts (same ID, different content)
+                // Workstream 3: Compare ALL entries in each duplicate group
                 let mutable conflictErrors = []
                 let mutable duplicateErrors = []
                 for (id, entries) in idGroups do
-                    match entries with
-                    | (id, line1, r1) :: (id2, line2, r2) :: _ ->
-                        // Multiple entries with same ID - check if content differs
-                        // Use canonical semantic equality for conflict detection
-                        if not (verificationEvidenceSemanticallyEqual r1 r2) then
-                            // Conflicting content for same ID
-                            conflictErrors <- ConflictingEvidenceRecord(path, id, line1, line2) :: conflictErrors
-                        else
-                            // Same ID, same content - true duplicate
+                    // Compare ALL entries in the group against the first entry
+                    // If any entry differs from the first, it's a conflict
+                    // If all entries are identical, it's a duplicate
+                    let firstEntry = List.tryHead entries
+                    match firstEntry with
+                    | Some (firstId, firstLine, firstRecord) ->
+                        // Check if any entry differs from the first
+                        let hasConflict = entries |> List.exists (fun (_, _, otherRecord) ->
+                            not (verificationEvidenceSemanticallyEqual firstRecord otherRecord))
+                        if hasConflict then
+                            // Find the first conflicting entry for error reporting
+                            let firstConflict = entries |> List.tryFind (fun (_, _, otherRecord) ->
+                                not (verificationEvidenceSemanticallyEqual firstRecord otherRecord))
+                            match firstConflict with
+                            | Some (_, conflictLine, _) ->
+                                conflictErrors <- ConflictingEvidenceRecord(path, id, firstLine, conflictLine) :: conflictErrors
+                            | None -> ()
+                        else if List.length entries > 1 then
+                            // All identical - true duplicate
                             let lines = entries |> List.map (fun (_, l, _) -> l)
                             let minLine = lines |> List.min
                             let maxLine = lines |> List.max
                             duplicateErrors <- DuplicateEvidenceId(path, id, minLine, maxLine) :: duplicateErrors
-                    | _ -> ()
+                    | None -> ()
 
                 // Report conflicts first (they are more severe)
                 if not (List.isEmpty conflictErrors) then
