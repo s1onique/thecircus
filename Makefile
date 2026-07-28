@@ -430,3 +430,20 @@ verify-github-no-force-push:
 publication-gate: build-source-policy
 	$(CIRCUS_TOOLING) no-force-push verify
 	$(MAKE) verify-github-no-force-push
+
+# =============================================================================
+# Tooling target inventory (ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION07)
+# =============================================================================
+
+.PHONY: test-tooling-targets
+test-tooling-targets:
+	@echo "Checking tooling targets exist..."
+	@for target in gate-fsharp-repair-episodes no-force-push test-no-force-push install-git-safety-hooks verify-github-no-force-push publication-gate test-tooling; do \
+		if grep -qE "^$$target:" Makefile; then \
+			echo "  [OK] $$target"; \
+		else \
+			echo "  [MISSING] $$target"; \
+			exit 1; \
+		fi; \
+	done
+	@echo "All tooling targets present."

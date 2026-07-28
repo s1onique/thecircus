@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "suite": "FSharpDiagnostics.RepairEpisodes",
+  "command": "./tests/RunTests.sh --filter RepairEpisodeVerification",
+  "exit_code": 0,
+  "tests_total": 23,
+  "tests_passed": 23,
+  "tests_ignored": 0,
+  "tests_failed": 0,
+  "tests_errored": 0,
+  "duration_ms": 216,
+  "tested_commit_oid": "c52d95158e2c464cb9283582f2066b0a37b17b66",
+  "tested_tree_oid": "f52b62d6cfe3eba8dd91bba40c9dda5d4e623b40",
+  "working_tree_clean": true,
+  "artifacts": {
+    "Circus.Tooling.Tests.dll": "7e83e2188a0bcd1a8a077228699ae2abf92c6566302112b65104079f692217e1",
+    "circus-tooling.dll": "5dc32c4422eeba95cbd1f146f0783c87a3d3ca5240ce2d12247ad198b03a32b2"
+  },
+  "tooling_targets_verified": [
+    "gate-fsharp-repair-episodes",
+    "no-force-push",
+    "test-no-force-push",
+    "install-git-safety-hooks",
+    "verify-github-no-force-push",
+    "publication-gate",
+    "test-tooling"
+  ],
+  "cli_subprocess_tests": {
+    "tests_total": 11,
+    "tests_passed": 11,
+    "duration_ms": 399
+  },
+  "canonical_preservation_tests": {
+    "tests_total": 7,
+    "tests_passed": 7,
+    "duration_ms": 330
+  },
+  "production_paths_verified": {
+    "verification_evidence": "factory/evidence/fsharp-diagnostics/corpus/normalized/verification-evidence-v1.jsonl",
+    "repair_episodes": "factory/evidence/fsharp-diagnostics/corpus/normalized/repair-episodes-v1.jsonl",
+    "diagnostic_transitions": "factory/evidence/fsharp-diagnostics/corpus/normalized/diagnostic-transitions-v1.jsonl",
+    "git_change_sets": "factory/evidence/fsharp-diagnostics/corpus/normalized/git-change-sets-v1.jsonl",
+    "repair_episode_summary": "factory/evidence/fsharp-diagnostics/corpus/normalized/repair-episode-summary-v1.jsonl",
+    "artifacts": "factory/evidence/fsharp-diagnostics/corpus/normalized/artifacts-v1.jsonl"
+  },
+  "bounded_process_assertions_verified": {
+    "NonZeroExit": true,
+    "TimedOut": true,
+    "ExitCode_0_on_success": true
+  },
+  "empty_evidence_semantics": {
+    "policy": "accepted",
+    "empty_file_valid": true,
+    "assertion": "result = Ok { ExitCode = 0; ... }"
+  },
+  "wrong_type_semantics": {
+    "wrong_json_type_produces": "MissingField",
+    "invalid_integer_value_produces": "InvalidExitCode"
+  },
+  "duplicate_conflict_distinction": {
+    "DuplicateEvidenceId": "identical IDs regardless of content",
+    "ConflictingEvidenceRecord": "type exists but not produced by current parser"
+  },
+  "canonical_preservation_verified": {
+    "regeneration_preserves_all_files": true,
+    "verify_failure_preserves_files": true,
+    "files_tested": 6
+  }
+}
