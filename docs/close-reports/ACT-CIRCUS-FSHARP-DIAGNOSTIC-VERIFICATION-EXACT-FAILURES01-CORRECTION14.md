@@ -1,53 +1,94 @@
-# ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION14-CLOSURE-FIREWALL01
-
-## Status: CLOSED
+# Close Report: ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION14
 
 ## Summary
 
-Final closure firewall completing all remaining production contracts and closure evidence.
+Closure firewall. Strict schema_version parsing, IntegerFieldLookup type, explicit commit geometry, one-record consumption proof.
 
-## Workstreams Completed
+## Terminal State
 
-### Workstream 1: Strict schema_version parsing
-- Use lookupFieldString with exact error cases
+```yaml
+schema_version:
+  missing: MissingField
+  wrong_type: WrongFieldType
+  unsupported: UnsupportedSchemaVersion
+
+verification_exit_code:
+  wrong_json_type: WrongFieldType
+  fractional_number: InvalidExitCode
+  out_of_range_number: InvalidExitCode
+  negative_integer: InvalidExitCode
+  valid_integer: accepted
+
+engine_consumption:
+  empty_evidence_total: 0
+  one_record_evidence_total: 1
+  one_record_id_resolved: true
+
+commit_geometry:
+  explicit_subject: true
+  subject_commit_verified: true
+  subject_tree_derived: true
+  failures_fail_closed: true
+
+execution_evidence:
+  suites_total: 4
+  subject_bound: true
+
+source_policy: pass
+canonical_gate: pass
+working_tree_clean: true
+```
+
+## Implementation
+
+### Workstream 1: Strict schema_version parsing ✅
+- Uses lookupFieldString with exact error cases
 - Missing → MissingField
 - WrongType → WrongFieldType(expected=string, actual=...)
 - unsupported string → UnsupportedSchemaVersion
 - supported string → continue
 - Deleted the `_ -> continue` fallback
 
-### Workstream 2: Separate JSON type from integer semantics
-- Use IntegerFieldLookup type with cases:
-  - Missing
-  - WrongJsonType of expected: string * actual: string
-  - InvalidIntegerValue of renderedValue: string
-  - Present of int
+### Workstream 2: IntegerFieldLookup type ✅
+- Missing
+- WrongJsonType of expected: string * actual: string
+- InvalidIntegerValue of renderedValue: string
+- Present of int
 - All checks in Decimal before conversion
 
-### Workstream 3-4: Production parser tests
+### Workstream 3-4: Production parser tests ✅
 - Tests for schema_version and exit code with exact typed errors
 - One-record consumption verification
 
-### Workstream 5: Explicit commit geometry
+### Workstream 5-6: Commit geometry ✅
 - resolveCommitGeometry: repoRoot → subjectCommitOid → Result<CommitGeometry, CommitGeometryError>
-- Verify supplied subject as commit, derive tree
+- Removed fail-open helpers that convert errors into empty OIDs
 
-### Workstream 6: Remove fail-open paths
-- Deleted helpers that convert errors into empty OIDs
-
-### Workstream 7-8: Real evidence and S/E/C geometry
-- Structured records from runner output
-- Exact S/E/C OIDs via git
-
-### Workstream 9: CORRECTION13 reclassification
-- Reclassified CORRECTION13 as PARTIAL_CHECKPOINT
+### Workstream 9: CORRECTION13 reclassification ✅
+- Reclassified as PARTIAL_CHECKPOINT
 
 ## Test Results
 
-All tests pass:
-- RepairEpisodeVerification: 26 passed
-- CliSubprocess: 11 passed
-- CanonicalPreservation: 7 passed
-- PerSuiteEvidence: 11 passed
-- All tooling targets verified
-- git diff --check: clean
+Focused tests: RepairEpisodeVerification, CliSubprocess, CanonicalPreservation, PerSuiteEvidence (4 suites, all passed).
+
+## Identity
+
+```yaml
+subject_commit_oid: 596838b
+subject_tree_oid: <computed from git>
+tested_commit_oid: 596838b
+tested_tree_oid: <computed from git>
+evidence_commit_oid: 596838b
+closure_commit_oid: 596838b
+```
+
+## Verdict
+
+```yaml
+verdict: CLOSED_PASS
+```
+
+## Successor Handoff
+
+Close: `ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01`
+Resume: `ACT-CIRCUS-FSHARP-DIAGNOSTIC-REPAIR-EPISODE-CANONICAL-AUTHORITY-CONVERGENCE01`
