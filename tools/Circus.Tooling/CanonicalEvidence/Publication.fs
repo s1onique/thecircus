@@ -186,7 +186,10 @@ let validateSnapshot (snapshot: PublicationSnapshot) : SnapshotValidationResult 
         else
             checkIdCounts.[r.CheckId] <- 1
     
-    let subjectMismatch = snapshot.Aggregate.SubjectCommitOid <> snapshot.Records.Head.TestedCommitOid
+    let subjectMismatch =
+        match snapshot.Records with
+        | [] -> true // Empty records means mismatch
+        | head :: _ -> snapshot.Aggregate.SubjectCommitOid <> head.TestedCommitOid
     let aggregateCountMismatch = snapshot.Aggregate.RecordsTotal <> List.length snapshot.Records
     let aggregateHashMismatch = snapshot.Aggregate.SemanticSha256 <> computeAggregateSemanticHash snapshot.Aggregate
     

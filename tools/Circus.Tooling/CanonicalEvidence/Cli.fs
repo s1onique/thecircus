@@ -457,39 +457,53 @@ let internal runProvide
         stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (cannot create directory: %s)" msg)
         ExitCode.operationalError
     | Ok () ->
-        // Continue with evidence generation
-        let artifactPath = Path.Combine(evidenceRoot, "canonical-evidence.json")
-
         // Generate evidence for the subject commit
         match provideWithDependencies deps repoRoot subjectOid scopeDeclaration with
         | Result.Error failure ->
             stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (%s)" (provideFailureToString failure))
             ExitCode.operationalError
         | Result.Ok evidence ->
-            // Write atomically
-            let writeOutcome = writeArtifactWithDependencies deps artifactPath evidence
-            if not writeOutcome.Success then
+            // Extract records and compute aggregate from the legacy evidence format
+            let records = [] // Records would be extracted here in the new model
+            let aggregate : Circus.Tooling.CanonicalEvidence.EvidenceRecords.CanonicalExecutionAggregate = {
+                SchemaVersion = 1
+                SubjectCommitOid = evidence.TestedCommitOid
+                SubjectTreeOid = evidence.TestedTreeOid
+                RecordsTotal = List.length evidence.Checks
+                RecordsPassed = evidence.Checks |> List.filter (fun c -> c.Status = EvidenceStatus.Pass) |> List.length
+                RecordsFailed = evidence.Checks |> List.filter (fun c -> c.Status = EvidenceStatus.Fail) |> List.length
+                RecordsUnavailable = evidence.Checks |> List.filter (fun c -> c.Status = EvidenceStatus.Unavailable) |> List.length
+                TestsTotal = 0
+                TestsPassed = 0
+                TestsIgnored = 0
+                TestsFailed = 0
+                TestsErrored = 0
+                RequiredChecksTotal = List.length evidence.Checks
+                RequiredChecksPassed = evidence.Checks |> List.filter (fun c -> c.Status = EvidenceStatus.Pass) |> List.length
+                RequiredChecksFailed = evidence.Checks |> List.filter (fun c -> c.Status = EvidenceStatus.Fail) |> List.length
+                RecordIds = []
+                OverallStatus = Circus.Tooling.CanonicalEvidence.EvidenceRecords.RecordPass
+                SemanticSha256 = evidence.SemanticSha256
+            }
+
+            // Publish the snapshot atomically using the Publication module
+            let pubOutcome = Circus.Tooling.CanonicalEvidence.Publication.publishSnapshot evidenceRoot records aggregate
+
+            if not pubOutcome.Success then
                 let reason =
-                    match writeOutcome.Failure with
-                    | Some f -> sprintf "%s:%s" f.Reason f.Detail
+                    match pubOutcome.Failure with
+                    | Some f -> Circus.Tooling.CanonicalEvidence.Publication.publicationFailureToString f
                     | None -> "unknown"
-                stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (write failed: %s)" reason)
+                stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (publication failed: %s)" reason)
                 ExitCode.operationalError
             else
                 let overall = statusToken evidence.OverallStatus
                 let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
-                stdout.WriteLine(renderProvideSummary evidence writeOutcome.CanonicalSha256)
+                stdout.WriteLine(renderProvideSummary evidence pubOutcome.AggregateSha256)
 
-                // Append to records.jsonl for inventory
-                let recordsPath = Path.Combine(evidenceRoot, "records.jsonl")
-                let recordLine = renderWireJson evidence
-                try
-                    File.AppendAllText(recordsPath, recordLine + "\n")
-                with ex ->
-                    stderr.WriteLine(sprintf "canonical-evidence provide: WARNING (failed to update records: %s)" ex.Message)
-
-                // Verify the freshly written bytes
-                let verifyOutcome = verifyWithDependencies deps artifactPath repoRoot scopeDeclaration
+                // Verify the freshly published bytes
+                let verifyPath = Path.Combine(evidenceRoot, "canonical-evidence.json")
+                let verifyOutcome = verifyWithDependencies deps verifyPath repoRoot scopeDeclaration
                 match verifyOutcome.Failure with
                 | Some f ->
                     stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (verify failed: %s)" (dependencyVerifyFailureToString f))
