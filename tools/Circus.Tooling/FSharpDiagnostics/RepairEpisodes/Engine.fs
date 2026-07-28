@@ -64,6 +64,98 @@ let private lookupInt (fields: (string * JsonValue) list) (name: string) : int o
             | _ -> None
         else None)
 
+
+// =============================================================================
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION08
+// Workstream 2: Type-aware JSON lookup with FieldLookup discriminated union
+// Workstream 11: Commit geometry
+// =============================================================================
+
+/// Typed field lookup result for JSON parsing.
+/// Distinguishes between absent field, wrong JSON type, and valid value.
+type FieldLookup<'value> =
+    | Missing
+    | WrongType of actualType: string
+    | Present of 'value
+
+/// Get the JSON type name for error reporting.
+let private jsonTypeName (v: JsonValue) : string =
+    match v with
+    | JsonString _ -> "string"
+    | JsonNumber _ -> "number"
+    | JsonBool _ -> "boolean"
+    | JsonNull -> "null"
+    | JsonArray _ -> "array"
+    | JsonObject _ -> "object"
+
+/// Type-aware string field lookup that distinguishes Missing vs WrongType.
+let private lookupFieldString (fields: (string * JsonValue) list) (name: string) : FieldLookup<string> =
+    match List.tryFind (fun (k, _) -> k = name) fields with
+    | None -> Missing
+    | Some (_, v) ->
+        match v with
+        | JsonString s -> Present s
+        | _ -> WrongType (jsonTypeName v)
+
+/// Type-aware optional string field lookup.
+let private lookupFieldOptString (fields: (string * JsonValue) list) (name: string) : FieldLookup<string option> =
+    match List.tryFind (fun (k, _) -> k = name) fields with
+    | None -> Missing
+    | Some (_, v) ->
+        match v with
+        | JsonNull -> Present None
+        | JsonString s -> Present (Some s)
+        | _ -> WrongType (jsonTypeName v)
+
+/// Type-aware integer field lookup.
+let private lookupFieldInt (fields: (string * JsonValue) list) (name: string) : FieldLookup<int> =
+    match List.tryFind (fun (k, _) -> k = name) fields with
+    | None -> Missing
+    | Some (_, v) ->
+        match v with
+        | JsonNumber n -> Present (int n)
+        | _ -> WrongType (jsonTypeName v)
+
+/// Convert a FieldLookup result to a verification parse error if the field is absent or wrong type.
+let private fieldToError (source: string) (lineNumber: int) (fieldName: string) (lookup: FieldLookup<'a>) : VerificationEvidenceParseError option =
+    match lookup with
+    | Missing -> Some (VerificationEvidenceParseError.MissingField(source, lineNumber, fieldName))
+    | WrongType actualType -> Some (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, fieldName, actualType))
+    | Present _ -> None
+
+// =============================================================================
+// Commit geometry for Workstream 11
+// =============================================================================
+
+/// Commit geometry records the Git OID bindings for a verification run.
+type CommitGeometry = {
+    /// The commit being verified (subject of the repair episode).
+    SubjectCommitOid: string
+    /// The tree OID of the subject commit.
+    SubjectTreeOid: string
+    /// The commit that recorded the evidence (may differ from subject).
+    EvidenceCommitOid: string option
+    /// The commit that recorded the canonical closure (final artifact).
+    ClosureCommitOid: string option
+}
+
+/// Resolve commit geometry from a repository.
+let resolveCommitGeometry (repoRoot: string) : CommitGeometry =
+    let subjectCommit =
+        match runGitTyped repoRoot defaultGitRunOptions [ "rev-parse"; "--verify"; "--end-of-options"; "HEAD^{commit}" ] with
+        | Ok run when run.ExitCode = 0 -> Some (run.Stdout.Trim())
+        | _ -> None
+
+    let subjectTree =
+        match runGitTyped repoRoot defaultGitRunOptions [ "rev-parse"; "--verify"; "--end-of-options"; "HEAD^{tree}" ] with
+        | Ok run when run.ExitCode = 0 -> Some (run.Stdout.Trim())
+        | _ -> None
+
+    { SubjectCommitOid = defaultArg subjectCommit ""
+      SubjectTreeOid = defaultArg subjectTree ""
+      EvidenceCommitOid = None
+      ClosureCommitOid = None }
+
 /// Strict regex patterns for validation.
 open System.Text.RegularExpressions
 
@@ -202,23 +294,49 @@ let loadVerificationEvidenceStrict (repoRoot: string) : Result<VerificationEvide
                         | Result.Ok v -> Result.Ok (Some v)
                         | Result.Error e -> Result.Error e)
                 |> Array.toList
-            
+
             // Separate successes and errors
             let errors = results |> List.choose (function Result.Error e -> Some e | Result.Ok _ -> None)
             if not (List.isEmpty errors) then
                 Result.Error (errors |> List.map ParseError)
             else
                 let records = results |> List.choose (function Result.Ok v -> v | _ -> None)
-                
-                // Check for duplicate IDs
-                let idGroups = records |> List.groupBy (fun r -> r.EvidenceId)
-                let duplicates =
-                    idGroups
-                    |> List.filter (fun (_, rs) -> List.length rs > 1)
-                    |> List.map (fun (id, _) -> DuplicateEvidenceId(path, id, 0, 0))
-                
-                if not (List.isEmpty duplicates) then
-                    Result.Error duplicates
+
+                // Check for duplicate and conflicting evidence records
+                // Track both: (evidenceId * lineNumber * record) to distinguish duplicates from conflicts
+                let evidenceWithLines =
+                    records
+                    |> List.mapi (fun idx r -> r.EvidenceId, (idx + 1), r)
+                let idGroups = evidenceWithLines |> List.groupBy (fun (eid, _, _) -> eid)
+
+                // Separate true duplicates (same ID, same content) from conflicts (same ID, different content)
+                let mutable conflictErrors = []
+                let mutable duplicateErrors = []
+                for (id, entries) in idGroups do
+                    match entries with
+                    | (id, line1, r1) :: (id2, line2, r2) :: _ ->
+                        // Multiple entries with same ID - check if content differs
+                        if r1.EvidenceId <> r2.EvidenceId
+                           || r1.EpisodeId <> r2.EpisodeId
+                           || r1.Kind <> r2.Kind
+                           || r1.Command <> r2.Command
+                           || r1.ExitCode <> r2.ExitCode
+                           || r1.Status <> r2.Status then
+                            // Conflicting content for same ID
+                            conflictErrors <- ConflictingEvidenceRecord(path, id, line1, line2) :: conflictErrors
+                        else
+                            // Same ID, same content - true duplicate
+                            let lines = entries |> List.map (fun (_, l, _) -> l)
+                            let minLine = lines |> List.min
+                            let maxLine = lines |> List.max
+                            duplicateErrors <- DuplicateEvidenceId(path, id, minLine, maxLine) :: duplicateErrors
+                    | _ -> ()
+
+                // Report conflicts first (they are more severe)
+                if not (List.isEmpty conflictErrors) then
+                    Result.Error conflictErrors
+                elif not (List.isEmpty duplicateErrors) then
+                    Result.Error duplicateErrors
                 else
                     Result.Ok records
         with

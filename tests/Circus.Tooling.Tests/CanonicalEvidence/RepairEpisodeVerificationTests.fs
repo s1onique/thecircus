@@ -324,13 +324,14 @@ let tests =
                   cleanup dir
           }
 
-          // Test 11: duplicate evidence ID (same ID, different episode) => DuplicateEvidenceId
-          test "duplicate evidence ID => DuplicateEvidenceId error" {
+          // Test 11: duplicate evidence ID (same ID, same episode, identical content) => DuplicateEvidenceId
+          test "duplicate evidence ID (identical) => DuplicateEvidenceId error" {
               let dir = tempDir "verify-duplicate-id"
               try
                   createMinimalStructure dir
+                  // Same ID, same content - TRUE duplicate (not a conflict)
                   let rec1 = validEvidenceRecord validEvidenceId "ep-001"
-                  let rec2 = validEvidenceRecord validEvidenceId "ep-002"
+                  let rec2 = validEvidenceRecord validEvidenceId "ep-001"
                   writeEvidence dir [ rec1; rec2 ]
                   let vr = runVerify dir
                   Expect.isTrue (List.length vr.Issues > 0) "should have issues"
@@ -338,6 +339,9 @@ let tests =
                   | [ VerificationIssue.VerificationEvidenceLoadFailed errors ] ->
                       match errors with
                       | [ VerificationEvidenceLoadError.DuplicateEvidenceId _ ] -> ()
+                      | [ VerificationEvidenceLoadError.ConflictingEvidenceRecord _ ] ->
+                          // This would be incorrect - same content should be duplicate, not conflict
+                          failwithf "expected DuplicateEvidenceId error for identical records, got ConflictingEvidenceRecord"
                       | _ -> failwithf "expected DuplicateEvidenceId error, got %A" errors
                   | _ -> failwithf "expected VerificationEvidenceLoadFailed, got %A" vr.Issues
               finally
@@ -473,10 +477,10 @@ let tests =
                   cleanup dir
           }
 
-          // Test 20: conflicting evidence records (same ID, different content) => DuplicateEvidenceId
-          // Note: Current implementation detects duplicate IDs regardless of content
-          // Workstream 9: ConflictingEvidenceRecord type exists but not triggered by current parser
-          test "conflicting evidence records => DuplicateEvidenceId error" {
+          // Test 20: conflicting evidence records (same ID, different content) => ConflictingEvidenceRecord
+          // Note: Current implementation distinguishes duplicates from conflicts
+          // Workstream 3: ConflictingEvidenceRecord type now triggered for same ID, different content
+          test "conflicting evidence records => ConflictingEvidenceRecord error" {
               let dir = tempDir "verify-conflicting-evidence"
               try
                   createMinimalStructure dir
@@ -486,10 +490,10 @@ let tests =
                   Expect.isTrue (List.length vr.Issues > 0) "should have issues"
                   match vr.Issues with
                   | [ VerificationIssue.VerificationEvidenceLoadFailed errors ] ->
-                      let hasDuplicate = errors |> List.exists (function
-                          | VerificationEvidenceLoadError.DuplicateEvidenceId _ -> true
+                      let hasConflict = errors |> List.exists (function
+                          | VerificationEvidenceLoadError.ConflictingEvidenceRecord _ -> true
                           | _ -> false)
-                      Expect.isTrue hasDuplicate "should have DuplicateEvidenceId error"
+                      Expect.isTrue hasConflict "should have ConflictingEvidenceRecord error"
                   | _ -> failwithf "expected VerificationEvidenceLoadFailed, got %A" vr.Issues
               finally
                   cleanup dir
@@ -526,5 +530,61 @@ let tests =
               Expect.stringContains rendered "conflicting_evidence" "should contain conflicting_evidence"
               Expect.stringContains rendered "abc123" "should contain evidence ID"
               Expect.stringContains rendered "/path/file.jsonl" "should contain path"
+          }
+
+          // Test 24: Real engine Completed test with empty evidence (Workstream 4, 6)
+          test "runEpisodeEngine Completed with empty evidence returns valid result" {
+              let dir = tempDir "engine-completed-empty"
+              try
+                  createMinimalStructure dir
+                  writeEvidence dir []
+                  let execution = runEpisodeEngine dir defaultEngineOptions
+                  match execution with
+                  | EpisodeEngineExecution.Completed result ->
+                      Expect.isTrue (result.Summary.VerificationEvidenceTotal >= 0) "verification_records_loaded >= 0"
+                      Expect.equal result.Summary.InvalidDeclarations 0 "invalid_declarations = 0"
+                  | EpisodeEngineExecution.Failed failure ->
+                      failwithf "Engine should complete with empty evidence, got: %A" failure
+              finally
+                  cleanup dir
+          }
+
+          // Test 25: runEpisodeEngine with valid evidence produces Completed (Workstream 4)
+          test "runEpisodeEngine Completed with valid evidence" {
+              let dir = tempDir "engine-completed-valid"
+              try
+                  createMinimalStructure dir
+                  let valid = validEvidenceRecord validEvidenceId "ep-001"
+                  writeEvidence dir [ valid ]
+                  let execution = runEpisodeEngine dir defaultEngineOptions
+                  match execution with
+                  | EpisodeEngineExecution.Completed result ->
+                      Expect.isTrue (result.Summary.VerificationEvidenceTotal >= 0) "verification_records_loaded >= 0"
+                      Expect.equal result.Summary.InvalidDeclarations 0 "invalid_declarations = 0"
+                  | EpisodeEngineExecution.Failed failure ->
+                      failwithf "Engine should complete with valid evidence, got: %A" failure
+              finally
+                  cleanup dir
+          }
+
+          // Test 26: Conflicting evidence records produce ConflictingEvidenceRecord (Workstream 3)
+          test "conflicting evidence records produce ConflictingEvidenceRecord" {
+              let dir = tempDir "conflicting-evidence-test"
+              try
+                  createMinimalStructure dir
+                  let rec1 = sprintf """{"schema_version":"verification-evidence-v1","verification_evidence_id":"%s","episode_id":"ep-conflict-1","verification_kind":"build","verification_command":"dotnet build","verification_result":"pass","verification_exit_code":0,"tested_commit_oid":"%s","tested_tree_oid":"%s"}""" validEvidenceId validCommitOid validTreeOid
+                  let rec2 = sprintf """{"schema_version":"verification-evidence-v1","verification_evidence_id":"%s","episode_id":"ep-conflict-2","verification_kind":"focused_test","verification_command":"dotnet test","verification_result":"fail","verification_exit_code":1,"tested_commit_oid":"%s","tested_tree_oid":"%s"}""" validEvidenceId validCommitOid validTreeOid
+                  writeEvidence dir [ rec1; rec2 ]
+                  let vr = runVerify dir
+                  Expect.isTrue (List.length vr.Issues > 0) "should have issues for conflicting evidence"
+                  match vr.Issues with
+                  | [ VerificationIssue.VerificationEvidenceLoadFailed errors ] ->
+                      let hasConflict = errors |> List.exists (function
+                          | VerificationEvidenceLoadError.ConflictingEvidenceRecord _ -> true
+                          | _ -> false)
+                      Expect.isTrue hasConflict "should have ConflictingEvidenceRecord error"
+                  | _ -> failwithf "expected ConflictingEvidenceRecord, got %A" vr.Issues
+              finally
+                  cleanup dir
           }
         ]
