@@ -117,16 +117,16 @@ let private lookupFieldInt (fields: (string * JsonValue) list) (name: string) : 
     | Some (_, v) ->
         match v with
         | JsonNumber n ->
-            let d = double n
-            let vi = int n
-            if d <> float vi then
-                WrongType ("integer (fractional)", jsonTypeName v)
-            elif vi < System.Int32.MinValue then
-                WrongType ("integer (underflow)", jsonTypeName v)
-            elif vi > System.Int32.MaxValue then
-                WrongType ("integer (overflow)", jsonTypeName v)
+            let dec = decimal n
+            let floor = System.Decimal.Floor(dec)
+            if dec <> floor then
+                WrongType ("integer (fractional not allowed)", jsonTypeName v)
+            elif dec < (decimal System.Int32.MinValue) then
+                WrongType ("integer (below Int32.MinValue)", jsonTypeName v)
+            elif dec > (decimal System.Int32.MaxValue) then
+                WrongType ("integer (above Int32.MaxValue)", jsonTypeName v)
             else
-                Present vi
+                Present (int dec)
         | _ -> WrongType ("integer", jsonTypeName v)
 
 
@@ -413,7 +413,7 @@ let loadVerificationEvidenceStrict (repoRoot: string) : Result<LocatedVerificati
                 // Already have line numbers from parsing
                 let evidenceWithLines =
                     records
-                    |> List.mapi (fun idx located -> located.Evidence.EvidenceId, (idx + 1), located.Evidence)
+                    |> List.map (fun located -> located.Evidence.EvidenceId, located.SourceLine, located.Evidence)
                 let idGroups = evidenceWithLines |> List.groupBy (fun (eid, _, _) -> eid)
 
                 // Separate true duplicates (same ID, same content) from conflicts (same ID, different content)
