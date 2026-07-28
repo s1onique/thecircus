@@ -3,7 +3,7 @@ module Circus.Tooling.Tests.CanonicalEvidence.CanonicalPreservationTests
 // =============================================================================
 // Canonical preservation tests for evidence loading failures
 //
-// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION05-RUNNER-INTEGRITY01
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION06-REGRESSION-RECOVERY-AND-PROOF-CONVERGENCE01
 //
 // These tests verify that existing canonical files survive evidence loading
 // failures - the engine does not modify or corrupt canonical files when
@@ -90,6 +90,13 @@ let private getFileSha256 (filePath: string) : string option =
     if File.Exists filePath then
         let content = File.ReadAllText(filePath)
         Some(sha256OfUtf8 content)
+    else
+        None
+
+/// Get file content as bytes for exact comparison
+let private getFileBytes (filePath: string) : byte[] option =
+    if File.Exists filePath then
+        Some(File.ReadAllBytes(filePath))
     else
         None
 
@@ -313,13 +320,13 @@ let tests =
                   cleanup dir
           }
 
-          // Test 6: actual regeneration preserves all canonical files
-          testTask "regenerate preserves canonical files" {
-              let dir = tempDir "preserve-regenerate"
+          // Test 6: actual regeneration preserves all 5 canonical files (bytes unchanged)
+          testTask "regenerate preserves all canonical files (bytes unchanged)" {
+              let dir = tempDir "preserve-regenerate-all"
               try
                   createMinimalStructure dir
 
-                  // Seed ALL 6 canonical files with known bytes
+                  // Seed ALL 5 canonical files with known bytes
                   let episodePath = Path.Combine(dir, repairEpisodesCanonicalPath)
                   let transitionPath = Path.Combine(dir, diagnosticTransitionsCanonicalPath)
                   let changeSetPath = Path.Combine(dir, gitChangeSetsCanonicalPath)
@@ -338,28 +345,78 @@ let tests =
                   seedCanonicalFile dir repairEpisodeSummaryCanonicalPath summaryContent
                   seedCanonicalFile dir verificationEvidenceCanonicalPath evidenceContent
 
-                  // Capture SHA-256 before regeneration
-                  let episodeShaBefore = getFileSha256 episodePath
-                  let transitionShaBefore = getFileSha256 transitionPath
-                  let changeSetShaBefore = getFileSha256 changeSetPath
-                  let summaryShaBefore = getFileSha256 summaryPath
-                  let evidenceShaBefore = getFileSha256 evidencePath
+                  // Capture bytes before regeneration
+                  let episodeBytesBefore = getFileBytes episodePath
+                  let transitionBytesBefore = getFileBytes transitionPath
+                  let changeSetBytesBefore = getFileBytes changeSetPath
+                  let summaryBytesBefore = getFileBytes summaryPath
+                  let evidenceBytesBefore = getFileBytes evidencePath
 
                   // Run regeneration via CLI
                   let! result = runRegenerate dir
 
-                  // Regardless of result, verify SHA-256 unchanged
-                  let episodeShaAfter = getFileSha256 episodePath
-                  let transitionShaAfter = getFileSha256 transitionPath
-                  let changeSetShaAfter = getFileSha256 changeSetPath
-                  let summaryShaAfter = getFileSha256 summaryPath
-                  let evidenceShaAfter = getFileSha256 evidencePath
+                  // Regardless of result, verify bytes unchanged
+                  let episodeBytesAfter = getFileBytes episodePath
+                  let transitionBytesAfter = getFileBytes transitionPath
+                  let changeSetBytesAfter = getFileBytes changeSetPath
+                  let summaryBytesAfter = getFileBytes summaryPath
+                  let evidenceBytesAfter = getFileBytes evidencePath
 
-                  Expect.equal episodeShaBefore episodeShaAfter "episode file SHA-256 unchanged after regenerate"
-                  Expect.equal transitionShaBefore transitionShaAfter "transition file SHA-256 unchanged after regenerate"
-                  Expect.equal changeSetShaBefore changeSetShaAfter "change set file SHA-256 unchanged after regenerate"
-                  Expect.equal summaryShaBefore summaryShaAfter "summary file SHA-256 unchanged after regenerate"
-                  Expect.equal evidenceShaBefore evidenceShaAfter "evidence file SHA-256 unchanged after regenerate"
+                  // Compare as strings for simplicity (bytes should be identical)
+                  let episodeStrBefore = episodeBytesBefore |> Option.map Encoding.UTF8.GetString
+                  let episodeStrAfter = episodeBytesAfter |> Option.map Encoding.UTF8.GetString
+                  let transitionStrBefore = transitionBytesBefore |> Option.map Encoding.UTF8.GetString
+                  let transitionStrAfter = transitionBytesAfter |> Option.map Encoding.UTF8.GetString
+                  let changeSetStrBefore = changeSetBytesBefore |> Option.map Encoding.UTF8.GetString
+                  let changeSetStrAfter = changeSetBytesAfter |> Option.map Encoding.UTF8.GetString
+                  let summaryStrBefore = summaryBytesBefore |> Option.map Encoding.UTF8.GetString
+                  let summaryStrAfter = summaryBytesAfter |> Option.map Encoding.UTF8.GetString
+                  let evidenceStrBefore = evidenceBytesBefore |> Option.map Encoding.UTF8.GetString
+                  let evidenceStrAfter = evidenceBytesAfter |> Option.map Encoding.UTF8.GetString
+
+                  Expect.equal episodeStrBefore episodeStrAfter "episode file bytes unchanged after regenerate"
+                  Expect.equal transitionStrBefore transitionStrAfter "transition file bytes unchanged after regenerate"
+                  Expect.equal changeSetStrBefore changeSetStrAfter "change set file bytes unchanged after regenerate"
+                  Expect.equal summaryStrBefore summaryStrAfter "summary file bytes unchanged after regenerate"
+                  Expect.equal evidenceStrBefore evidenceStrAfter "evidence file bytes unchanged after regenerate"
+              finally
+                  cleanup dir
+          }
+
+          // Test 7: verify canonical file preservation across verify failures
+          test "canonical files preserved across verify failures (SHA-256 comparison)" {
+              let dir = tempDir "preserve-verify-sha256"
+              try
+                  createMinimalStructure dir
+
+                  // Seed all canonical files
+                  let files = [
+                      (repairEpisodesCanonicalPath, "EPISODES-CONTENT-ABCDEF123456")
+                      (diagnosticTransitionsCanonicalPath, "TRANSITIONS-CONTENT-GHIJKL789012")
+                      (gitChangeSetsCanonicalPath, "CHANGESETS-CONTENT-MNOPQR345678")
+                      (repairEpisodeSummaryCanonicalPath, "{\"schema\":\"summary-v2\"}")
+                  ]
+
+                  files |> List.iter (fun (path, content) ->
+                      seedCanonicalFile dir path content)
+
+                  // Write malformed evidence to trigger verify failure
+                  writeEvidence dir [ """{"invalid json""" ]
+
+                  // Capture SHA-256 of all files before
+                  let sha256Before = files |> List.map (fun (path, _) ->
+                      let fullPath = Path.Combine(dir, path)
+                      path, getFileSha256 fullPath)
+
+                  // Run verify - should fail
+                  let vr = runVerify dir
+                  Expect.isTrue (List.length vr.Issues > 0) "verify should fail"
+
+                  // Verify SHA-256 unchanged
+                  sha256Before |> List.iter (fun (path, shaBefore) ->
+                      let fullPath = Path.Combine(dir, path)
+                      let shaAfter = getFileSha256 fullPath
+                      Expect.equal shaBefore shaAfter (sprintf "SHA-256 of %s unchanged" path))
               finally
                   cleanup dir
           }
