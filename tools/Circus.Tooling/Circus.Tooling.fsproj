@@ -76,10 +76,16 @@
     <Compile Include="ScopeAuthority\Authority.fs" />
     <!-- Canonical evidence provider (ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01-CORRECTION01).
          Compile order is fixed: Domain must precede Serialization, Validation, Provider, and Cli;
-         the provider must precede the top-level Cli dispatcher. -->
+         the provider must precede the top-level Cli dispatcher.
+
+         EvidenceRecords defines evidence record types and aggregate computation.
+         Provider extends the provider with subject-bound evidence generation.
+         Publication implements atomic snapshot publication. -->
     <Compile Include="CanonicalEvidence\Domain.fs" />
     <Compile Include="CanonicalEvidence\Serialization.fs" />
     <Compile Include="CanonicalEvidence\Validation.fs" />
+    <Compile Include="CanonicalEvidence\EvidenceRecords.fs" />
+    <Compile Include="CanonicalEvidence\Publication.fs" />
     <Compile Include="CanonicalEvidence\Provider.fs" />
     <Compile Include="CanonicalEvidence\Cli.fs" />
     <!-- Evidence validator (ACT-CIRCUS-POSTGRES-TEST-RUNNER-FAIL-CLOSED01-CORRECTION01).

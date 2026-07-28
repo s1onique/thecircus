@@ -1298,3 +1298,168 @@ let internal writeArtifactWithDependencies
             Failure = Some failure
             CanonicalByteIdenticalAfterFailure = preserved
         }
+
+// -----------------------------------------------------------------------------
+// ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01
+// Subject-bound provide command
+//
+// The 'provide' command generates canonical execution evidence for an
+// explicit Git subject commit OID. This is the authoritative evidence
+// generation entry point for ML-only source policy verification.
+// -----------------------------------------------------------------------------
+
+type ProvideFailure =
+    | ProvideInvalidSubjectOid of detail: string
+    | ProvideSubjectNotFound of oid: string
+    | ProvideSubjectNotACommit of oid: string
+    | ProvideIdentityFailure of IdentityFailure
+    | ProvideScopeAuthorityFailure of EvidenceFailure
+    | ProvideWorkingTreeDirty
+    | ProvideSubjectTreeMismatch of expected: string * actual: string
+    | ProvideSubjectWorktreeCreationFailed of detail: string
+    | ProvideSubjectWorktreeRemovalFailed of detail: string
+    | ProvideCheckListEmpty
+    | ProvideUnexpectedCheckId of id: string
+    | ProvideCheckFailure of EvidenceFailure
+
+let provideFailureToString (f: ProvideFailure) : string =
+    match f with
+    | ProvideInvalidSubjectOid detail -> sprintf "invalid subject OID: %s" detail
+    | ProvideSubjectNotFound oid -> sprintf "subject commit not found: %s" oid
+    | ProvideSubjectNotACommit oid -> sprintf "subject is not a commit: %s" oid
+    | ProvideIdentityFailure id -> sprintf "identity: %s" (identityFailureToString id)
+    | ProvideScopeAuthorityFailure scope -> sprintf "scope authority: %s:%s" scope.Reason scope.Detail
+    | ProvideWorkingTreeDirty -> "working tree is dirty (provide requires a clean tree for subject-bound evidence)"
+    | ProvideSubjectTreeMismatch (expected, actual) -> sprintf "subject tree mismatch: expected=%s actual=%s" expected actual
+    | ProvideSubjectWorktreeCreationFailed detail -> sprintf "subject worktree creation failed: %s" detail
+    | ProvideSubjectWorktreeRemovalFailed detail -> sprintf "subject worktree removal failed: %s" detail
+    | ProvideCheckListEmpty -> "canonical check list is empty"
+    | ProvideUnexpectedCheckId id -> sprintf "unexpected check id: %s" id
+    | ProvideCheckFailure e -> sprintf "check execution: %s:%s" e.Reason e.Detail
+
+/// Resolve a subject commit OID to its identity. Validates that the OID
+/// is a valid commit and resolves its tree.
+let resolveSubjectIdentity
+    (repoRoot: string)
+    (subjectOid: string)
+    : Result<ResolvedIdentity, ProvideFailure> =
+    if String.IsNullOrWhiteSpace subjectOid then
+        Result.Error(ProvideInvalidSubjectOid "empty OID")
+    else
+        match runGit repoRoot [ "rev-parse"; "--show-object-format=storage" ] with
+        | Error err ->
+            Result.Error(ProvideIdentityFailure(IdentityGitFailure(sprintf "object-format: %A" err)))
+        | Ok fmtRun ->
+            if fmtRun.ExitCode <> 0 then
+                Result.Error(ProvideIdentityFailure(IdentityGitFailure(sprintf "object-format exit %d: %s" fmtRun.ExitCode fmtRun.Stderr)))
+            else
+                let formatToken = fmtRun.Stdout.Trim()
+                match parseObjectFormat formatToken with
+                | None -> Result.Error(ProvideIdentityFailure(IdentityUnsupportedFormat formatToken))
+                | Some fmtStr ->
+                    match runGit repoRoot [ "cat-file"; "-t"; subjectOid ] with
+                    | Error _ -> Result.Error(ProvideSubjectNotFound subjectOid)
+                    | Ok typeRun ->
+                        if typeRun.ExitCode <> 0 then
+                            Result.Error(ProvideSubjectNotFound subjectOid)
+                        else
+                            let objType = typeRun.Stdout.Trim()
+                            if objType <> "commit" then
+                                Result.Error(ProvideSubjectNotACommit subjectOid)
+                            else
+                                if not (isValidOid fmtStr subjectOid) then
+                                    Result.Error(ProvideInvalidSubjectOid(sprintf "invalid %s OID: %s" fmtStr subjectOid))
+                                else
+                                    match runGit repoRoot [ "rev-parse"; "--verify"; "--end-of-options"; subjectOid + "^{tree}" ] with
+                                    | Error err ->
+                                        Result.Error(ProvideIdentityFailure(IdentityGitFailure(sprintf "tree: %A" err)))
+                                    | Ok treeRun ->
+                                        if treeRun.ExitCode <> 0 then
+                                            Result.Error(ProvideIdentityFailure(IdentityGitFailure(sprintf "tree exit %d: %s" treeRun.ExitCode treeRun.Stderr)))
+                                        else
+                                            let tree = treeRun.Stdout.Trim()
+                                            if not (isValidOid fmtStr tree) then
+                                                Result.Error(ProvideInvalidSubjectOid(sprintf "invalid tree OID: %s" tree))
+                                            else
+                                                Result.Ok {
+                                                    CommitOid = subjectOid
+                                                    TreeOid = tree
+                                                    ObjectFormat = fmtStr
+                                                }
+
+/// Generate canonical evidence for an explicit subject commit OID.
+/// This is the authoritative 'provide' entry point.
+let provideWithDependencies
+    (deps: CanonicalEvidenceDependencies)
+    (repoRoot: string)
+    (subjectOid: string)
+    (scopeDeclarationPath: string option)
+    : Result<CanonicalEvidence, ProvideFailure> =
+    match resolveSubjectIdentity repoRoot subjectOid with
+    | Result.Error err -> Result.Error err
+    | Result.Ok identity ->
+        match deps.ReadWorkingTreeState repoRoot with
+        | Result.Error _ -> Result.Error ProvideWorkingTreeDirty
+        | Result.Ok state ->
+            if state.Dirty then
+                Result.Error ProvideWorkingTreeDirty
+            else
+                match
+                    deps.ResolveScopeBinding
+                        repoRoot
+                        identity.CommitOid
+                        scopeDeclarationPath
+                        None
+                with
+                | Error failure -> Result.Error(ProvideScopeAuthorityFailure failure)
+                | Ok scope ->
+                    let defs =
+                        CanonicalCheckDefinitions
+                            repoRoot
+                            scope.BaselineCommitOid
+                            scope.DeclarationPath
+                            identity.CommitOid
+
+                    if List.isEmpty defs then
+                        Result.Error ProvideCheckListEmpty
+                    else
+                        let known = SupportedCheckIdSet
+                        let mutable badId : string option = None
+                        for d in defs do
+                            if not (Set.contains d.Id known) then
+                                badId <- Some d.Id
+                        match badId with
+                        | Some id -> Result.Error(ProvideUnexpectedCheckId id)
+                        | None ->
+                            let mutable acc : EvidenceCheckResult list = []
+                            let mutable firstError : ProvideFailure option = None
+                            let mutable halted = false
+                            for d in defs do
+                                if not halted then
+                                    match deps.RunCheck d CancellationToken.None with
+                                    | Result.Ok r -> acc <- r :: acc
+                                    | Result.Error e ->
+                                        firstError <- Some(ProvideCheckFailure e)
+                                        halted <- true
+                            match firstError with
+                            | Some f -> Result.Error f
+                            | None ->
+                                let checks = sortChecksDeterministic acc
+                                let overallStatus = computeOverallStatus checks
+                                let doc = {
+                                    SchemaVersion = SchemaVersionValue
+                                    ProviderName = ProviderNameValue
+                                    ProviderVersion = ProviderVersionValue
+                                    TestedCommitOid = identity.CommitOid
+                                    TestedTreeOid = identity.TreeOid
+                                    ObjectFormat = identity.ObjectFormat
+                                    ActiveScopeActId = scope.ActId
+                                    ActiveScopePointerBlobOid = scope.PointerBlobOid
+                                    ScopeDeclarationPath = scope.DeclarationPath
+                                    DeclarationBlobOid = scope.DeclarationBlobOid
+                                    BaselineCommitOid = scope.BaselineCommitOid
+                                    Checks = checks
+                                    OverallStatus = overallStatus
+                                    SemanticSha256 = ""
+                                }
+                                Result.Ok(withSemanticHash doc)
