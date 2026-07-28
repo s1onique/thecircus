@@ -68,8 +68,11 @@ let private lookupInt (fields: (string * JsonValue) list) (name: string) : int o
 
 
 // =============================================================================
-// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION08
-// Workstream 2: Type-aware JSON lookup with FieldLookup discriminated union
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EXACT-FAILURES01-CORRECTION14-CLOSURE-FIREWALL01
+// // Final closure firewall - strict schema parsing and integer semantics
+// Workstream 1: Strict schema_version parsing with lookupFieldString
+// Workstream 2: Type-aware JSON lookup with FieldLookup
+// Workstream 11: Commit geometry
 // Workstream 11: Commit geometry
 // =============================================================================
 
@@ -110,24 +113,36 @@ let private lookupFieldOptString (fields: (string * JsonValue) list) (name: stri
         | _ -> WrongType ("string", jsonTypeName v)
 
 /// Type-aware integer field lookup with strict validation.
+/// Workstream 2: Uses IntegerFieldLookup to separate JSON type from integer semantics.
+/// All checks in Decimal before conversion.
+type IntegerFieldLookup =
+    | Missing
+    | WrongJsonType of expected: string * actual: string
+    | InvalidIntegerValue of renderedValue: string
+    | Present of int
+
+/// Type-aware integer field lookup with strict validation.
+/// Workstream 2: All checks in Decimal before conversion.
 /// Rejects fractional numbers, values below Int32.MinValue, above Int32.MaxValue.
-let private lookupFieldInt (fields: (string * JsonValue) list) (name: string) : FieldLookup<int> =
+let private lookupFieldInt (fields: (string * JsonValue) list) (name: string) : IntegerFieldLookup =
     match List.tryFind (fun (k, _) -> k = name) fields with
     | None -> Missing
     | Some (_, v) ->
         match v with
         | JsonNumber n ->
+            // Workstream 2: All checks in Decimal before conversion
             let dec = decimal n
             let floor = System.Decimal.Floor(dec)
             if dec <> floor then
-                WrongType ("integer (fractional not allowed)", jsonTypeName v)
+                // Fractional value - JSON type is number, but integer validation fails
+                InvalidIntegerValue (string dec)
             elif dec < (decimal System.Int32.MinValue) then
-                WrongType ("integer (below Int32.MinValue)", jsonTypeName v)
+                InvalidIntegerValue (string dec)
             elif dec > (decimal System.Int32.MaxValue) then
-                WrongType ("integer (above Int32.MaxValue)", jsonTypeName v)
+                InvalidIntegerValue (string dec)
             else
                 Present (int dec)
-        | _ -> WrongType ("integer", jsonTypeName v)
+        | _ -> WrongJsonType ("integer", jsonTypeName v)
 
 
 // =============================================================================
@@ -144,9 +159,9 @@ type LocatedVerificationEvidence = {
 /// Convert a FieldLookup result to a verification parse error if the field is absent or wrong type.
 let private fieldToError (source: string) (lineNumber: int) (fieldName: string) (lookup: FieldLookup<'a>) : VerificationEvidenceParseError option =
     match lookup with
-    | Missing -> Some (VerificationEvidenceParseError.MissingField(source, lineNumber, fieldName))
-    | WrongType (expectedType, actualType) -> Some (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, fieldName, expectedType, actualType))
-    | Present _ -> None
+    | FieldLookup.Missing -> Some (VerificationEvidenceParseError.MissingField(source, lineNumber, fieldName))
+    | FieldLookup.WrongType (expectedType, actualType) -> Some (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, fieldName, expectedType, actualType))
+    | FieldLookup.Present _ -> None
 
 // =============================================================================
 // Workstream 7: Commit geometry fail-closed with Result type
@@ -278,15 +293,21 @@ let rec private parseVerificationEvidenceStrict (json: string) (source: string) 
         match v with
         | JsonObject fields ->
             // Validate schema version first
-            match lookupOptString fields "schema_version" with
-            | Some sv when sv <> VerificationEvidenceSchemaVersion ->
+            // Workstream 1: Strict schema_version parsing with lookupFieldString
+            // Missing → MissingField, WrongType → WrongFieldType, unsupported string → UnsupportedSchemaVersion
+            match lookupFieldString fields "schema_version" with
+            | FieldLookup.Missing ->
+                Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "schema_version"))
+            | FieldLookup.WrongType (expected, actual) ->
+                Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "schema_version", expected, actual))
+            | FieldLookup.Present sv when sv <> VerificationEvidenceSchemaVersion ->
                 Result.Error (VerificationEvidenceParseError.UnsupportedSchemaVersion(source, lineNumber, sv))
-            | _ ->
+            | FieldLookup.Present _ ->
                 // 1. verification_evidence_id (required)
                 match lookupFieldString fields "verification_evidence_id" with
-                | Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_evidence_id"))
-                | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_evidence_id", expected, actual))
-                | Present evId ->
+                | FieldLookup.Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_evidence_id"))
+                | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_evidence_id", expected, actual))
+                | FieldLookup.Present evId ->
                     // Validate evidence ID format
                     if not (sha256Regex.IsMatch(evId)) then
                         Result.Error (VerificationEvidenceParseError.InvalidEvidenceId(source, lineNumber, evId))
@@ -295,44 +316,46 @@ let rec private parseVerificationEvidenceStrict (json: string) (source: string) 
                     else
                         // 2. episode_id (required)
                         match lookupFieldString fields "episode_id" with
-                        | Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "episode_id"))
-                        | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "episode_id", expected, actual))
-                        | Present epId ->
+                        | FieldLookup.Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "episode_id"))
+                        | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "episode_id", expected, actual))
+                        | FieldLookup.Present epId ->
                             // 3. verification_kind (required)
                             match lookupFieldString fields "verification_kind" with
-                            | Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_kind"))
-                            | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_kind", expected, actual))
-                            | Present kindToken ->
+                            | FieldLookup.Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_kind"))
+                            | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_kind", expected, actual))
+                            | FieldLookup.Present kindToken ->
                                 match tryParseVerificationKind kindToken with
                                 | None -> Result.Error (VerificationEvidenceParseError.UnknownVerificationKind(source, lineNumber, kindToken))
                                 | Some parsedKind ->
                                     // 4. verification_command (required)
                                     match lookupFieldString fields "verification_command" with
-                                    | Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_command"))
-                                    | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_command", expected, actual))
-                                    | Present cmd ->
+                                    | FieldLookup.Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_command"))
+                                    | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_command", expected, actual))
+                                    | FieldLookup.Present cmd ->
                                         // 5. verification_result (required)
                                         match lookupFieldString fields "verification_result" with
-                                        | Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_result"))
-                                        | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_result", expected, actual))
-                                        | Present statusToken ->
+                                        | FieldLookup.Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_result"))
+                                        | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_result", expected, actual))
+                                        | FieldLookup.Present statusToken ->
                                             match tryParseVerificationStatus statusToken with
                                             | None -> Result.Error (VerificationEvidenceParseError.UnknownVerificationStatus(source, lineNumber, statusToken))
                                             | Some parsedStatus ->
                                                 // 6. verification_exit_code (required, non-negative integer)
+                                                // Workstream 2: Handle IntegerFieldLookup cases
                                                 match lookupFieldInt fields "verification_exit_code" with
-                                                | Missing -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, "null"))
-                                                | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_exit_code", expected, actual))
-                                                | Present ec when ec < 0 -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, string ec))
-                                                | Present ec ->
+                                                | IntegerFieldLookup.Missing -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, "null"))
+                                                | IntegerFieldLookup.WrongJsonType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_exit_code", expected, actual))
+                                                | IntegerFieldLookup.InvalidIntegerValue (rendered) -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, rendered))
+                                                | IntegerFieldLookup.Present ec when ec < 0 -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, string ec))
+                                                | IntegerFieldLookup.Present ec ->
                                                     // 7. tested_commit_oid (optional, 40 or 64 hex chars)
                                                     match lookupFieldOptString fields "tested_commit_oid" with
-                                                    | Missing ->
+                                                    | FieldLookup.Missing ->
                                                         // Absent optional field is valid - treat as empty string
                                                         let testedCommitOid = ""
                                                         validateTreeOid fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid
-                                                    | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "tested_commit_oid", expected, actual))
-                                                    | Present optCommitOid ->
+                                                    | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "tested_commit_oid", expected, actual))
+                                                    | FieldLookup.Present optCommitOid ->
                                                         let testedCommitOid = Option.defaultValue "" optCommitOid
                                                         if testedCommitOid.Length > 0 && not (oid40Regex.IsMatch(testedCommitOid) || oid64Regex.IsMatch(testedCommitOid)) then
                                                             Result.Error (VerificationEvidenceParseError.InvalidCommitOid(source, lineNumber, "tested_commit_oid", testedCommitOid))
@@ -351,11 +374,11 @@ let rec private parseVerificationEvidenceStrict (json: string) (source: string) 
 /// Workstream 1: Uses typed FieldLookup for all optional fields
 and private validateTreeOid fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid =
     match lookupFieldOptString fields "tested_tree_oid" with
-    | Missing ->
+    | FieldLookup.Missing ->
         let testedTreeOid = ""
         validateStdoutSha fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid testedTreeOid
-    | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "tested_tree_oid", expected, actual))
-    | Present optTreeOid ->
+    | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "tested_tree_oid", expected, actual))
+    | FieldLookup.Present optTreeOid ->
         let testedTreeOid = Option.defaultValue "" optTreeOid
         if testedTreeOid.Length > 0 && not (oid40Regex.IsMatch(testedTreeOid) || oid64Regex.IsMatch(testedTreeOid)) then
             Result.Error (VerificationEvidenceParseError.InvalidTreeOid(source, lineNumber, "tested_tree_oid", testedTreeOid))
@@ -365,11 +388,11 @@ and private validateTreeOid fields source lineNumber evId epId parsedKind cmd pa
 /// Continue validation after stdout_sha256
 and private validateStdoutSha fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid testedTreeOid =
     match lookupFieldOptString fields "stdout_sha256" with
-    | Missing ->
+    | FieldLookup.Missing ->
         let optStdoutSha = None
         validateStderrSha fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid testedTreeOid optStdoutSha
-    | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "stdout_sha256", expected, actual))
-    | Present optStdoutSha ->
+    | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "stdout_sha256", expected, actual))
+    | FieldLookup.Present optStdoutSha ->
         match optStdoutSha with
         | Some v when not (sha256Regex.IsMatch(v)) ->
             Result.Error (VerificationEvidenceParseError.InvalidSha256(source, lineNumber, "stdout_sha256", v))
@@ -379,11 +402,11 @@ and private validateStdoutSha fields source lineNumber evId epId parsedKind cmd 
 /// Continue validation after stderr_sha256
 and private validateStderrSha fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid testedTreeOid optStdoutSha =
     match lookupFieldOptString fields "stderr_sha256" with
-    | Missing ->
+    | FieldLookup.Missing ->
         let optStderrSha = None
         validateWorkingDir fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid testedTreeOid optStdoutSha optStderrSha
-    | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "stderr_sha256", expected, actual))
-    | Present optStderrSha ->
+    | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "stderr_sha256", expected, actual))
+    | FieldLookup.Present optStderrSha ->
         match optStderrSha with
         | Some v when not (sha256Regex.IsMatch(v)) ->
             Result.Error (VerificationEvidenceParseError.InvalidSha256(source, lineNumber, "stderr_sha256", v))
@@ -393,21 +416,21 @@ and private validateStderrSha fields source lineNumber evId epId parsedKind cmd 
 /// Continue validation after working_directory
 and private validateWorkingDir fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid testedTreeOid optStdoutSha optStderrSha =
     match lookupFieldOptString fields "working_directory" with
-    | Missing ->
+    | FieldLookup.Missing ->
         let optWd = None
         validateCombinedLogPath fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid testedTreeOid optStdoutSha optStderrSha optWd
-    | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "working_directory", expected, actual))
-    | Present optWd ->
+    | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "working_directory", expected, actual))
+    | FieldLookup.Present optWd ->
         validateCombinedLogPath fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid testedTreeOid optStdoutSha optStderrSha optWd
 
 /// Continue validation after combined_log_path and build final record
 and private validateCombinedLogPath fields source lineNumber evId epId parsedKind cmd parsedStatus ec testedCommitOid testedTreeOid optStdoutSha optStderrSha optWd =
     match lookupFieldOptString fields "combined_log_path" with
-    | Missing ->
+    | FieldLookup.Missing ->
         let optLogPath = None
         buildEvidence evId epId parsedKind cmd parsedStatus testedCommitOid testedTreeOid ec optStdoutSha optStderrSha optWd optLogPath source lineNumber
-    | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "combined_log_path", expected, actual))
-    | Present optLogPath ->
+    | FieldLookup.WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "combined_log_path", expected, actual))
+    | FieldLookup.Present optLogPath ->
         buildEvidence evId epId parsedKind cmd parsedStatus testedCommitOid testedTreeOid ec optStdoutSha optStderrSha optWd optLogPath source lineNumber
 
 /// Build the final evidence record

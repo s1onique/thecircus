@@ -44,6 +44,7 @@ type ValidationIssue =
     | EmptyScopeField of field: string
     | UnsupportedCheckId of id: string
     | InvalidStatusToken of context: string * token: string
+    | InvalidIntegerValue of source: string * lineNumber: int * fieldName: string * renderedValue: string
     | SemanticHashMismatch of expected: string * actual: string
     | OverallStatusMismatch of expected: EvidenceStatus * actual: EvidenceStatus
     | EmptyCheckId
@@ -64,6 +65,7 @@ let issueToString (i: ValidationIssue) : string =
     | EmptyScopeField field -> sprintf "empty canonical scope field: %s" field
     | UnsupportedCheckId id -> sprintf "unsupported check id: %s" id
     | InvalidStatusToken (ctx, tok) -> sprintf "%s status token invalid: %s" ctx tok
+    | InvalidIntegerValue (src, line, field, value) -> sprintf "invalid integer value for %s at %s:%d: %s" field src line value
     | SemanticHashMismatch (expected, actual) ->
         sprintf "semantic_sha256 mismatch: expected=%s actual=%s" expected actual
     | OverallStatusMismatch (expected, actual) ->

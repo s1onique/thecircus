@@ -146,28 +146,29 @@ let tests =
           // Test 4: FieldLookup type compiles correctly (Workstream 2)
           test "FieldLookup type constructor compiles correctly" {
               // Create FieldLookup values to verify the type compiles
-              let missingValue : FieldLookup<string> = Missing
-              let wrongTypeValue : FieldLookup<string> = WrongType ("string", "number")
-              let presentValue : FieldLookup<string> = Present "test"
+              let missingValue : FieldLookup<string> = FieldLookup.Missing
+              let wrongTypeValue : FieldLookup<string> = FieldLookup.WrongType ("string", "number")
+              let presentValue : FieldLookup<string> = FieldLookup.Present "test"
 
               match missingValue with
-              | Missing -> Expect.equal 1 1 "missing"
-              | WrongType _ -> failwith "Should be Missing"
-              | Present _ -> failwith "Should be Missing"
+              | FieldLookup.Missing -> Expect.equal 1 1 "missing"
+              | FieldLookup.WrongType _ -> failwith "Should be Missing"
+              | FieldLookup.Present _ -> failwith "Should be Missing"
 
               match wrongTypeValue with
-              | Missing -> failwith "Should be WrongType"
-              | WrongType (_, t) -> Expect.equal t "number" "wrong type value"
-              | Present _ -> failwith "Should be WrongType"
+              | FieldLookup.Missing -> failwith "Should be WrongType"
+              | FieldLookup.WrongType (_, t) -> Expect.equal t "number" "wrong type value"
+              | FieldLookup.Present _ -> failwith "Should be WrongType"
 
               match presentValue with
-              | Missing -> failwith "Should be Present"
-              | WrongType _ -> failwith "Should be Present"
-              | Present v -> Expect.equal v "test" "present value"
+              | FieldLookup.Missing -> failwith "Should be Present"
+              | FieldLookup.WrongType _ -> failwith "Should be Present"
+              | FieldLookup.Present v -> Expect.equal v "test" "present value"
           }
 
-          // Test 5: Fractional exit code produces WrongFieldType error (Workstream 2 - Decimal validation)
-          test "fractional exit code produces WrongFieldType error" {
+          // Test 5: Fractional exit code produces InvalidExitCode error (Workstream 2 - Decimal validation)
+          // Fractional numbers have correct JSON type (number) but invalid integer semantics
+          test "fractional exit code produces InvalidExitCode error" {
               let dir = tempDir "fractional-exit-code"
               try
                   createMinimalStructure dir
@@ -177,10 +178,10 @@ let tests =
                   Expect.isTrue (List.length vr.Issues > 0) "should have issues"
                   match vr.Issues with
                   | [ VerificationIssue.VerificationEvidenceLoadFailed errors ] ->
-                      let hasWrongType = errors |> List.exists (function
-                          | VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.WrongFieldType _) -> true
+                      let hasInvalidExit = errors |> List.exists (function
+                          | VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.InvalidExitCode _) -> true
                           | _ -> false)
-                      Expect.isTrue hasWrongType "should have WrongFieldType error for fractional exit code"
+                      Expect.isTrue hasInvalidExit "should have InvalidExitCode error for fractional exit code"
                   | _ -> failwithf "expected VerificationEvidenceLoadFailed, got %A" vr.Issues
               finally
                   cleanup dir

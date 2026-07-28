@@ -69,7 +69,7 @@ closure_commit_oid: 986d78c
 ## Verdict
 
 ```yaml
-verdict: CLOSED_PASS
+verdict: PARTIAL_CHECKPOINT
 ```
 
 ## Successor Handoff

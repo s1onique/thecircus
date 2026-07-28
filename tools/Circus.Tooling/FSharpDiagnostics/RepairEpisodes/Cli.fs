@@ -93,6 +93,8 @@ let private renderEvidenceLoadErrors (errors: VerificationEvidenceLoadError list
                 sb.AppendLine(sprintf "  unknown_verification_status: %s:%d %s" src line v) |> ignore
             | VerificationEvidenceParseError.InvalidExitCode (src, line, ec) ->
                 sb.AppendLine(sprintf "  invalid_exit_code: %s:%d %s" src line ec) |> ignore
+            | VerificationEvidenceParseError.InvalidIntegerValue (src, line, field, rendered) ->
+                sb.AppendLine(sprintf "  invalid_integer_value: %s:%d %s %s" src line field rendered) |> ignore
             | VerificationEvidenceParseError.InvalidCommitOid (src, line, field, oid) ->
                 sb.AppendLine(sprintf "  invalid_commit_oid: %s:%d %s %s" src line field oid) |> ignore
             | VerificationEvidenceParseError.InvalidTreeOid (src, line, field, oid) ->
