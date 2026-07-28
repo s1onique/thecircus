@@ -334,7 +334,6 @@ type VerificationEvidenceParseError =
     | UnknownVerificationKind of source: string * lineNumber: int * value: string
     | UnknownVerificationStatus of source: string * lineNumber: int * value: string
     | InvalidExitCode of source: string * lineNumber: int * value: string
-    | InvalidIntegerValue of source: string * lineNumber: int * fieldName: string * renderedValue: string
     | InvalidCommitOid of source: string * lineNumber: int * fieldName: string * value: string
     | InvalidTreeOid of source: string * lineNumber: int * fieldName: string * value: string
     | InvalidSha256 of source: string * lineNumber: int * fieldName: string * value: string

@@ -236,15 +236,52 @@ let resolveCommitGeometry (repoRoot: string) : Result<CommitGeometry, CommitGeom
         | Result.Error other ->
             Result.Error(CommitGeometryError.GitFailure(sprintf "git error: %A" other))
 
-/// Legacy version for backward compatibility - wraps Result in a default value.
-let resolveCommitGeometryLegacy (repoRoot: string) : CommitGeometry =
-    match resolveCommitGeometry repoRoot with
-    | Result.Ok geo -> geo
-    | Result.Error _ ->
-        { SubjectCommitOid = ""
-          SubjectTreeOid = ""
-          EvidenceCommitOid = None
-          ClosureCommitOid = None }
+
+/// Resolve commit geometry with an explicit subject commit OID.
+/// Workstream 5: Explicit commit geometry - takes subjectCommitOid parameter.
+/// Returns Result<CommitGeometry, CommitGeometryError>.
+let resolveCommitGeometryWithSubject (repoRoot: string) (subjectCommitOid: string) : Result<CommitGeometry, CommitGeometryError> =
+    if String.IsNullOrWhiteSpace repoRoot then
+        Result.Error(CommitGeometryError.RepositoryNotFound repoRoot)
+    elif not (Directory.Exists repoRoot) then
+        Result.Error(CommitGeometryError.RepositoryNotFound repoRoot)
+    else
+        // Step 1: Check for dirty worktree first (fail-closed)
+        match runGitTyped repoRoot defaultGitRunOptions [ "status"; "--porcelain=v1" ] with
+        | Ok statusRun when statusRun.ExitCode = 0 && String.IsNullOrEmpty(statusRun.Stdout.Trim()) ->
+            // Worktree is clean, verify subject commit exists
+            match runGitTyped repoRoot defaultGitRunOptions [ "rev-parse"; "--verify"; "--end-of-options"; subjectCommitOid + "^{commit}" ] with
+            | Ok headRun when headRun.ExitCode = 0 ->
+                let resolvedCommit = headRun.Stdout.Trim()
+                if String.IsNullOrEmpty resolvedCommit then
+                    Result.Error(CommitGeometryError.GitFailure "subject commit resolution returned empty")
+                else
+                    // Step 2: Resolve subject tree
+                    match runGitTyped repoRoot defaultGitRunOptions [ "rev-parse"; "--verify"; "--end-of-options"; resolvedCommit + "^{tree}" ] with
+                    | Ok treeRun when treeRun.ExitCode = 0 ->
+                        let treeOid = treeRun.Stdout.Trim()
+                        Result.Ok {
+                            SubjectCommitOid = resolvedCommit
+                            SubjectTreeOid = treeOid
+                            EvidenceCommitOid = None
+                            ClosureCommitOid = None
+                        }
+                    | Ok _ ->
+                        Result.Error(CommitGeometryError.GitFailure "subject tree resolution failed")
+                    | Result.Error other ->
+                        Result.Error(CommitGeometryError.GitFailure(sprintf "subject tree: %A" other))
+            | Ok _ ->
+                Result.Error(CommitGeometryError.GitFailure "subject commit does not exist")
+            | Result.Error (GitRunError.ExitFailure _) ->
+                Result.Error(CommitGeometryError.GitFailure "subject commit does not exist")
+            | Result.Error other ->
+                Result.Error(CommitGeometryError.GitFailure(sprintf "subject commit: %A" other))
+        | Ok _ ->
+            Result.Error CommitGeometryError.DirtyWorktree
+        | Result.Error (GitRunError.ExitFailure _) ->
+            Result.Error(CommitGeometryError.GitFailure "status check failed")
+        | Result.Error other ->
+            Result.Error(CommitGeometryError.GitFailure(sprintf "git error: %A" other))
 
 /// Strict regex patterns for validation.
 open System.Text.RegularExpressions
@@ -343,7 +380,7 @@ let rec private parseVerificationEvidenceStrict (json: string) (source: string) 
                                                 // 6. verification_exit_code (required, non-negative integer)
                                                 // Workstream 2: Handle IntegerFieldLookup cases
                                                 match lookupFieldInt fields "verification_exit_code" with
-                                                | IntegerFieldLookup.Missing -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, "null"))
+                                                | IntegerFieldLookup.Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_exit_code"))
                                                 | IntegerFieldLookup.WrongJsonType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_exit_code", expected, actual))
                                                 | IntegerFieldLookup.InvalidIntegerValue (rendered) -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, rendered))
                                                 | IntegerFieldLookup.Present ec when ec < 0 -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, string ec))
