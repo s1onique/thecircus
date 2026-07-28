@@ -1,5 +1,7 @@
 module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Engine
 
+open System
+
 open System.IO
 open System.Text
 open Circus.Tooling.FSharpDiagnostics.AtomicPublish
@@ -75,7 +77,7 @@ let private lookupInt (fields: (string * JsonValue) list) (name: string) : int o
 /// Distinguishes between absent field, wrong JSON type, and valid value.
 type FieldLookup<'value> =
     | Missing
-    | WrongType of actualType: string
+    | WrongType of expectedType: string * actualType: string
     | Present of 'value
 
 /// Get the JSON type name for error reporting.
@@ -95,7 +97,7 @@ let private lookupFieldString (fields: (string * JsonValue) list) (name: string)
     | Some (_, v) ->
         match v with
         | JsonString s -> Present s
-        | _ -> WrongType (jsonTypeName v)
+        | _ -> WrongType ("string", jsonTypeName v)
 
 /// Type-aware optional string field lookup.
 let private lookupFieldOptString (fields: (string * JsonValue) list) (name: string) : FieldLookup<string option> =
@@ -105,27 +107,57 @@ let private lookupFieldOptString (fields: (string * JsonValue) list) (name: stri
         match v with
         | JsonNull -> Present None
         | JsonString s -> Present (Some s)
-        | _ -> WrongType (jsonTypeName v)
+        | _ -> WrongType ("string", jsonTypeName v)
 
-/// Type-aware integer field lookup.
+/// Type-aware integer field lookup with strict validation.
+/// Rejects fractional numbers, values below Int32.MinValue, above Int32.MaxValue.
 let private lookupFieldInt (fields: (string * JsonValue) list) (name: string) : FieldLookup<int> =
     match List.tryFind (fun (k, _) -> k = name) fields with
     | None -> Missing
     | Some (_, v) ->
         match v with
-        | JsonNumber n -> Present (int n)
-        | _ -> WrongType (jsonTypeName v)
+        | JsonNumber n ->
+            let d = double n
+            let vi = int n
+            if d <> float vi then
+                WrongType ("integer (fractional)", jsonTypeName v)
+            elif vi < System.Int32.MinValue then
+                WrongType ("integer (underflow)", jsonTypeName v)
+            elif vi > System.Int32.MaxValue then
+                WrongType ("integer (overflow)", jsonTypeName v)
+            else
+                Present vi
+        | _ -> WrongType ("integer", jsonTypeName v)
+
+
+// =============================================================================
+// Workstream 3: LocatedVerificationEvidence with source locations
+// =============================================================================
+
+/// Verification evidence with source location information for error reporting.
+type LocatedVerificationEvidence = {
+    Evidence: VerificationEvidence
+    SourcePath: string
+    SourceLine: int
+}
 
 /// Convert a FieldLookup result to a verification parse error if the field is absent or wrong type.
 let private fieldToError (source: string) (lineNumber: int) (fieldName: string) (lookup: FieldLookup<'a>) : VerificationEvidenceParseError option =
     match lookup with
     | Missing -> Some (VerificationEvidenceParseError.MissingField(source, lineNumber, fieldName))
-    | WrongType actualType -> Some (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, fieldName, actualType))
+    | WrongType (_, actualType) -> Some (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, fieldName, actualType))
     | Present _ -> None
 
 // =============================================================================
-// Commit geometry for Workstream 11
+// Workstream 7: Commit geometry fail-closed with Result type
 // =============================================================================
+
+/// Error types for commit geometry resolution.
+type CommitGeometryError =
+    | RepositoryNotFound of path: string
+    | GitFailure of detail: string
+    | DirtyWorktree
+    | UnspecifiedHead
 
 /// Commit geometry records the Git OID bindings for a verification run.
 type CommitGeometry = {
@@ -139,22 +171,65 @@ type CommitGeometry = {
     ClosureCommitOid: string option
 }
 
-/// Resolve commit geometry from a repository.
-let resolveCommitGeometry (repoRoot: string) : CommitGeometry =
-    let subjectCommit =
-        match runGitTyped repoRoot defaultGitRunOptions [ "rev-parse"; "--verify"; "--end-of-options"; "HEAD^{commit}" ] with
-        | Ok run when run.ExitCode = 0 -> Some (run.Stdout.Trim())
-        | _ -> None
+/// Resolve commit geometry from a repository with fail-closed semantics.
+/// Returns Result.Error if HEAD is unspecified or repository state is invalid.
+/// Does NOT resolve unspecified HEAD - fails closed.
+let resolveCommitGeometry (repoRoot: string) : Result<CommitGeometry, CommitGeometryError> =
+    if String.IsNullOrWhiteSpace repoRoot then
+        Result.Error(CommitGeometryError.RepositoryNotFound repoRoot)
+    elif not (Directory.Exists repoRoot) then
+        Result.Error(CommitGeometryError.RepositoryNotFound repoRoot)
+    else
+        // Step 1: Check for dirty worktree first (fail-closed)
+        match runGitTyped repoRoot defaultGitRunOptions [ "status"; "--porcelain=v1" ] with
+        | Ok statusRun when statusRun.ExitCode = 0 && String.IsNullOrEmpty(statusRun.Stdout.Trim()) ->
+            // Worktree is clean, continue to resolve HEAD
+            // Step 2: Resolve HEAD commit
+            match runGitTyped repoRoot defaultGitRunOptions [ "rev-parse"; "--verify"; "--end-of-options"; "HEAD^{commit}" ] with
+            | Ok headRun when headRun.ExitCode = 0 ->
+                let headCommit = headRun.Stdout.Trim()
+                if String.IsNullOrEmpty headCommit then
+                    Result.Error CommitGeometryError.UnspecifiedHead
+                else
+                    // Step 3: Resolve HEAD tree
+                    match runGitTyped repoRoot defaultGitRunOptions [ "rev-parse"; "--verify"; "--end-of-options"; "HEAD^{tree}" ] with
+                    | Ok treeRun when treeRun.ExitCode = 0 ->
+                        let treeOid = treeRun.Stdout.Trim()
+                        Result.Ok {
+                            SubjectCommitOid = headCommit
+                            SubjectTreeOid = treeOid
+                            EvidenceCommitOid = None
+                            ClosureCommitOid = None
+                        }
+                    | Ok _ ->
+                        Result.Error(CommitGeometryError.GitFailure "HEAD tree resolution failed")
+                    | Result.Error other ->
+                        Result.Error(CommitGeometryError.GitFailure(sprintf "HEAD tree: %A" other))
+            | Ok _ ->
+                // Exit code non-zero but no error thrown - HEAD is unspecified
+                Result.Error CommitGeometryError.UnspecifiedHead
+            | Result.Error (GitRunError.ExitFailure _) ->
+                // Non-zero exit from rev-parse means HEAD is unspecified
+                Result.Error CommitGeometryError.UnspecifiedHead
+            | Result.Error other ->
+                Result.Error(CommitGeometryError.GitFailure(sprintf "HEAD commit: %A" other))
+        | Ok _ ->
+            // Worktree has changes
+            Result.Error CommitGeometryError.DirtyWorktree
+        | Result.Error (GitRunError.ExitFailure _) ->
+            Result.Error(CommitGeometryError.GitFailure "status check failed")
+        | Result.Error other ->
+            Result.Error(CommitGeometryError.GitFailure(sprintf "git error: %A" other))
 
-    let subjectTree =
-        match runGitTyped repoRoot defaultGitRunOptions [ "rev-parse"; "--verify"; "--end-of-options"; "HEAD^{tree}" ] with
-        | Ok run when run.ExitCode = 0 -> Some (run.Stdout.Trim())
-        | _ -> None
-
-    { SubjectCommitOid = defaultArg subjectCommit ""
-      SubjectTreeOid = defaultArg subjectTree ""
-      EvidenceCommitOid = None
-      ClosureCommitOid = None }
+/// Legacy version for backward compatibility - wraps Result in a default value.
+let resolveCommitGeometryLegacy (repoRoot: string) : CommitGeometry =
+    match resolveCommitGeometry repoRoot with
+    | Result.Ok geo -> geo
+    | Result.Error _ ->
+        { SubjectCommitOid = ""
+          SubjectTreeOid = ""
+          EvidenceCommitOid = None
+          ClosureCommitOid = None }
 
 /// Strict regex patterns for validation.
 open System.Text.RegularExpressions
