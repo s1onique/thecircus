@@ -104,17 +104,17 @@ let tests =
               let missingValue : FieldLookup<string> = Missing
               let wrongTypeValue : FieldLookup<string> = WrongType ("string", "number")
               let presentValue : FieldLookup<string> = Present "test"
-              
+
               match missingValue with
               | Missing -> Expect.equal 1 1 "missing"
               | WrongType _ -> failwith "Should be Missing"
               | Present _ -> failwith "Should be Missing"
-              
+
               match wrongTypeValue with
               | Missing -> failwith "Should be WrongType"
               | WrongType (_, t) -> Expect.equal t "number" "wrong type value"
               | Present _ -> failwith "Should be WrongType"
-              
+
               match presentValue with
               | Missing -> failwith "Should be Present"
               | WrongType _ -> failwith "Should be Present"

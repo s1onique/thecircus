@@ -395,10 +395,9 @@ let tests =
                   cleanup dir
           }
 
-          // Test 16: Wrong field type (episode_id as number) produces an error
-          // Note: Current parser returns MissingField for wrong types (lookupString returns None)
-          // This test documents actual behavior - wrong type produces MissingField
-          test "wrong field type (episode_id as number) => MissingField error (actual behavior)" {
+          // Test 16: Wrong field type (episode_id as number) produces WrongFieldType error
+          // With FieldLookup wiring, wrong types now produce WrongFieldType (not MissingField)
+          test "wrong field type (episode_id as number) => WrongFieldType error" {
               let dir = tempDir "verify-wrong-field-type"
               try
                   createMinimalStructure dir
@@ -408,12 +407,11 @@ let tests =
                   Expect.isTrue (List.length vr.Issues > 0) "should have issues"
                   match vr.Issues with
                   | [ VerificationIssue.VerificationEvidenceLoadFailed errors ] ->
-                      // Parser uses lookupString which returns None for non-string values
-                      // Result is MissingField error for episode_id
-                      let hasMissingField = errors |> List.exists (function
-                          | VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.MissingField _) -> true
+                      // With FieldLookup, wrong types now produce WrongFieldType error
+                      let hasWrongFieldType = errors |> List.exists (function
+                          | VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.WrongFieldType _) -> true
                           | _ -> false)
-                      Expect.isTrue hasMissingField "should have MissingField error for wrong type"
+                      Expect.isTrue hasWrongFieldType "should have WrongFieldType error for wrong type"
                   | _ -> failwithf "expected VerificationEvidenceLoadFailed, got %A" vr.Issues
               finally
                   cleanup dir
@@ -513,7 +511,7 @@ let tests =
           test "renderVerificationEvidenceLoadIssues handles WrongFieldType" {
               let errors = [
                   VerificationEvidenceLoadError.ParseError(
-                      VerificationEvidenceParseError.WrongFieldType("/path/file.jsonl", 5, "episode_id", "a string"))
+                      VerificationEvidenceParseError.WrongFieldType("/path/file.jsonl", 5, "episode_id", "a string", "a number"))
               ]
               let rendered = renderVerificationEvidenceLoadIssues errors
               Expect.stringContains rendered "wrong_field_type" "should contain wrong_field_type error"

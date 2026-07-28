@@ -105,8 +105,8 @@ let private renderEvidenceLoadErrors (errors: VerificationEvidenceLoadError list
                 sb.AppendLine(sprintf "  expected_object: %s:%d" src line) |> ignore
             | VerificationEvidenceParseError.JsonException (src, line, msg) ->
                 sb.AppendLine(sprintf "  json_exception: %s:%d %s" src line msg) |> ignore
-            | VerificationEvidenceParseError.WrongFieldType (src, line, field, expected) ->
-                sb.AppendLine(sprintf "  wrong_field_type: %s:%d %s expected %s" src line field expected) |> ignore
+            | VerificationEvidenceParseError.WrongFieldType (src, line, field, expected, actual) ->
+                sb.AppendLine(sprintf "  wrong_field_type: %s:%d %s expected %s, got %s" src line field expected actual) |> ignore
     sb.ToString()
 
 /// Render engine failure in human-readable form for CLI output.

@@ -329,7 +329,7 @@ type VerificationEvidenceParseError =
     | MalformedJson of source: string * lineNumber: int * message: string
     | ExpectedObject of source: string * lineNumber: int
     | MissingField of source: string * lineNumber: int * fieldName: string
-    | WrongFieldType of source: string * lineNumber: int * fieldName: string * expectedType: string
+    | WrongFieldType of source: string * lineNumber: int * fieldName: string * expectedType: string * actualType: string
     | UnsupportedSchemaVersion of source: string * lineNumber: int * version: string
     | UnknownVerificationKind of source: string * lineNumber: int * value: string
     | UnknownVerificationStatus of source: string * lineNumber: int * value: string

@@ -145,7 +145,7 @@ type LocatedVerificationEvidence = {
 let private fieldToError (source: string) (lineNumber: int) (fieldName: string) (lookup: FieldLookup<'a>) : VerificationEvidenceParseError option =
     match lookup with
     | Missing -> Some (VerificationEvidenceParseError.MissingField(source, lineNumber, fieldName))
-    | WrongType (_, actualType) -> Some (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, fieldName, actualType))
+    | WrongType (expectedType, actualType) -> Some (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, fieldName, expectedType, actualType))
     | Present _ -> None
 
 // =============================================================================
@@ -252,7 +252,8 @@ let private buildVerificationEvidenceRecord
         (stdoutSha: string option)
         (stderrSha: string option)
         : VerificationEvidence =
-    { SchemaVersion = VerificationEvidenceSchemaVersion
+    {
+      SchemaVersion = VerificationEvidenceSchemaVersion
       EvidenceId = evId
       EpisodeId = epId
       Kind = parsedKind
@@ -268,7 +269,7 @@ let private buildVerificationEvidenceRecord
 
 /// Parse a verification evidence record from JSON with strict validation.
 /// Returns Result to preserve exact failure information.
-let private parseVerificationEvidenceStrict (json: string) (source: string) (lineNumber: int) : Result<VerificationEvidence, VerificationEvidenceParseError> =
+let private parseVerificationEvidenceStrict (json: string) (source: string) (lineNumber: int) : Result<LocatedVerificationEvidence, VerificationEvidenceParseError> =
     try
         let v = parseJson json
         match v with
@@ -279,38 +280,44 @@ let private parseVerificationEvidenceStrict (json: string) (source: string) (lin
                 Result.Error (VerificationEvidenceParseError.UnsupportedSchemaVersion(source, lineNumber, sv))
             | _ ->
                 // Get required fields
-                match lookupString fields "verification_evidence_id" with
-                | None -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_evidence_id"))
-                | Some evId ->
+                match lookupFieldString fields "verification_evidence_id" with
+                | Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_evidence_id"))
+                | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_evidence_id", expected, actual))
+                | Present evId ->
                     // Validate evidence ID format
                     if not (sha256Regex.IsMatch(evId)) then
                         Result.Error (VerificationEvidenceParseError.InvalidEvidenceId(source, lineNumber, evId))
                     elif placeholderIdRegex.IsMatch(evId) then
                         Result.Error (VerificationEvidenceParseError.PlaceholderEvidenceId(source, lineNumber, evId))
                     else
-                        match lookupString fields "episode_id" with
-                        | None -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "episode_id"))
-                        | Some epId ->
-                            match lookupString fields "verification_kind" with
-                            | None -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_kind"))
-                            | Some kindToken ->
+                        match lookupFieldString fields "episode_id" with
+                        | Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "episode_id"))
+                        | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "episode_id", expected, actual))
+                        | Present epId ->
+                            match lookupFieldString fields "verification_kind" with
+                            | Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_kind"))
+                            | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_kind", expected, actual))
+                            | Present kindToken ->
                                 match tryParseVerificationKind kindToken with
                                 | None -> Result.Error (VerificationEvidenceParseError.UnknownVerificationKind(source, lineNumber, kindToken))
                                 | Some parsedKind ->
-                                    match lookupString fields "verification_command" with
-                                    | None -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_command"))
-                                    | Some cmd ->
-                                        match lookupString fields "verification_result" with
-                                        | None -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_result"))
-                                        | Some statusToken ->
+                                    match lookupFieldString fields "verification_command" with
+                                    | Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_command"))
+                                    | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_command", expected, actual))
+                                    | Present cmd ->
+                                        match lookupFieldString fields "verification_result" with
+                                        | Missing -> Result.Error (VerificationEvidenceParseError.MissingField(source, lineNumber, "verification_result"))
+                                        | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_result", expected, actual))
+                                        | Present statusToken ->
                                             match tryParseVerificationStatus statusToken with
                                             | None -> Result.Error (VerificationEvidenceParseError.UnknownVerificationStatus(source, lineNumber, statusToken))
                                             | Some parsedStatus ->
                                                 // Exit code is required and must be non-negative
-                                                match lookupInt fields "verification_exit_code" with
-                                                | None -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, "null"))
-                                                | Some ec when ec < 0 -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, string ec))
-                                                | Some ec ->
+                                                match lookupFieldInt fields "verification_exit_code" with
+                                                | Missing -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, "null"))
+                                                | WrongType (expected, actual) -> Result.Error (VerificationEvidenceParseError.WrongFieldType(source, lineNumber, "verification_exit_code", expected, actual))
+                                                | Present ec when ec < 0 -> Result.Error (VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, string ec))
+                                                | Present ec ->
                                                     // Validate commit OID if present
                                                     let testedCommitOid = lookupOptString fields "tested_commit_oid" |> Option.defaultValue ""
                                                     if testedCommitOid.Length > 0 && not (oid40Regex.IsMatch(testedCommitOid) || oid64Regex.IsMatch(testedCommitOid)) then
@@ -334,8 +341,8 @@ let private parseVerificationEvidenceStrict (json: string) (source: string) (lin
                                                                 | _ ->
                                                                     let wd = lookupOptString fields "working_directory" |> Option.defaultValue ""
                                                                     let logPath = lookupOptString fields "combined_log_path"
-                                                                    let record = buildVerificationEvidenceRecord evId epId parsedKind cmd parsedStatus testedCommitOid testedTreeOid ec stdoutSha stderrSha
-                                                                    Result.Ok { record with WorkingDirectory = wd; CombinedLogPath = logPath }
+                                                                    let evidence = buildVerificationEvidenceRecord evId epId parsedKind cmd parsedStatus testedCommitOid testedTreeOid ec stdoutSha stderrSha
+                                                                    Result.Ok { Evidence = { evidence with WorkingDirectory = wd; CombinedLogPath = logPath }; SourcePath = source; SourceLine = lineNumber }
         | _ -> Result.Error (VerificationEvidenceParseError.ExpectedObject(source, lineNumber))
     with
     | JsonParseException (_, msg) ->
@@ -345,29 +352,53 @@ let private parseVerificationEvidenceStrict (json: string) (source: string) (lin
     | ex ->
         Result.Error (VerificationEvidenceParseError.JsonException(source, lineNumber, ex.Message))
 
+// =============================================================================
+// Workstream 5: Canonical semantic equality
+// =============================================================================
+
+/// Compare two VerificationEvidence records for semantic equality.
+/// Compares all 14 fields: SchemaVersion, EvidenceId, EpisodeId, Kind, Command,
+/// WorkingDirectory, TestedCommitOid, TestedTreeOid, ExitCode, StdoutSha256,
+/// StderrSha256, CombinedLogPath, Status
+let verificationEvidenceSemanticallyEqual (a: VerificationEvidence) (b: VerificationEvidence) : bool =
+    a.SchemaVersion = b.SchemaVersion
+    && a.EvidenceId = b.EvidenceId
+    && a.EpisodeId = b.EpisodeId
+    && a.Kind = b.Kind
+    && a.Command = b.Command
+    && a.WorkingDirectory = b.WorkingDirectory
+    && a.TestedCommitOid = b.TestedCommitOid
+    && a.TestedTreeOid = b.TestedTreeOid
+    && a.ExitCode = b.ExitCode
+    && a.StdoutSha256 = b.StdoutSha256
+    && a.StderrSha256 = b.StderrSha256
+    && a.CombinedLogPath = b.CombinedLogPath
+    && a.Status = b.Status
+
 /// Load verification evidence with strict all-or-nothing semantics.
-/// - Missing file fails
+
 /// - Unreadable file fails
 /// - One malformed line fails the whole load
 /// - Duplicate IDs fail
 /// - Conflicting records fail
-let loadVerificationEvidenceStrict (repoRoot: string) : Result<VerificationEvidence list, VerificationEvidenceLoadError list> =
+let loadVerificationEvidenceStrict (repoRoot: string) : Result<LocatedVerificationEvidence list, VerificationEvidenceLoadError list> =
     let path = repoRelative repoRoot verificationEvidenceCanonicalPath
     if not (File.Exists path) then
         Result.Error [ EvidenceFileMissing path ]
     else
         try
-            let lines = File.ReadAllLines path
+            let allLines = File.ReadAllLines path
+            // Assign source lines BEFORE filtering blanks (physical line provenance)
+            let lineMappings =
+                allLines
+                |> Array.mapi (fun idx line -> idx + 1, line)  // Keep original line number (1-based)
+                |> Array.filter (fun (_, line) -> not (System.String.IsNullOrWhiteSpace line))
             let results =
-                lines
-                |> Array.mapi (fun idx line ->
-                    let lineNumber = idx + 1
-                    if System.String.IsNullOrWhiteSpace line then
-                        Result.Ok None
-                    else
-                        match parseVerificationEvidenceStrict line path lineNumber with
-                        | Result.Ok v -> Result.Ok (Some v)
-                        | Result.Error e -> Result.Error e)
+                lineMappings
+                |> Array.map (fun (lineNumber, line) ->
+                    match parseVerificationEvidenceStrict line path lineNumber with
+                    | Result.Ok v -> Result.Ok (Some (lineNumber, v))
+                    | Result.Error e -> Result.Error e)
                 |> Array.toList
 
             // Separate successes and errors
@@ -375,13 +406,14 @@ let loadVerificationEvidenceStrict (repoRoot: string) : Result<VerificationEvide
             if not (List.isEmpty errors) then
                 Result.Error (errors |> List.map ParseError)
             else
-                let records = results |> List.choose (function Result.Ok v -> v | _ -> None)
+                let records = results |> List.choose (function Result.Ok v -> v | _ -> None) |> List.map snd
 
                 // Check for duplicate and conflicting evidence records
                 // Track both: (evidenceId * lineNumber * record) to distinguish duplicates from conflicts
+                // Already have line numbers from parsing
                 let evidenceWithLines =
                     records
-                    |> List.mapi (fun idx r -> r.EvidenceId, (idx + 1), r)
+                    |> List.mapi (fun idx located -> located.Evidence.EvidenceId, (idx + 1), located.Evidence)
                 let idGroups = evidenceWithLines |> List.groupBy (fun (eid, _, _) -> eid)
 
                 // Separate true duplicates (same ID, same content) from conflicts (same ID, different content)
@@ -391,12 +423,8 @@ let loadVerificationEvidenceStrict (repoRoot: string) : Result<VerificationEvide
                     match entries with
                     | (id, line1, r1) :: (id2, line2, r2) :: _ ->
                         // Multiple entries with same ID - check if content differs
-                        if r1.EvidenceId <> r2.EvidenceId
-                           || r1.EpisodeId <> r2.EpisodeId
-                           || r1.Kind <> r2.Kind
-                           || r1.Command <> r2.Command
-                           || r1.ExitCode <> r2.ExitCode
-                           || r1.Status <> r2.Status then
+                        // Use canonical semantic equality for conflict detection
+                        if not (verificationEvidenceSemanticallyEqual r1 r2) then
                             // Conflicting content for same ID
                             conflictErrors <- ConflictingEvidenceRecord(path, id, line1, line2) :: conflictErrors
                         else
@@ -429,7 +457,7 @@ let loadVerificationEvidenceStrict (repoRoot: string) : Result<VerificationEvide
 [<System.Obsolete("Use loadVerificationEvidenceStrict directly. This fails open and cannot be used for qualification.")>]
 let loadVerificationEvidence (repoRoot: string) : VerificationEvidence list =
     match loadVerificationEvidenceStrict repoRoot with
-    | Result.Ok records -> records
+    | Result.Ok locatedRecords -> locatedRecords |> List.map (fun l -> l.Evidence)
     | Result.Error _ -> []
 
 /// Render a single declaration JSON file into a typed record.  Performs
@@ -649,7 +677,7 @@ type EpisodeEngineResult = {
     RepairEpisodes: RepairEpisode list
     Transitions: DiagnosticTransition list
     ChangeSets: GitChangeSet list
-    Verification: VerificationEvidence list
+    Verification: LocatedVerificationEvidence list
     Outcome: bool
     Declarations: (string * DeclarationValidation) list
 }
@@ -740,7 +768,7 @@ let private runEpisodesWithEvidence
     (repoRoot: string)
     (options: EpisodeEngineOptions)
     (declarations: (string * DeclarationValidation) list)
-    (allEvidence: VerificationEvidence list)
+    (allEvidence: LocatedVerificationEvidence list)
     : EpisodeEngineResult =
 
     let keyCounts =
@@ -782,7 +810,7 @@ let private runEpisodesWithEvidence
     let mutable transitions : DiagnosticTransition list = []
     let mutable episodes : RepairEpisode list = []
     let mutable changeSets : GitChangeSet list = []
-    let mutable evidence : VerificationEvidence list = []
+    let mutable evidence : LocatedVerificationEvidence list = []
     let mutable missingGitObjects = 0
     let mutable duplicateIds = 0
     let episodeIds = System.Collections.Generic.HashSet<string>()
@@ -821,8 +849,8 @@ let private runEpisodesWithEvidence
                         afterCap.Occurrences
                 transitions <- transitionResult.Transitions @ transitions
                 // Filter evidence for this episode
-                let episodeEvidence = allEvidence |> List.filter (fun e -> e.EpisodeId = episodeId)
-                let verificationLevel = verificationLevelFromEvidence episodeEvidence
+                let episodeEvidence = allEvidence |> List.filter (fun e -> e.Evidence.EpisodeId = episodeId)
+                let verificationLevel = verificationLevelFromEvidence (episodeEvidence |> List.map (fun l -> l.Evidence))
                 let qual =
                     qualification compat changeSet.Entries afterOk verificationLevel transitions
                 let contractBefore = commandContract beforeCap.Manifest
@@ -867,7 +895,7 @@ let private runEpisodesWithEvidence
     let sortedEpisodes = episodes |> List.sortBy (fun e -> e.EpisodeId)
     let sortedChangeSets = changeSets |> List.sortBy (fun cs -> cs.ChangeSetId)
     let sortedTransitions = transitions |> List.sortBy (fun t -> t.EpisodeId, t.ExactFingerprint)
-    let sortedEvidence = evidence |> List.sortBy (fun e -> e.EvidenceId)
+    let sortedEvidence = evidence |> List.sortBy (fun e -> e.SourceLine)
 
     let episodesBody =
         sortedEpisodes
@@ -883,7 +911,7 @@ let private runEpisodesWithEvidence
         |> String.concat "\n"
     let evidenceBody =
         sortedEvidence
-        |> List.map renderVerificationEvidence
+        |> List.map (fun l -> renderVerificationEvidence l.Evidence)
         |> String.concat "\n"
 
     let summary =
