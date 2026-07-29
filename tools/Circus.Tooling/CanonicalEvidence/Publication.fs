@@ -27,6 +27,7 @@ open System.IO
 open System.Text
 
 open Circus.Tooling.CanonicalEvidence.EvidenceRecords
+open Circus.Tooling.CanonicalEvidence.Validation
 open Circus.Tooling.FSharpDiagnostics.Hashing
 
 // -----------------------------------------------------------------------------
@@ -709,10 +710,11 @@ let private parseAndValidateArtifactsJsonl
             checkArtifact "canonical-evidence.json" compatHash compatLength
     List.ofSeq failures
 
-/// Validate compatibility evidence against records.
+/// Validate compatibility evidence against records and expected projection.
 let private validateCompatibilityEvidence
     (compatPath: string)
     (compatBytes: byte array)
+    (expectedProjection: CanonicalEvidence)
     (records: CanonicalExecutionEvidence list)
     (aggregate: CanonicalExecutionAggregate)
     : StagedSnapshotFailure list =
@@ -729,17 +731,89 @@ let private validateCompatibilityEvidence
         match parseWireJson text with
         | Result.Error detail ->
             failures.Add(StagedSnapshotFailure.CompatibilityParseFailed(detail))
-        | Result.Ok compat ->
+        | Result.Ok diskCompat ->
+            // Phase 1: Compare disk compatibility against expected projection using production comparator
+            // This is the authoritative structural comparison for staged validation
+            let projectionDiffs = compareCompatibilityProjection expectedProjection diskCompat
+            for diff in projectionDiffs do
+                match diff with
+                | CompatibilityDifference.SchemaVersion (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "schema_version mismatch: expected=%d actual=%d" expected actual))
+                | CompatibilityDifference.ProviderName (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "provider_name mismatch: expected=%s actual=%s" expected actual))
+                | CompatibilityDifference.ProviderVersion (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "provider_version mismatch: expected=%s actual=%s" expected actual))
+                | CompatibilityDifference.TestedCommitOid (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual))
+                | CompatibilityDifference.TestedTreeOid (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "tested_tree_oid mismatch: expected=%s actual=%s" expected actual))
+                | CompatibilityDifference.ObjectFormat (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "object_format mismatch: expected=%s actual=%s" expected actual))
+                | CompatibilityDifference.ActiveScopeActId (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "active_scope_act_id mismatch: expected=%s actual=%s" expected actual))
+                | CompatibilityDifference.ActiveScopePointerBlobOid (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "active_scope_pointer_blob_oid mismatch: expected=%s actual=%s" expected actual))
+                | CompatibilityDifference.ScopeDeclarationPath (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "scope_declaration_path mismatch: expected=%s actual=%s" expected actual))
+                | CompatibilityDifference.DeclarationBlobOid (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "declaration_blob_oid mismatch: expected=%s actual=%s" expected actual))
+                | CompatibilityDifference.BaselineCommitOid (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "baseline_commit_oid mismatch: expected=%s actual=%s" expected actual))
+                | CompatibilityDifference.OverallStatus (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "overall_status mismatch: expected=%s actual=%s" (statusToken expected) (statusToken actual)))
+                | CompatibilityDifference.SemanticSha256 (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual))
+                | CompatibilityDifference.CheckCount (expected, actual) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
+                        "(all)", sprintf "check count mismatch: expected=%d actual=%d" expected actual))
+                | CompatibilityDifference.MissingCheck checkId ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
+                        checkId, sprintf "missing check in disk compatibility: %s" checkId))
+                | CompatibilityDifference.UnknownCheck checkId ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
+                        checkId, sprintf "unknown check in disk compatibility: %s" checkId))
+                | CompatibilityDifference.CheckDifference (checkId, checkDiff) ->
+                    let detail = 
+                        match checkDiff with
+                        | CompatibilityCheckDifference.Id (expected, actual) -> sprintf "id mismatch: expected=%s actual=%s" expected actual
+                        | CompatibilityCheckDifference.CommandArgv (expected, actual) -> sprintf "command_argv mismatch"
+                        | CompatibilityCheckDifference.WorkingDirectory (expected, actual) -> sprintf "working_directory mismatch"
+                        | CompatibilityCheckDifference.DurationMilliseconds (expected, actual) -> sprintf "duration mismatch: expected=%d actual=%d" expected actual
+                        | CompatibilityCheckDifference.ExitCode (expected, actual) -> sprintf "exit_code mismatch"
+                        | CompatibilityCheckDifference.Status (expected, actual) -> sprintf "status mismatch: expected=%s actual=%s" (statusToken expected) (statusToken actual)
+                        | CompatibilityCheckDifference.StdoutSha256 (expected, actual) -> sprintf "stdout_sha256 mismatch"
+                        | CompatibilityCheckDifference.StderrSha256 (expected, actual) -> sprintf "stderr_sha256 mismatch"
+                        | CompatibilityCheckDifference.FailureKind (expected, actual) -> sprintf "failure_kind mismatch"
+                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(checkId, detail))
+                | CompatibilityDifference.DuplicateExpectedCheckId (checkId, count) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
+                        checkId, sprintf "duplicate check id in expected: %s (count=%d)" checkId count))
+                | CompatibilityDifference.DuplicateActualCheckId (checkId, count) ->
+                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
+                        checkId, sprintf "duplicate check id in disk: %s (count=%d)" checkId count))
+            
+            // Phase 2: Legacy record consistency checks (for backward compatibility with aggregate)
             // Verify commit
-            if compat.TestedCommitOid <> aggregate.SubjectCommitOid then
+            if diskCompat.TestedCommitOid <> aggregate.SubjectCommitOid then
                 failures.Add(StagedSnapshotFailure.CompatibilitySemanticHashMismatch(
-                    aggregate.SubjectCommitOid, compat.TestedCommitOid))
+                    aggregate.SubjectCommitOid, diskCompat.TestedCommitOid))
             // Verify tree
-            if compat.TestedTreeOid <> aggregate.SubjectTreeOid then
+            if diskCompat.TestedTreeOid <> aggregate.SubjectTreeOid then
                 failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                    sprintf "tree mismatch: compat=%s aggregate=%s" compat.TestedTreeOid aggregate.SubjectTreeOid))
-            // Verify record IDs match (compat.Checks uses EvidenceCheckResult with Id field)
-            let compatRecordIds = List.map (fun (e: EvidenceCheckResult) -> e.Id) compat.Checks |> List.sort
+                    sprintf "tree mismatch: compat=%s aggregate=%s" diskCompat.TestedTreeOid aggregate.SubjectTreeOid))
+            // Verify record IDs match (diskCompat.Checks uses EvidenceCheckResult with Id field)
+            let compatRecordIds = List.map (fun (e: EvidenceCheckResult) -> e.Id) diskCompat.Checks |> List.sort
             let aggregateRecordIds = aggregate.RecordIds
             if compatRecordIds <> aggregateRecordIds then
                 failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
@@ -747,7 +821,7 @@ let private validateCompatibilityEvidence
                     sprintf "record IDs mismatch: compat count=%d aggregate count=%d"
                         (List.length compatRecordIds) (List.length aggregateRecordIds)))
             // Verify individual record consistency
-            let compatById = List.map (fun (e: EvidenceCheckResult) -> e.Id, e) compat.Checks |> Map.ofList
+            let compatById = List.map (fun (e: EvidenceCheckResult) -> e.Id, e) diskCompat.Checks |> Map.ofList
             for record in records do
                 match Map.tryFind record.EvidenceId compatById with
                 | None ->
@@ -910,7 +984,7 @@ let stageAndPublishSnapshot
                     | Result.Error detail ->
                         allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
                     | Ok bytes ->
-                        let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes parsedRecords aggregate
+                        let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes compatibilityProjection parsedRecords aggregate
                         allFailures.AddRange(compatFailures)
 
                     // Phase 9: Handle validation result
@@ -1019,11 +1093,11 @@ let stageAndPublishSnapshot
 
                 // Validate compatibility evidence against records
                 match compatDiskBytes with
-                | Result.Error detail ->
-                    allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
-                | Ok bytes ->
-                    let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes parsedRecords aggregate
-                    allFailures.AddRange(compatFailures)
+                    | Result.Error detail ->
+                        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
+                    | Ok bytes ->
+                        let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes compatibilityProjection parsedRecords aggregate
+                        allFailures.AddRange(compatFailures)
 
                 // Phase 9: Handle validation result
                 if allFailures.Count > 0 then

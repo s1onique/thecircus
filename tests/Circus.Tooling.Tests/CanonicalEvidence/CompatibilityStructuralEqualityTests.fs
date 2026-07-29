@@ -181,13 +181,20 @@ let topLevelFieldMutationsTests =
 
 let checkCountMutationsTests =
     testList "CheckCountMutations" [
-        testCase "removing one check is detected" <| fun () ->
+        testCase "removing one check is detected with exact MissingCheck" <| fun () ->
             let fixture = createValidPublicationFixture ()
+            let removedCheckId = fixture.CompatibilityProjection.Checks.Head.Id
             let mutated = { fixture.CompatibilityProjection with Checks = List.tail fixture.CompatibilityProjection.Checks }
             let diffs = compareCompatibilityProjection fixture.CompatibilityProjection mutated
             Expect.isNonEmpty diffs "removing check should be detected"
+            // CheckCount is reported when counts differ
+            let hasCheckCount = diffs |> List.exists (function | Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference.CheckCount _ -> true | _ -> false)
+            Expect.isTrue hasCheckCount "CheckCount difference should be reported"
+            // MissingCheck should also be reported (count-independent analysis)
+            let hasMissing = diffs |> List.exists (function | Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference.MissingCheck id -> id = removedCheckId | _ -> false)
+            Expect.isTrue hasMissing (sprintf "MissingCheck for '%s' should be reported" removedCheckId)
 
-        testCase "adding one check is detected" <| fun () ->
+        testCase "adding one check is detected with exact UnknownCheck" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let extraCheck = {
                 Id = "extra-check"
@@ -203,12 +210,49 @@ let checkCountMutationsTests =
             let mutated = { fixture.CompatibilityProjection with Checks = extraCheck :: fixture.CompatibilityProjection.Checks }
             let diffs = compareCompatibilityProjection fixture.CompatibilityProjection mutated
             Expect.isNonEmpty diffs "adding check should be detected"
+            // CheckCount is reported when counts differ
+            let hasCheckCount = diffs |> List.exists (function | Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference.CheckCount _ -> true | _ -> false)
+            Expect.isTrue hasCheckCount "CheckCount difference should be reported"
+            // UnknownCheck should also be reported (count-independent analysis)
+            let hasUnknown = diffs |> List.exists (function | Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference.UnknownCheck id -> id = "extra-check" | _ -> false)
+            Expect.isTrue hasUnknown "UnknownCheck for 'extra-check' should be reported"
 
         testCase "check count mismatch is detected" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let mutated = { fixture.CompatibilityProjection with Checks = [] }
             let diffs = compareCompatibilityProjection fixture.CompatibilityProjection mutated
             Expect.isNonEmpty diffs "check count mismatch should be detected"
+            let hasCheckCount = diffs |> List.exists (function | Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference.CheckCount _ -> true | _ -> false)
+            Expect.isTrue hasCheckCount "CheckCount difference should be reported"
+    ]
+
+// -----------------------------------------------------------------------------
+// Test group: BijectionEdgeCases
+// -----------------------------------------------------------------------------
+
+let bijectionEdgeCasesTests =
+    testList "BijectionEdgeCases" [
+        testCase "duplicate check ID in expected is detected" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let originalCheck = fixture.CompatibilityProjection.Checks.Head
+            let dupCheck = { originalCheck with Id = originalCheck.Id } // Same ID
+            // Create expected with duplicates
+            let expectedWithDup = { fixture.CompatibilityProjection with Checks = originalCheck :: dupCheck :: List.tail fixture.CompatibilityProjection.Checks }
+            let diffs = compareCompatibilityProjection expectedWithDup fixture.CompatibilityProjection
+            Expect.isNonEmpty diffs "duplicate check ID should be detected"
+            let hasDuplicate = diffs |> List.exists (function | Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference.DuplicateExpectedCheckId(id, count) -> id = originalCheck.Id && count = 2 | _ -> false)
+            Expect.isTrue hasDuplicate (sprintf "DuplicateExpectedCheckId for '%s' with count 2 should be reported" originalCheck.Id)
+
+        testCase "duplicate check ID in actual is detected" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let originalCheck = fixture.CompatibilityProjection.Checks.Head
+            let dupCheck = { originalCheck with Id = originalCheck.Id } // Same ID
+            // Create actual with duplicates
+            let actualWithDup = { fixture.CompatibilityProjection with Checks = dupCheck :: dupCheck :: (List.tail fixture.CompatibilityProjection.Checks) }
+            let diffs = compareCompatibilityProjection fixture.CompatibilityProjection actualWithDup
+            Expect.isNonEmpty diffs "duplicate check ID should be detected"
+            let hasDuplicate = diffs |> List.exists (function | Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference.DuplicateActualCheckId(id, count) -> id = originalCheck.Id && count = 2 | _ -> false)
+            Expect.isTrue hasDuplicate (sprintf "DuplicateActualCheckId for '%s' with count 2 should be reported" originalCheck.Id)
     ]
 
 // -----------------------------------------------------------------------------
@@ -350,6 +394,7 @@ let compatibilityStructuralEqualityTests =
         exactStructuralEqualityTests
         topLevelFieldMutationsTests
         checkCountMutationsTests
+        bijectionEdgeCasesTests
         perCheckFieldMutationsTests
         bijectionValidationTests
     ]

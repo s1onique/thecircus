@@ -218,6 +218,8 @@ type CompatibilityDifference =
     | MissingCheck of checkId: string
     | UnknownCheck of checkId: string
     | CheckDifference of checkId: string * difference: CompatibilityCheckDifference
+    | DuplicateExpectedCheckId of checkId: string * count: int
+    | DuplicateActualCheckId of checkId: string * count: int
 
 /// Compare two evidence check results field by field
 let compareCompatibilityCheck (expected: EvidenceCheckResult) (actual: EvidenceCheckResult) : CompatibilityCheckDifference list =
@@ -266,38 +268,50 @@ let compareCompatibilityProjection (expected: CanonicalEvidence) (actual: Canoni
     if expected.SemanticSha256 <> actual.SemanticSha256 then
         diffs.Add(CompatibilityDifference.SemanticSha256(expected.SemanticSha256, actual.SemanticSha256))
     
-    // Check count comparison
+    // Check count comparison (always report)
     if expected.Checks.Length <> actual.Checks.Length then
         diffs.Add(CompatibilityDifference.CheckCount(expected.Checks.Length, actual.Checks.Length))
-    else
-        // Build ID sets for bijection check
-        let expectedIds = expected.Checks |> List.map (fun c -> c.Id) |> Set.ofList
-        let actualIds = actual.Checks |> List.map (fun c -> c.Id) |> Set.ofList
-        
-        // Find missing checks (in expected but not in actual)
-        let missingChecks = expectedIds - actualIds
-        for missingId in missingChecks do
-            diffs.Add(CompatibilityDifference.MissingCheck(missingId))
-        
-        // Find unknown checks (in actual but not in expected)
-        let unknownChecks = actualIds - expectedIds
-        for unknownId in unknownChecks do
-            diffs.Add(CompatibilityDifference.UnknownCheck(unknownId))
-        
-        // Compare matched checks by ID (bijection)
-        let expectedById = expected.Checks |> List.map (fun c -> c.Id, c) |> Map.ofList
-        let actualById = actual.Checks |> List.map (fun c -> c.Id, c) |> Map.ofList
-        
-        for expectedId in expectedIds do
-            match Map.tryFind expectedId actualById with
-            | None -> () // Already reported as missing/unknown
-            | Some actualCheck ->
-                match Map.tryFind expectedId expectedById with
-                | None -> ()
-                | Some expectedCheck ->
-                    let checkDiffs = compareCompatibilityCheck expectedCheck actualCheck
-                    for diff in checkDiffs do
-                        diffs.Add(CompatibilityDifference.CheckDifference(expectedId, diff))
+    
+    // Detect duplicate IDs in expected (before Set/Map construction)
+    let expectedIdGroups = expected.Checks |> List.groupBy (fun c -> c.Id)
+    for checkId, group in expectedIdGroups do
+        if group.Length > 1 then
+            diffs.Add(CompatibilityDifference.DuplicateExpectedCheckId(checkId, group.Length))
+    
+    // Detect duplicate IDs in actual (before Set/Map construction)
+    let actualIdGroups = actual.Checks |> List.groupBy (fun c -> c.Id)
+    for checkId, group in actualIdGroups do
+        if group.Length > 1 then
+            diffs.Add(CompatibilityDifference.DuplicateActualCheckId(checkId, group.Length))
+    
+    // Build ID sets for bijection check (deduplicated for set operations)
+    let expectedIds = expected.Checks |> List.map (fun c -> c.Id) |> Set.ofList
+    let actualIds = actual.Checks |> List.map (fun c -> c.Id) |> Set.ofList
+    
+    // Find missing checks (in expected but not in actual) - always run
+    let missingChecks = expectedIds - actualIds
+    for missingId in missingChecks do
+        diffs.Add(CompatibilityDifference.MissingCheck(missingId))
+    
+    // Find unknown checks (in actual but not in expected) - always run
+    let unknownChecks = actualIds - expectedIds
+    for unknownId in unknownChecks do
+        diffs.Add(CompatibilityDifference.UnknownCheck(unknownId))
+    
+    // Compare matched checks by ID (bijection)
+    let expectedById = expected.Checks |> List.map (fun c -> c.Id, c) |> Map.ofList
+    let actualById = actual.Checks |> List.map (fun c -> c.Id, c) |> Map.ofList
+    
+    for expectedId in expectedIds do
+        match Map.tryFind expectedId actualById with
+        | None -> () // Already reported as missing/unknown
+        | Some actualCheck ->
+            match Map.tryFind expectedId expectedById with
+            | None -> ()
+            | Some expectedCheck ->
+                let checkDiffs = compareCompatibilityCheck expectedCheck actualCheck
+                for diff in checkDiffs do
+                    diffs.Add(CompatibilityDifference.CheckDifference(expectedId, diff))
     
     List.ofSeq diffs
 
