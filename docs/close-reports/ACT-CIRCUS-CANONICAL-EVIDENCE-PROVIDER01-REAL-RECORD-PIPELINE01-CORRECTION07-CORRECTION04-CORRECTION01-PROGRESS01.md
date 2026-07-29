@@ -2,7 +2,7 @@
 
 ## Summary
 
-**ACT:** ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01-CORRECTION07-CORRECTION04
+**ACT:** ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01-CORRECTION07-CORRECTION04-CORRECTION01
 
 **Parent Correction:** CORRECTION04 was invalidated; this progress report covers the reimplementation
 
@@ -36,10 +36,32 @@ This progress report documents Phase 1 of the CORRECTION04-CORRECTION01 workstre
    - Added exact assertions for MissingCheck/UnknownCheck
    - Added BijectionEdgeCases tests for duplicate detection
 
+4. **StagedCompatibilityMutationTests.fs** - Added staged mutation tests:
+   - Uses domain model to mutate, re-render with correct semantic hash
+   - Proves production comparator rejects structurally mutated documents
+   - All four live snapshot files verified unchanged after rejection
+
 ### Test Results
 
 - CompatibilityStructuralEquality: 32 passed
-- Publication: 18 passed
+- StagedCompatibilityMutation: 7 passed (6 new + 1 existing)
+
+### Test Suite Composition
+
+```yaml
+staged_compatibility_suite:
+  tests_total: 7
+  rehashed_structural_mutation_cases: 3
+    - RehashedProviderNameMutation
+    - RehashedOverallStatusMutation
+    - RehashedCommitOidMutation
+  parse_failure_cases: 1
+    - InvalidJsonMutation
+  success_and_preservation_cases: 3
+    - ValidSnapshot
+    - FourFilePreservation
+    - IdempotentOverwrite
+```
 
 ### Resolved Review Items
 
@@ -49,17 +71,45 @@ This progress report documents Phase 1 of the CORRECTION04-CORRECTION01 workstre
 - [x] Missing and unknown ID analysis runs even when counts differ
 - [x] Publisher invokes comparator by source inspection
 - [x] Failure taxonomy repair (TestedCommitOid → ProjectionMismatch)
+- [x] Staged mutation tests use domain model with correct semantic hash
+- [x] Four-file preservation verified (records.jsonl, aggregate.json, artifacts.jsonl, canonical-evidence.json)
+- [x] Commit OID test strengthened to require exact CompatibilityProjectionMismatch
+- [x] Report conflict resolved (renamed to progress report)
+
+### Current Status by Category
+
+```yaml
+CORRECTION04_CORRECTION01:
+  compatibility:
+    pure_comparator_authority: CLOSED_PASS
+    production_staged_wiring: CLOSED_PASS
+    basic_staged_mutation_proof: CLOSED_PASS
+    commit_taxonomy_source_fix: PASS
+    rehashed_mutation_isolation: CLOSED_PASS
+    exact_commit_taxonomy_test: CLOSED_PASS
+    all_four_file_preservation: CLOSED_PASS
+
+  aggregate_authority: OPEN
+  cleanup_failure_injection: OPEN
+  replacement_and_restoration: OPEN
+  provider_once_only: OPEN
+  CLI_integration: OPEN
+  full_combined_execution: OPEN
+  inclusive_range_hygiene: OPEN
+  fresh_gate: OPEN
+
+  overall_verdict: IN_PROGRESS
+```
 
 ### Remaining Work
 
-1. **Staged mutation tests** - Add tests that mutate staged canonical-evidence.json, recompute semantic hash, and prove rejection
-2. **Aggregate production comparator** - Move aggregate comparison to Validation module
-3. **Aggregate staged mutation tests** - Same for aggregate.json mutations
-4. **Provider once-only counters** - Real provider integration
-5. **CLI publication integration** - End-to-end CLI tests
-6. **Cleanup failure injection** - Typed cleanup-failure preservation tests
-7. **Replacement failure indices** - Test indices 0-3 failure scenarios
-8. **Restoration failure injection** - Test restoration failure paths
+1. **Aggregate production comparator** - Move aggregate comparison to Validation module
+2. **Aggregate staged mutation tests** - Same for aggregate.json mutations
+3. **Provider once-only counters** - Real provider integration
+4. **CLI publication integration** - End-to-end CLI tests
+5. **Cleanup failure injection** - Typed cleanup-failure preservation tests
+6. **Replacement failure indices** - Test indices 0-3 failure scenarios
+7. **Restoration failure injection** - Test restoration failure paths
 
 ## Related Documents
 
