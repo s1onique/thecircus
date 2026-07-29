@@ -5,6 +5,9 @@
 **ACT:** ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01-CORRECTION07
 **Title:** Constructor-derived publication fixtures with valid OIDs
 **Status:** PARTIAL_CHECKPOINT
+
+**checkpoint_complete:** true
+**ACT_closed:** false
 **Date:** 2026-07-29
 
 ## Problem Statement
@@ -126,8 +129,26 @@ SHA-256: 4c7a8b2d9e3f1a6c5b8d2e4f7a9c1b3d5e7f8a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d
 - [x] Previous snapshot preservation works
 - [x] Invalid predecessor tests removed
 
-## Next Steps
+## Terminal Proof Items Remaining
 
-1. **CORRECTION08**: Add typed failure kind authority tests (if not already covered)
-2. **CORRECTION09**: Add provider once-only orchestration tests
-3. **CORRECTION10**: Add CLI publication integration tests
+The following items must be completed before CORRECTION07 can be fully closed:
+
+1. **Exact compatibility structural equality**: Compare complete compatibility document structure
+2. **Complete aggregate structural equality**: Compare every aggregate field
+3. **Typed cleanup-failure tests**: Inject and verify cleanup failure semantics
+4. **Partial replacement and restoration tests**: Verify rollback behavior
+5. **Provider once-only orchestration tests**: Prove each check executes exactly once
+6. **CLI publication integration tests**: Verify CLI passes exact records/aggregate/projection
+7. **Full CanonicalEvidence suite execution**: Run complete test suite
+8. **Fresh gate against final tip**: Generate passing gate against final implementation
+
+## Subscope Status
+
+| Subscope | Status |
+|----------|--------|
+| strict_parser_tests | CLOSED_PASS |
+| publication_fixture_tests (18/18) | CLOSED_PASS |
+| force_update_recovery | CLOSED_PASS |
+| latest_commit_hygiene | PASS |
+| terminal_technical_proof | INCOMPLETE |
+| canonical_gate | STALE_FAIL |
