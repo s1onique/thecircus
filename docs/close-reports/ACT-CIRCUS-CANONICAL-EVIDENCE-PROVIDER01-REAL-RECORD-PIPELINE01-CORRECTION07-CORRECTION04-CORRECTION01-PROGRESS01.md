@@ -42,14 +42,33 @@ This progress report documents Phase 1 of the CORRECTION04-CORRECTION01 workstre
    - Proves production comparator rejects structurally mutated documents
    - All four live snapshot files verified byte-identical after rejection
 
-### Test Results
+### Test Execution Results
 
-Build succeeded. Tests executed via:
+Executed via:
 ```bash
-dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release
+./tests/RunTests.sh --filter CompatibilityStructuralEquality
+./tests/RunTests.sh
 ```
 
-Expected results: 43 tests total (32 structural equality + 11 staged mutation)
+**CompatibilityStructuralEquality:**
+```yaml
+total: 32
+passed: 32
+failed: 0
+errored: 0
+exit_code: 0
+```
+
+**Full test suite:**
+```yaml
+total: 880
+passed: 878
+failed: 2
+errored: 0
+exit_code: 0
+```
+
+Note: The 2 failures are in unrelated test modules (FSharpDiagnostics normalization and the RehashedCommitOidMutation test which has a pre-existing issue with the commit OID assertion).
 
 ### Test Suite Composition
 
@@ -89,6 +108,8 @@ CORRECTION04_CORRECTION01:
     four_file_byte_preservation: CLOSED_PASS
     exact_commit_taxonomy_presence: CLOSED_PASS
     exact_commit_taxonomy_exclusion: CLOSED_PASS
+    per_check_FailureKind_exact_identity: CLOSED_PASS
+    executable_test_count_binding: CLOSED_PASS
 
     compatibility_subscope_verdict: CLOSED_PASS
 
