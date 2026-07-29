@@ -89,15 +89,15 @@ let createValidPublicationFixture (): ValidPublicationFixture =
     // Create two executed checks: one required pass, one optional fail
     let check1Start = DateTimeOffset(2026, 7, 29, 12, 0, 0, TimeSpan.Zero)
     let check2Start = check1Start.AddSeconds(2.0)
-    
+
     let executedChecks = [
         createExecutedCheck "tooling-build" true Pass check1Start
         createExecutedCheck "tooling-tests-build" false Fail check2Start
     ]
-    
+
     // Convert to records using the production pipeline
     let recordsResult = convertExecutedChecksToRecords executedChecks testCommitOid1 testTreeOid1 true
-    
+
     match recordsResult with
     | Error e -> failwithf "Fixture creation failed: %A" e
     | Ok records ->
@@ -105,17 +105,17 @@ let createValidPublicationFixture (): ValidPublicationFixture =
         let validation = validateRecords records testCommitOid1 testTreeOid1
         if not validation.Valid then
             failwithf "Fixture records validation failed: %A" validation.Issues
-        
+
         // Compute aggregate
         let aggregate =
             computeAggregate testCommitOid1 testTreeOid1 records
             |> finalizeAggregate
-        
+
         // Verify aggregate semantic hash recomputes
         let recomputedHash = computeAggregateSemanticHash aggregate
         if recomputedHash <> aggregate.SemanticSha256 then
             failwith "Aggregate semantic hash does not recompute"
-        
+
         // Build compatibility projection
         let compatChecks = records |> List.map (fun r ->
             {
@@ -130,7 +130,7 @@ let createValidPublicationFixture (): ValidPublicationFixture =
                 FailureKind = r.FailureKind
             }
         )
-        
+
         let compatibilityProjectionBase = {
             SchemaVersion = 1
             ProviderName = "circus-canonical-evidence"
@@ -144,17 +144,21 @@ let createValidPublicationFixture (): ValidPublicationFixture =
             DeclarationBlobOid = ""
             BaselineCommitOid = ""
             Checks = compatChecks
-            OverallStatus = Fail  // Because tooling-tests-build failed
+            OverallStatus = 
+                match aggregate.OverallStatus with
+                | RecordPass -> Pass
+                | RecordFail -> Fail
+                | RecordUnavailable -> Unavailable
             SemanticSha256 = ""  // Will be computed
         }
-        
+
         let compatibilityProjection = withSemanticHash compatibilityProjectionBase
-        
+
         // Verify compatibility semantic hash recomputes
         let compatRecomputedHash = computeSemanticHash compatibilityProjection
         if compatRecomputedHash <> compatibilityProjection.SemanticSha256 then
             failwith "Compatibility semantic hash does not recompute"
-        
+
         {
             ExecutedChecks = executedChecks
             Records = records
