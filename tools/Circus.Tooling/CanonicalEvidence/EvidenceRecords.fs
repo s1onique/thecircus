@@ -613,6 +613,16 @@ let private isValidSha256 (s: string) : bool =
             if not ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) then ok <- false
         ok
 
+/// Check if a string is a valid ISO 8601 timestamp.
+/// Accepts formats like: 2026-07-29T10:30:00Z, 2026-07-29T10:30:00.123Z, etc.
+let private isValidIso8601Timestamp (s: string) : bool =
+    if isNull s || s.Length < 10 then false
+    else
+        try
+            let styles = System.Globalization.DateTimeStyles.AssumeUniversal ||| System.Globalization.DateTimeStyles.AdjustToUniversal
+            System.DateTimeOffset.TryParseExact(s, [| "o"; "yyyy-MM-dd'T'HH:mm:ssZ"; "yyyy-MM-dd'T'HH:mm:ss.fffffffZ" |], CultureInfo.InvariantCulture, styles, ref (Unchecked.defaultof<_>))
+        with _ -> false
+
 /// Parse a JSON string value, reporting MissingField and WrongFieldType.
 let private parseRequiredJsonString (el: JsonElement) (name: string) (errors: ResizeArray<EvidenceWireParseError>) : string =
     let mutable found = Unchecked.defaultof<JsonElement>
@@ -828,6 +838,10 @@ let private parseEvidenceRecordObject (el: JsonElement) : EvidenceWireParseError
 
     // Parse FailureKind from canonical token
     let failureKind = Option.bind parseFailureKindCanonicalToken failureKindStr
+
+    // Validate started_at as ISO 8601 timestamp
+    if not (isNull startedAt) && not (String.IsNullOrEmpty startedAt) && not (isValidIso8601Timestamp startedAt) then
+        errors.Add(EvidenceWireParseError.InvalidTimestamp startedAt)
 
     // Validate negative values
     if durationMs < 0L then
