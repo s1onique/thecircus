@@ -1,9 +1,9 @@
 # Git History Safety Doctrine
 
-**Authority:** Circus Local Policy  
-**Scope:** `s1onique/thecircus` repository  
-**Effective:** Upon merge to `main`  
-**Supersedes:** None  
+**Authority:** Circus Local Policy
+**Scope:** `s1onique/thecircus` repository
+**Effective:** Upon merge to `main`
+**Supersedes:** None
 **Superseded by:** `ACT-LEAMAS-DISTRIBUTED-NO-FORCE-PUSH-POLICY01`
 
 ---

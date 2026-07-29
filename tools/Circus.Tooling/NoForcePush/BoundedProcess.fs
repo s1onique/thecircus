@@ -45,7 +45,7 @@ let private readBoundedBytesSync
     let bufferSize = 4096
     let buffer = Array.zeroCreate<byte> bufferSize
     let collected = ResizeArray<byte>()
-    
+
     let rec loop () =
         if ct.IsCancellationRequested || collected.Count >= limitBytes then
             ()
@@ -55,10 +55,10 @@ let private readBoundedBytesSync
                 for i in 0 .. bytesRead - 1 do
                     collected.Add(buffer.[i])
                 loop ()
-    
+
     try
         loop ()
-        
+
         if ct.IsCancellationRequested then
             Error(TimeoutExceeded 0)
         elif collected.Count >= limitBytes then

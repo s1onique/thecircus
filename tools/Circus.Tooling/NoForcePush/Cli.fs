@@ -36,7 +36,7 @@ let parse (argv: string list) : Result<Command, string> =
         | [ "--format"; "json" ] -> Ok(VerifyCmd "json")
         | [ "--format"; _ ] -> Error "format must be 'human' or 'json'"
         | _ -> Error "unexpected arguments after 'verify'"
-    
+
     | "pre-push" :: rest ->
         let rec parseArgs (args: string list) (repo: string option) (remoteName: string option) (remoteUrl: string option) =
             match args with
@@ -57,9 +57,9 @@ let parse (argv: string list) : Result<Command, string> =
                 | Some r, Some n, Some u -> Ok(PrePushCmd(r, n, u))
                 | _ -> Error "missing required arguments for pre-push"
             | _ -> Error "unrecognized argument"
-        
+
         parseArgs rest None None None
-    
+
     | "github-rules" :: "verify" :: rest ->
         let rec parseArgs (args: string list) (repo: string option) (branch: string option) =
             match args with
@@ -76,16 +76,16 @@ let parse (argv: string list) : Result<Command, string> =
                 | Some r, Some b -> Ok(GitHubRulesCmd(r, b))
                 | _ -> Error "missing required arguments for github-rules"
             | _ -> Error "unrecognized argument"
-        
+
         parseArgs rest None None
-    
+
     | _ -> Error "usage: circus-tooling no-force-push {verify|pre-push|github-rules|help}"
 
 /// Resolve the repository root.
 let resolveRepoRoot () : Result<string, string> =
     let cwd = Environment.CurrentDirectory
     let gitDir = Path.Combine(cwd, ".git")
-    
+
     if Directory.Exists gitDir then
         Ok cwd
     else
@@ -95,7 +95,7 @@ let resolveRepoRoot () : Result<string, string> =
             if Directory.Exists gitDir then Some path
             elif path = "/" then None
             else findRoot (Directory.GetParent(path).FullName)
-        
+
         match findRoot cwd with
         | Some root -> Ok root
         | None -> Error(sprintf "not in a Git repository (cwd=%s)" cwd)
@@ -103,13 +103,13 @@ let resolveRepoRoot () : Result<string, string> =
 /// Run the static policy verify command.
 let runVerify (repoRoot: string) (format: string) : int =
     let result = StaticPolicy.verify repoRoot
-    
+
     match format.ToLowerInvariant() with
     | "json" ->
         stdout.WriteLine(Rendering.renderStaticPolicyJson result)
     | _ ->
         stdout.WriteLine(Rendering.renderStaticPolicyHuman result)
-    
+
     if List.isEmpty result.Diagnostics && List.isEmpty result.OperationalErrors then
         ExitCode.pass
     elif not (List.isEmpty result.OperationalErrors) then
@@ -135,20 +135,20 @@ let run (argv: string list) : int =
         | HelpCmd ->
             stdout.WriteLine(helpText())
             ExitCode.pass
-        
+
         | VerifyCmd format ->
             match resolveRepoRoot() with
             | Ok root -> runVerify root format
             | Error msg ->
                 stderr.WriteLine(sprintf "Error: %s" msg)
                 ExitCode.operationalError
-        
+
         | PrePushCmd(repo, remoteName, remoteUrl) ->
             runPrePush repo remoteName remoteUrl
-        
+
         | GitHubRulesCmd(repository, branch) ->
             runGitHubRules repository branch
-    
+
     | Error msg ->
         stderr.WriteLine(sprintf "Error: %s" msg)
         stderr.WriteLine(helpText())

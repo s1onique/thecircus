@@ -138,7 +138,7 @@ let geometryValidationTests =
               match result with
               | Result.Error (CommitGeometryError.GitFailure msg) ->
                   Expect.stringContains msg "must not be empty" "should reject empty OID"
-              | Result.Error (CommitGeometryError.RepositoryNotFound _) -> 
+              | Result.Error (CommitGeometryError.RepositoryNotFound _) ->
                   // Also acceptable - means repo check failed
                   ()
               | Result.Error CommitGeometryError.DirtyWorktree -> ()
@@ -383,7 +383,7 @@ let evidenceConsumptionTests =
               let dir = tempDir "one-record-consumption-exact"
               try
                   createMinimalStructure dir
-                  
+
                   // Create captures directories with manifests
                   let capturesDir = Path.Combine(dir, canonicalRootRelative, "corpus", "captures")
                   let cap1Dir = Path.Combine(capturesDir, "cap-001")

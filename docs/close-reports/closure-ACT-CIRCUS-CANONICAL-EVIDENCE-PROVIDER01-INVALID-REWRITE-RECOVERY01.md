@@ -1,7 +1,7 @@
 # Close Report: ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-INVALID-REWRITE-RECOVERY01
 
-**Date:** 2026-07-28T13:57:00+03:00  
-**Author:** Recovery Agent  
+**Date:** 2026-07-28T13:57:00+03:00
+**Author:** Recovery Agent
 **Status:** CLOSED
 
 ## Classification

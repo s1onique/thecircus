@@ -121,45 +121,45 @@ let analyzeCommand (command: string) : Types.DiagnosticId list =
     if isGitPushCommand normalized then
         if forceOptionPattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_001 (sprintf "force option detected: %s" command))
-        
+
         if forceWithLeasePattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_001 (sprintf "force-with-lease detected: %s" command))
-        
+
         if forceIfIncludesPattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_001 (sprintf "force-if-includes detected: %s" command))
-        
+
         if leadingPlusRefspecPattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_002 (sprintf "leading-plus refspec: %s" command))
-        
+
         if remoteDeletePattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_003 (sprintf "remote delete: %s" command))
-        
+
         if emptySourceDeletePattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_004 (sprintf "empty-source delete: %s" command))
-        
+
         if mirrorPrunePattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_005 (sprintf "mirror/prune: %s" command))
-        
+
         if noVerifyPattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_006 (sprintf "hook bypass: %s" command))
-        
+
         if sendPackPattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_008 (sprintf "send-pack: %s" command))
-        
+
         // Dynamic argument detection
         if dynamicArgPattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_007 (sprintf "dynamic arguments: %s" command))
-        
+
         if evalPattern.IsMatch(normalized) then
             diagnostics.Add(Types.NFP_007 (sprintf "eval indirection: %s" command))
-    
+
     // GitHub API detection (not limited to git push context)
     if ghForcePattern.IsMatch(normalized) then
         diagnostics.Add(Types.NFP_009 (sprintf "GitHub API force: %s" command))
-    
+
     if ghDeleteRefPattern.IsMatch(normalized) then
         diagnostics.Add(Types.NFP_010 (sprintf "GitHub API ref delete: %s" command))
-    
+
     if curlDeleteRefPattern.IsMatch(normalized) then
         diagnostics.Add(Types.NFP_010 (sprintf "curl DELETE ref: %s" command))
 
@@ -188,15 +188,15 @@ let verifySurfaceFile
     : Result<Types.Diagnostic list, Types.DiagnosticId> =
     try
         let fullPath = Path.Combine(root, entry.Path)
-        
+
         if not (File.Exists fullPath) then
             Error(Types.NFP_012 (sprintf "surface file missing: %s" entry.Path))
         else
             let content = File.ReadAllText(fullPath)
             let commands = CommandLexer.extractCommandsFromContent entry.ParserKind content entry.Path
-            
+
             let diagnostics = ResizeArray<Types.Diagnostic>()
-            
+
             for cmd in commands do
                 let findings = analyzeCommand cmd.RawSource
                 for finding in findings do
@@ -207,7 +207,7 @@ let verifySurfaceFile
                         Types.Diagnostic.Column = cmd.Column
                         Types.Diagnostic.NormalizedCommand = cmd.RawSource.Trim()
                     })
-            
+
             Ok(List.ofSeq diagnostics)
     with ex ->
         Error(Types.NFP_013 (sprintf "failed to verify %s: %s" entry.Path ex.Message))
@@ -252,7 +252,7 @@ let verify (root: string) : Types.StaticPolicyResult =
                             diagnostics.Add(f)
                     | Error e ->
                         errors.Add(sprintf "%A" e)
-            
+
             // Check for unclassified executables
             let unclassified = SurfaceInventory.findUnclassifiedExecutables root tracked entries
             for path in unclassified do
@@ -263,7 +263,7 @@ let verify (root: string) : Types.StaticPolicyResult =
                     Types.Diagnostic.Column = 0
                     Types.Diagnostic.NormalizedCommand = ""
                 })
-            
+
             // Sort diagnostics deterministically by path, line, column, rule_id
             let sorted =
                 diagnostics

@@ -65,7 +65,7 @@ Build succeeded.
 
 The provider now uses atomic publication. Remaining items from the original plan:
 - Implement detached worktree execution for exact subject
-- Update provider result type with Records and Aggregate  
+- Update provider result type with Records and Aggregate
 - Separate semantic and wire forms for evidence IDs
 - Implement immutable version directories for snapshot switch
 - Add comprehensive provider tests

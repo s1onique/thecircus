@@ -330,13 +330,13 @@ let computeAggregate
     let recordsPassed = records |> List.filter (fun r -> r.Result = RecordPass) |> List.length
     let recordsFailed = records |> List.filter (fun r -> r.Result = RecordFail) |> List.length
     let recordsUnavailable = records |> List.filter (fun r -> r.Result = RecordUnavailable) |> List.length
-    
+
     let testsTotal = records |> List.choose (fun r -> r.TestsTotal) |> List.sum
     let testsPassed = records |> List.choose (fun r -> r.TestsPassed) |> List.sum
     let testsIgnored = records |> List.choose (fun r -> r.TestsIgnored) |> List.sum
     let testsFailed = records |> List.choose (fun r -> r.TestsFailed) |> List.sum
     let testsErrored = records |> List.choose (fun r -> r.TestsErrored) |> List.sum
-    
+
     // Required checks only - filter to required=true records
     let requiredRecords = records |> List.filter (fun r -> r.Required)
     let requiredChecksTotal = List.length requiredRecords
@@ -346,16 +346,16 @@ let computeAggregate
         requiredRecords
         |> List.filter (fun r -> r.Result = RecordFail || r.Result = RecordUnavailable)
         |> List.length
-    
+
     let recordIds = records |> List.map (fun r -> r.EvidenceId) |> List.sort
-    
+
     // Overall status: any required failure or unavailability means overall fail
     let overallStatus =
         if requiredChecksFailed > 0 then RecordFail
         elif requiredChecksTotal > 0 && requiredChecksPassed = requiredChecksTotal then RecordPass
         elif requiredChecksTotal = 0 then RecordPass  // No required checks
         else RecordFail  // Some required checks unavailable = fail
-    
+
     { SchemaVersion = AggregateSchemaVersion
       SubjectCommitOid = subjectCommitOid
       SubjectTreeOid = subjectTreeOid

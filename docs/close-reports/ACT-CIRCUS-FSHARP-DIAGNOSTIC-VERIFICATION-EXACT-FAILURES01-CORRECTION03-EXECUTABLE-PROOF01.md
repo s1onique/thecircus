@@ -11,7 +11,7 @@ Executable proof of focused tests for verification evidence load failures. Docum
 The `dotnet test` command fails with the following error:
 
 ```
-An assembly specified in the application dependencies manifest (testhost.deps.json) was not found: 
+An assembly specified in the application dependencies manifest (testhost.deps.json) was not found:
 package: 'testhost', version: 18.3.0-release-26180-118
 ```
 

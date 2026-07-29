@@ -167,7 +167,7 @@ let private extractFromEvent (eventType: System.Type) (argsObj: obj) : Extracted
 
 /// Result accumulator.  Thread-safe enough for the single-threaded replay
 /// caller we run on.  All event appends are deterministic and ordered.
-type private Collector() = 
+type private Collector() =
     let events = System.Collections.Generic.List<ExtractedEvent>()
     member _.Snapshot () = events.ToArray() |> Array.toList
 
