@@ -160,7 +160,38 @@ SHA-256: <to be computed>
 
 ## Implementation Notes
 
-- Production code changes must be in `tools/Circus.Tooling/CanonicalEvidence/Publication.fs` or similar
-- Test helpers in test files should be removed once production equivalents exist
-- Use dependency injection for failure injection rather than mocking
-- Provider instrumentation should use discriminated unions for counters
+### Module Organization
+
+Prefer pure validation logic in the existing validation module:
+
+```text
+tools/Circus.Tooling/CanonicalEvidence/Validation.fs (existing):
+  - CompatibilityDifference
+  - compareCompatibilityProjection
+  - AggregateDifference
+  - compareAggregateProjection
+
+tools/Circus.Tooling/CanonicalEvidence/Publication.fs:
+  - invoke validation authorities on parsed staged documents
+  - convert differences into staged-publication failures
+```
+
+This prevents publication orchestration from owning domain equality logic.
+
+### Hygiene Verification
+
+Terminal hygiene must cover the complete correction range:
+
+```bash
+git diff --check 09e6c60^..<final-implementation-tip>
+```
+
+The predecessor commit `09e6c60` introduced whitespace defects. The final implementation commit must pass inclusive hygiene checks.
+
+### Predecessor Digest
+
+```
+File: docs/close-reports/closure-ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01-CORRECTION07-CORRECTION04.md
+Status: INVALID_CLOSURE_CHECKPOINT
+SHA-256: <to be computed before terminal closure>
+```
