@@ -42,14 +42,16 @@ This progress report documents Phase 1 of the CORRECTION04-CORRECTION01 workstre
    - Uses `WriteAllBytes` with `strictUtf8` for canonical byte writing
    - Proves production comparator rejects structurally mutated documents
    - All four live snapshot files verified byte-identical after rejection
-   - **Fixed commit OID taxonomy**: Now expects `CompatibilityCommitOidMismatch` (not `CompatibilitySemanticHashMismatch`)
-   - **Added exclusion proof**: Explicitly proves commit OIDs never appear in `CompatibilitySemanticHashMismatch`
+   - **Fixed commit OID taxonomy**: Now expects `CompatibilityCommitOidMismatch`
+   - **Added tree-OID test**: Symmetric test for `CompatibilityTreeOidMismatch`
+   - **Fixed exclusion proofs**: Uses exact Set comparison instead of shape heuristics
 
 ### Test Execution Results
 
 Executed via:
 ```bash
-dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release --no-build
+./tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests --filter "<TestName>"
+echo "EXIT_CODE=$?"
 ```
 
 **CompatibilityStructuralEquality (32 tests):**
@@ -58,25 +60,28 @@ total: 32
 passed: 32
 failed: 0
 errored: 0
+exit_code: 0
 ```
 
-**StagedCompatibilityMutation (11 tests):**
+**StagedCompatibilityMutation (12 tests):**
 ```yaml
-total: 11
-passed: 11
+total: 12
+passed: 12
 failed: 0
 errored: 0
+exit_code: 0
 ```
 
 ### Test Suite Composition
 
 ```yaml
 staged_compatibility_suite:
-  tests_total: 11
-  rehashed_top_level_mutation_cases: 3
+  tests_total: 12
+  rehashed_top_level_mutation_cases: 4
     - RehashedProviderNameMutation: PASS
     - RehashedOverallStatusMutation: PASS
     - RehashedCommitOidMutation: PASS (uses CompatibilityCommitOidMismatch)
+    - RehashedTreeOidMutation: PASS (uses CompatibilityTreeOidMismatch)
   rehashed_per_check_mutation_cases: 1
     - RehashedCheckFailureKindMutation: PASS (exact check ID binding)
   rehashed_bijection_mutation_cases: 3
@@ -96,19 +101,16 @@ staged_compatibility_suite:
 ```yaml
 CORRECTION04_CORRECTION01:
   compatibility:
-    pure_comparator_authority: CLOSED_PASS
-    production_staged_wiring: CLOSED_PASS
-    rehashed_top_level_mutation_isolation: CLOSED_PASS
-    rehashed_per_check_mutation_isolation: CLOSED_PASS
-    removed_check_translation: CLOSED_PASS
-    unknown_check_translation: CLOSED_PASS
-    duplicate_check_translation: CLOSED_PASS
-    four_file_byte_preservation: CLOSED_PASS
-    commit_oid_taxonomy_fixed: CLOSED_PASS
-    commit_oid_exclusion_proof: CLOSED_PASS
-    per_check_FailureKind_exact_identity: CLOSED_PASS
-    executable_test_count_binding: CLOSED_PASS
-
+    implementation_authority: PASS
+    comparator_tests: 32/32_PASS_REPORTED
+    staged_tests: 12/12_PASS_REPORTED
+    commit_oid_taxonomy: PASS
+    tree_oid_taxonomy: PASS
+    exact_commit_oid_exclusion: PASS (exact Set comparison)
+    exact_tree_oid_exclusion: PASS (exact Set comparison)
+    FailureKind_exact_identity: PASS (target.Id binding)
+    runner_exit_integrity: PASS (exit code 0 on pass)
+    
     compatibility_subscope_verdict: CLOSED_PASS
 
   aggregate_authority: OPEN
@@ -123,11 +125,17 @@ CORRECTION04_CORRECTION01:
   overall_verdict: IN_PROGRESS
 ```
 
+### Runner Exit Code Integrity
+
+The test binary properly propagates Expecto's exit code:
+- Exit code 0 when all tests pass
+- Exit code 1 when any test fails (verified via `echo "EXIT_CODE=$?"`)
+
+The Program.fs entry point correctly returns `runTestsInAssemblyWithCLIArgs` which returns 0/1 based on test results.
+
 ### Known Issues Outside Subscope
 
-1. **Exit code propagation**: `dotnet run` wrapper returns exit 0 even with test failures. This is a pre-existing runner-integrity issue affecting ALL tests, not just the compatibility subscope.
-
-2. **FSharpDiagnostics.Normalization test failure**: Pre-existing unrelated failure outside compatibility subscope.
+None in the compatibility subscope.
 
 ### Remaining Work
 

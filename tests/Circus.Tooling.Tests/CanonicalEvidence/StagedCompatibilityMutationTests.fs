@@ -199,19 +199,95 @@ let [<Tests>] rehashedCommitOidTests =
 
                     // Prove no CompatibilitySemanticHashMismatch contains commit OIDs
                     // (semantic hash mismatches are for semantic hash values, not commit OIDs)
-                    let commitOidInHashMismatch =
+                    // Use exact comparison of actual values to avoid shape-based heuristics
+                    let forbiddenCommitValues =
+                        Set.ofList [
+                            fixture.Aggregate.SubjectCommitOid
+                            fixture.CompatibilityProjection.TestedCommitOid
+                            mutatedCommitOid
+                        ]
+
+                    let misclassifiedCommitValues =
                         failures
-                        |> List.choose (function
+                        |> List.collect (function
                             | StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual) ->
-                                // Check if either value looks like a commit OID (40 hex chars)
-                                if String.length expected = 40 && String.exists (System.Char.IsLetter) expected then
-                                    Some(expected, actual, "expected")
-                                elif String.length actual = 40 && String.exists (System.Char.IsLetter) actual then
-                                    Some(expected, actual, "actual")
-                                else None
-                            | _ -> None)
-                    Expect.isEmpty commitOidInHashMismatch
-                        "commit OIDs must never appear in CompatibilitySemanticHashMismatch"
+                                [expected; actual]
+                            | _ ->
+                                [])
+                        |> List.filter forbiddenCommitValues.Contains
+
+                    Expect.isEmpty misclassifiedCommitValues
+                        "commit OIDs must never be carried by CompatibilitySemanticHashMismatch"
+                | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
+            finally
+                cleanupDir workDir
+    ]
+
+/// Test: Change tested_tree_oid, rehash - requires tree OID mismatch detection
+/// The cross-check between aggregate and staged file produces CompatibilityTreeOidMismatch
+/// because the aggregate.SubjectTreeOid differs from staged file's TestedTreeOid.
+let [<Tests>] rehashedTreeOidTests =
+    testList "RehashedTreeOidMutation" [
+        testCase "rejects rehashed tested_tree_oid mutation with tree OID mismatch" <| fun () ->
+            let workDir = tempDir ()
+            try
+                let fixture = PublicationFixture.createValidPublicationFixture ()
+
+                // Mutation: change tree OID, rehash
+                let mutatedTreeOid = "2222222222222222222222222222222222222222"
+                let mutatedProjection =
+                    fixture.CompatibilityProjection
+                    |> (fun p -> { p with TestedTreeOid = mutatedTreeOid })
+                    |> withSemanticHash
+
+                let mutatedJson = renderWireJson mutatedProjection
+
+                let mutation: string -> Result<unit, string> =
+                    fun stagingDir ->
+                        let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
+                        writeCanonicalBytes compatPath mutatedJson
+                        Ok()
+
+                let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
+
+                Expect.isFalse outcome.Success "publication should fail after rehashed tree OID mutation"
+                match outcome.Failure with
+                | Some (SnapshotStagedValidationFailed failures) ->
+                    // Cross-check failure: aggregate.SubjectTreeOid vs staged file's TestedTreeOid
+                    // The production cross-check uses CompatibilityTreeOidMismatch for this comparison
+                    // (not CompatibilitySemanticHashMismatch which is reserved for semantic hash comparisons)
+                    let hasTreeOidMismatch =
+                        failures |> List.exists (function
+                            | StagedSnapshotFailure.CompatibilityTreeOidMismatch(expected, actual) ->
+                                // Cross-check: expected = aggregate.SubjectTreeOid, actual = diskCompat.TestedTreeOid
+                                expected = fixture.Aggregate.SubjectTreeOid
+                                && actual = mutatedTreeOid
+                            | _ -> false)
+                    Expect.isTrue hasTreeOidMismatch
+                        (sprintf "MUST detect tree OID mismatch: expected=%s actual=%s"
+                            fixture.Aggregate.SubjectTreeOid mutatedTreeOid)
+
+                    // Prove no CompatibilitySemanticHashMismatch contains tree OIDs
+                    // (semantic hash mismatches are for semantic hash values, not tree OIDs)
+                    // Use exact comparison of actual values to avoid shape-based heuristics
+                    let forbiddenTreeValues =
+                        Set.ofList [
+                            fixture.Aggregate.SubjectTreeOid
+                            fixture.CompatibilityProjection.TestedTreeOid
+                            mutatedTreeOid
+                        ]
+
+                    let misclassifiedTreeValues =
+                        failures
+                        |> List.collect (function
+                            | StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual) ->
+                                [expected; actual]
+                            | _ ->
+                                [])
+                        |> List.filter forbiddenTreeValues.Contains
+
+                    Expect.isEmpty misclassifiedTreeValues
+                        "tree OIDs must never be carried by CompatibilitySemanticHashMismatch"
                 | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
             finally
                 cleanupDir workDir
