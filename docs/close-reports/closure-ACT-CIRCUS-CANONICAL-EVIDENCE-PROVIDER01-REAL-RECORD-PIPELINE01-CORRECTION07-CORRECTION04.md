@@ -6,11 +6,11 @@
 
 **Title:** Terminal canonical evidence test suites for CORRECTION07
 
-**Status:** CLOSED_PASS
+**Status:** INVALID_CLOSURE_CHECKPOINT
 
-**checkpoint_complete:** true
+**checkpoint_complete:** false
 
-**ACT_closed:** true
+**ACT_closed:** false
 
 **Date:** 2026-07-29
 
@@ -120,12 +120,29 @@ These items require additional work beyond test implementation and are tracked f
 
 ## Subscope Status
 
-| Subscope | Status |
-|----------|--------|
-| CompatibilityStructuralEquality | CLOSED_PASS |
-| AggregateStructuralEquality | CLOSED_PASS |
-| TypedCleanupFailureBehavior | CLOSED_PASS |
-| PartialReplacementAndRestoration | CLOSED_PASS |
-| ProviderOnceOnlyOrchestration | CLOSED_PASS |
-| terminal_technical_proof | PARTIAL_COMPLETE |
-| canonical_gate | IN_PROGRESS |
+| Subscope | Status | Notes |
+|----------|--------|-------|
+| compatibility_test_helper_and_cases | IMPLEMENTED | Test-local helpers only |
+| aggregate_test_helper_and_cases | IMPLEMENTED | Test-local helpers only |
+| general_publication_regression_tests | IMPLEMENTED | Idempotent publication tests |
+| test_project_registration | IMPLEMENTED | 5 new files added to fsproj |
+| production_compatibility_comparison_authority | NOT_MODIFIED | Test helpers not wired to production |
+| production_aggregate_comparison_authority | NOT_MODIFIED | Test helpers not wired to production |
+| actual_cleanup_failure_injection | NOT_PROVEN | No failure injection |
+| partial_replacement_injection | NOT_PROVEN | No replacement failure |
+| restoration_failure_injection | NOT_PROVEN | No restoration failure |
+| provider_once_only_orchestration | NOT_PROVEN | Provider not called |
+| CLI_publication_integration | NOT_PROVEN | CLI tests absent |
+| committed_range_hygiene | FAIL | 20 whitespace defects |
+| fresh_gate | ABSENT | No fresh gate run |
+
+## Next ACT
+
+This ACT is invalidated. Continue with:
+
+```
+ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-
+REAL-RECORD-PIPELINE01-CORRECTION07-
+CORRECTION04-CORRECTION01-
+PRODUCTION-AUTHORITY-AND-NONVACUOUS-PROOF01
+```
