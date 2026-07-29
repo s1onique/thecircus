@@ -601,7 +601,7 @@ let publicationStagedBytesReadTests =
 
                 Expect.isTrue outcome.Success "publication should succeed"
                 Expect.isTrue (File.Exists (Path.Combine(tempDir, "canonical-evidence.json"))) "compatibility file should exist"
-                
+
                 // Verify the file on disk can be parsed
                 let diskContent = File.ReadAllText (Path.Combine(tempDir, "canonical-evidence.json"))
                 match parseWireJson diskContent with
