@@ -457,37 +457,21 @@ let internal runProvide
         stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (cannot create directory: %s)" msg)
         ExitCode.operationalError
     | Ok () ->
-        // Generate evidence for the subject commit
-        match provideWithDependencies deps repoRoot subjectOid scopeDeclaration with
+        // Generate evidence for the subject commit using full provider
+        match provideWithDependenciesFull deps repoRoot subjectOid scopeDeclaration with
         | Result.Error failure ->
             stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (%s)" (provideFailureToString failure))
             ExitCode.operationalError
-        | Result.Ok evidence ->
-            // Extract records and compute aggregate from the legacy evidence format
-            let records = [] // Records would be extracted here in the new model
-            let aggregate : Circus.Tooling.CanonicalEvidence.EvidenceRecords.CanonicalExecutionAggregate = {
-                SchemaVersion = 1
-                SubjectCommitOid = evidence.TestedCommitOid
-                SubjectTreeOid = evidence.TestedTreeOid
-                RecordsTotal = List.length evidence.Checks
-                RecordsPassed = evidence.Checks |> List.filter (fun c -> c.Status = EvidenceStatus.Pass) |> List.length
-                RecordsFailed = evidence.Checks |> List.filter (fun c -> c.Status = EvidenceStatus.Fail) |> List.length
-                RecordsUnavailable = evidence.Checks |> List.filter (fun c -> c.Status = EvidenceStatus.Unavailable) |> List.length
-                TestsTotal = 0
-                TestsPassed = 0
-                TestsIgnored = 0
-                TestsFailed = 0
-                TestsErrored = 0
-                RequiredChecksTotal = List.length evidence.Checks
-                RequiredChecksPassed = evidence.Checks |> List.filter (fun c -> c.Status = EvidenceStatus.Pass) |> List.length
-                RequiredChecksFailed = evidence.Checks |> List.filter (fun c -> c.Status = EvidenceStatus.Fail) |> List.length
-                RecordIds = []
-                OverallStatus = Circus.Tooling.CanonicalEvidence.EvidenceRecords.RecordPass
-                SemanticSha256 = evidence.SemanticSha256
-            }
-
-            // Publish the snapshot atomically using the Publication module
-            let pubOutcome = Circus.Tooling.CanonicalEvidence.Publication.publishSnapshot evidenceRoot records aggregate
+        | Result.Ok providerResult ->
+            // Publish the snapshot using the staged round-trip validation pipeline.
+            // This ensures strict byte-for-byte fidelity: all files are written, reread,
+            // parsed, and validated before atomic replacement.
+            let pubOutcome = Circus.Tooling.CanonicalEvidence.Publication.stageAndPublishSnapshot
+                                evidenceRoot
+                                providerResult.Records
+                                providerResult.Aggregate
+                                providerResult.CompatibilityProjection
+                                None // No mutation hook in production
 
             if not pubOutcome.Success then
                 let reason =
@@ -497,11 +481,13 @@ let internal runProvide
                 stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (publication failed: %s)" reason)
                 ExitCode.operationalError
             else
+                // Use the compatibility projection for overall status and rendering
+                let evidence = providerResult.CompatibilityProjection
                 let overall = statusToken evidence.OverallStatus
                 let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
                 stdout.WriteLine(renderProvideSummary evidence pubOutcome.AggregateSha256)
 
-                // Verify the freshly published bytes
+                // Verify the freshly published compatibility projection
                 let verifyPath = Path.Combine(evidenceRoot, "canonical-evidence.json")
                 let verifyOutcome = verifyWithDependencies deps verifyPath repoRoot scopeDeclaration
                 match verifyOutcome.Failure with
