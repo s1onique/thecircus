@@ -42,8 +42,8 @@ let private sampleResult id commandArgv status =
         DurationMilliseconds = 1000L
         ExitCode = Some 0
         Status = status
-        StdoutSha256 = Some "abc123"
-        StderrSha256 = Some "def456"
+        StdoutSha256 = Some "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        StderrSha256 = Some "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         FailureKind = None
     }
 
@@ -67,8 +67,8 @@ let private sampleRecord checkId =
         TestsIgnored = None
         TestsFailed = None
         TestsErrored = None
-        StdoutSha256 = Some "abc123"
-        StderrSha256 = Some "def456"
+        StdoutSha256 = Some "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        StderrSha256 = Some "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         StdoutByteLength = None
         StderrByteLength = None
         FailureKind = None
@@ -267,7 +267,7 @@ let convertExecutedChecksToRecordsTests =
             let res = { (sampleResult "check1" [ "dotnet"; "build" ] EvidenceStatus.Pass) with FailureKind = Some "test_failure" }
             let startedAt = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
             let executed = { ExecutedCanonicalCheck.Definition = def; Result = res; StartedAt = startedAt }
-            let result = convertExecutedChecksToRecords [ executed ] "abc123" "tree789" true
+            let result = convertExecutedChecksToRecords [ executed ] "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789" true
             match result with
             | Error e -> failwithf "expected Ok, got Error: %A" e
             | Ok records ->
@@ -283,7 +283,7 @@ let convertExecutedChecksToRecordsTests =
                     let startedAt = DateTimeOffset(2024, 1, 1, 0, 0, i, TimeSpan.Zero)
                     yield { ExecutedCanonicalCheck.Definition = def; Result = res; StartedAt = startedAt }
             ]
-            let result = convertExecutedChecksToRecords executedChecks "abc123" "tree789" true
+            let result = convertExecutedChecksToRecords executedChecks "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789" true
             match result with
             | Error e -> failwithf "expected Ok, got Error: %A" e
             | Ok records ->
@@ -294,7 +294,7 @@ let convertExecutedChecksToRecordsTests =
             let res = sampleResult "check1" [ "dotnet"; "build" ] EvidenceStatus.Pass
             let startedAt = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
             let executed = { ExecutedCanonicalCheck.Definition = def; Result = res; StartedAt = startedAt }
-            let result = convertExecutedChecksToRecords [ executed ] "abc123" "tree789" true
+            let result = convertExecutedChecksToRecords [ executed ] "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789" true
             match result with
             | Error e -> failwithf "expected Ok, got Error: %A" e
             | Ok records ->
@@ -305,7 +305,7 @@ let convertExecutedChecksToRecordsTests =
             let res = sampleResult "check1" [ "dotnet"; "build" ] EvidenceStatus.Pass
             let startedAt = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
             let executed = { ExecutedCanonicalCheck.Definition = def; Result = res; StartedAt = startedAt }
-            let result = convertExecutedChecksToRecords [ executed ] "abc123" "tree789" true
+            let result = convertExecutedChecksToRecords [ executed ] "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789" true
             match result with
             | Error e -> failwithf "expected Ok, got Error: %A" e
             | Ok records ->
@@ -318,7 +318,7 @@ let convertExecutedChecksToRecordsTests =
             let res = sampleResult "check1" [ "dotnet"; "build" ] EvidenceStatus.Pass
             let startedAt = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
             let executed = { ExecutedCanonicalCheck.Definition = def; Result = res; StartedAt = startedAt }
-            let result = convertExecutedChecksToRecords [ executed ] "abc123" "tree789" true
+            let result = convertExecutedChecksToRecords [ executed ] "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789" true
             match result with
             | Error e -> failwithf "expected Ok, got Error: %A" e
             | Ok records ->
@@ -341,7 +341,7 @@ let convertExecutedChecksToRecordsTests =
             let res = sampleResult "check1" [ "dotnet"; "build" ] EvidenceStatus.Pass
             let startedAt = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
             let executed = { ExecutedCanonicalCheck.Definition = def; Result = res; StartedAt = startedAt }
-            let result = convertExecutedChecksToRecords [ executed ] "abc123" "tree789xyz" true
+            let result = convertExecutedChecksToRecords [ executed ] "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789xyz" true
             match result with
             | Error e -> failwithf "expected Ok, got Error: %A" e
             | Ok records ->
@@ -352,7 +352,7 @@ let convertExecutedChecksToRecordsTests =
             let res = sampleResult "check1" [ "dotnet"; "build" ] EvidenceStatus.Pass
             let startedAt = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
             let executed = { ExecutedCanonicalCheck.Definition = def; Result = res; StartedAt = startedAt }
-            let result = convertExecutedChecksToRecords [ executed ] "abc123" "tree789" false
+            let result = convertExecutedChecksToRecords [ executed ] "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789" false
             match result with
             | Error e -> failwithf "expected Ok, got Error: %A" e
             | Ok records ->
@@ -363,7 +363,7 @@ let convertExecutedChecksToRecordsTests =
             let res = { (sampleResult "check1" [ "dotnet"; "build" ] EvidenceStatus.Fail) with FailureKind = Some "non_zero_exit:42" }
             let startedAt = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
             let executed = { ExecutedCanonicalCheck.Definition = def; Result = res; StartedAt = startedAt }
-            let result = convertExecutedChecksToRecords [ executed ] "abc123" "tree789" true
+            let result = convertExecutedChecksToRecords [ executed ] "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789" true
             match result with
             | Error e -> failwithf "expected Ok, got Error: %A" e
             | Ok records ->
@@ -374,11 +374,11 @@ let convertExecutedChecksToRecordsTests =
             let res = sampleResult "check1" [ "dotnet"; "build" ] EvidenceStatus.Pass
             let startedAt = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
             let executed = { ExecutedCanonicalCheck.Definition = def; Result = res; StartedAt = startedAt }
-            let convResult = convertExecutedChecksToRecords [ executed ] "abc123" "tree789" true
+            let convResult = convertExecutedChecksToRecords [ executed ] "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789" true
             match convResult with
             | Error e -> failwithf "expected Ok, got Error: %A" e
             | Ok records ->
-                let validation = validateRecords records "abc123" "tree789"
+                let validation = validateRecords records "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789"
                 Expect.isTrue validation.Valid "expected valid records"
     ]
 
@@ -394,7 +394,7 @@ let aggregateDerivationTests =
             ]
             let aggregate =
                 records
-                |> computeAggregate "abc123" "tree789"
+                |> computeAggregate "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789"
                 |> finalizeAggregate
             Expect.equal aggregate.RequiredChecksFailed 0 "expected 0 failed"
             Expect.equal aggregate.RequiredChecksTotal 1 "expected 1 total"
@@ -406,7 +406,7 @@ let aggregateDerivationTests =
             ]
             let aggregate =
                 records
-                |> computeAggregate "abc123" "tree789"
+                |> computeAggregate "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789"
                 |> finalizeAggregate
             Expect.equal aggregate.RequiredChecksFailed 1 "expected 1 failed"
             Expect.equal aggregate.RequiredChecksTotal 1 "expected 1 total"
@@ -418,7 +418,7 @@ let aggregateDerivationTests =
             ]
             let aggregate =
                 records
-                |> computeAggregate "abc123" "tree789"
+                |> computeAggregate "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789"
                 |> finalizeAggregate
             Expect.equal aggregate.RequiredChecksFailed 1 "expected 1 failed for unavailable"
             Expect.equal aggregate.RequiredChecksTotal 1 "expected 1 total"
@@ -430,7 +430,7 @@ let aggregateDerivationTests =
             ]
             let aggregate =
                 records
-                |> computeAggregate "abc123" "tree789"
+                |> computeAggregate "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789"
                 |> finalizeAggregate
             Expect.equal aggregate.RequiredChecksFailed 0 "expected 0 failed"
 
@@ -442,7 +442,7 @@ let aggregateDerivationTests =
             ]
             let aggregate =
                 records
-                |> computeAggregate "abc123" "tree789"
+                |> computeAggregate "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789"
                 |> finalizeAggregate
             Expect.equal aggregate.RecordIds [ "00001"; "00002"; "00003" ] "expected sorted IDs"
 
@@ -452,7 +452,7 @@ let aggregateDerivationTests =
             ]
             let aggregate =
                 records
-                |> computeAggregate "abc123" "tree789"
+                |> computeAggregate "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789"
                 |> finalizeAggregate
             Expect.isNonEmpty aggregate.SemanticSha256 "expected nonempty hash"
     ]
@@ -475,7 +475,7 @@ let executedCheckStartTimeTests =
             let executed1 = { ExecutedCanonicalCheck.Definition = def1; Result = res1; StartedAt = time1 }
             let executed2 = { ExecutedCanonicalCheck.Definition = def2; Result = res2; StartedAt = time2 }
             // Convert and check that each record has different start time
-            let result = convertExecutedChecksToRecords [ executed1; executed2 ] "abc123" "tree789" true
+            let result = convertExecutedChecksToRecords [ executed1; executed2 ] "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "tree789" true
             match result with
             | Error e -> failwithf "expected Ok, got Error: %A" e
             | Ok records ->
@@ -622,7 +622,7 @@ let publicationStagedBytesReadTests =
                     SchemaVersion = 1
                     ProviderName = "circus-canonical-evidence"
                     ProviderVersion = "1.0.0"
-                    TestedCommitOid = "abc123"
+                    TestedCommitOid = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                     TestedTreeOid = "tree123"
                     ObjectFormat = "sha1"
                     ActiveScopeActId = ""
@@ -637,7 +637,7 @@ let publicationStagedBytesReadTests =
 
                 let aggregate = {
                     SchemaVersion = 1
-                    SubjectCommitOid = "abc123"
+                    SubjectCommitOid = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                     SubjectTreeOid = "tree123"
                     RecordsTotal = 0
                     RecordsPassed = 0
@@ -729,4 +729,42 @@ let publicationStagedBytesReadTests =
 let publicationTests =
     testList "Publication" [
         publicationStagedBytesReadTests
+    ]
+
+[<Tests>]
+let strictParserTests =
+    testList "StrictParser" [
+        testCase "valid ISO 8601 timestamp with Z suffix" <| fun () ->
+            let json = """{"schema_version":1,"evidence_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","check_id":"test-check","required":true,"provider_id":"circus-canonical-evidence","provider_version":"1.0.0","command":"echo","arguments":[],"working_directory":"/tmp","started_at":"2026-07-29T12:30:00Z","duration_ms":100,"exit_code":0,"result":"pass","tests_total":1,"tests_passed":1,"tests_ignored":0,"tests_failed":0,"tests_errored":0,"stdout_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","stderr_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","stdout_byte_length":0,"stderr_byte_length":0,"failure_kind":"<NONE>","tested_commit_oid":"abc123def456","tested_tree_oid":"tree789abc","working_tree_clean":true,"provider_binary_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","tooling_binary_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","test_binary_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}"""
+            match parseEvidenceWireJsonStrict json with
+            | Ok _ -> ()
+            | Error e -> failwithf "Expected valid JSON: %A" e
+
+        testCase "invalid timestamp format rejects" <| fun () ->
+            let json = """{"schema_version":1,"evidence_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","check_id":"test-check","required":true,"provider_id":"circus-canonical-evidence","provider_version":"1.0.0","command":"echo","arguments":[],"working_directory":"/tmp","started_at":"not-a-timestamp","duration_ms":100,"exit_code":0,"result":"pass","tests_total":1,"tests_passed":1,"tests_ignored":0,"tests_failed":0,"tests_errored":0,"stdout_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","stderr_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","stdout_byte_length":0,"stderr_byte_length":0,"failure_kind":"<NONE>","tested_commit_oid":"abc123def456","tested_tree_oid":"tree789abc","working_tree_clean":true,"provider_binary_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","tooling_binary_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","test_binary_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}"""
+            match parseEvidenceWireJsonStrict json with
+            | Ok _ -> failwith "Expected invalid timestamp to be rejected"
+            | Error errors ->
+                Expect.isTrue (errors |> List.exists (function | EvidenceWireParseError.InvalidTimestamp _ -> true | _ -> false)) "Expected InvalidTimestamp error"
+
+        testCase "manifest valid with exactly three required paths" <| fun () ->
+            let manifest = "{\"path\":\"records.jsonl\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":100}\n{\"path\":\"aggregate.json\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":200}\n{\"path\":\"canonical-evidence.json\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":300}\n"
+            match parseArtifactManifestJsonlStrict manifest with
+            | Ok entries ->
+                Expect.equal (List.length entries) 3 "Expected exactly 3 entries"
+            | Error e -> failwithf "Expected valid manifest: %A" e
+
+        testCase "manifest missing records.jsonl rejects" <| fun () ->
+            let manifest = "{\"path\":\"aggregate.json\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":200}\n{\"path\":\"canonical-evidence.json\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":300}\n"
+            match parseArtifactManifestJsonlStrict manifest with
+            | Ok _ -> failwith "Expected missing path to be detected"
+            | Error errors ->
+                Expect.isTrue (errors |> List.exists (function | ArtifactManifestParseError.UnknownPath "records.jsonl" -> true | _ -> false)) "Expected UnknownPath error"
+
+        testCase "manifest unknown path rejects" <| fun () ->
+            let manifest = "{\"path\":\"records.jsonl\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":100}\n{\"path\":\"aggregate.json\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":200}\n{\"path\":\"canonical-evidence.json\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":300}\n{\"path\":\"extra-file.json\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":50}\n"
+            match parseArtifactManifestJsonlStrict manifest with
+            | Ok _ -> failwith "Expected unknown path to be detected"
+            | Error errors ->
+                Expect.isTrue (errors |> List.exists (function | ArtifactManifestParseError.UnknownPath "extra-file.json" -> true | _ -> false)) "Expected UnknownPath error"
     ]

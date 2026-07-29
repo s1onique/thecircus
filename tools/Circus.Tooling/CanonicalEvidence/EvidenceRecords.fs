@@ -1242,6 +1242,16 @@ let parseArtifactManifestJsonlStrict (source: string) : Result<SnapshotArtifactE
                 with ex ->
                     errors.Add(ArtifactManifestParseError.InvalidJson ex.Message)
 
+        // Validate exact inventory: must have exactly records.jsonl, aggregate.json, canonical-evidence.json
+        let requiredPaths = set [ "records.jsonl"; "aggregate.json"; "canonical-evidence.json" ]
+        let foundPaths = entries |> Seq.map (fun e -> e.Path) |> Set.ofSeq
+        let missing = Set.difference foundPaths requiredPaths
+        let extra = Set.difference requiredPaths foundPaths
+        if not missing.IsEmpty then
+            missing |> Seq.iter (fun p -> errors.Add(ArtifactManifestParseError.UnknownPath p))
+        if not extra.IsEmpty then
+            extra |> Seq.iter (fun p -> errors.Add(ArtifactManifestParseError.UnknownPath p))
+
         if errors.Count > 0 then
             Result.Error (List.ofSeq errors)
         else
