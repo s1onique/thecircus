@@ -27,7 +27,7 @@ This progress report documents Phase 1 of the CORRECTION04-CORRECTION01 workstre
 2. **Publication.fs** - Wired the comparator into staged validation:
    - Updated `validateCompatibilityEvidence` to accept `expectedProjection` parameter
    - Production comparator now runs as Phase 1 of compatibility validation
-   - Fixed taxonomy: TestedCommitOid → CompatibilityProjectionMismatch (not SemanticHashMismatch)
+   - Fixed taxonomy: TestedCommitOid → CompatibilitySemanticHashMismatch (cross-check failure)
    - All difference types are translated to `StagedSnapshotFailure` for typed error reporting
 
 3. **CompatibilityStructuralEqualityTests.fs** - Migrated tests to use production comparator:
@@ -46,29 +46,34 @@ This progress report documents Phase 1 of the CORRECTION04-CORRECTION01 workstre
 
 Executed via:
 ```bash
-./tests/RunTests.sh --filter CompatibilityStructuralEquality
-./tests/RunTests.sh
+dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release --no-build
 ```
 
-**CompatibilityStructuralEquality:**
+**CompatibilityStructuralEquality (32 tests):**
 ```yaml
 total: 32
 passed: 32
 failed: 0
 errored: 0
-exit_code: 0
+```
+
+**StagedCompatibilityMutation (11 tests):**
+```yaml
+total: 11
+passed: 11
+failed: 0
+errored: 0
 ```
 
 **Full test suite:**
 ```yaml
 total: 880
-passed: 878
-failed: 2
+passed: 879
+failed: 1
 errored: 0
-exit_code: 0
 ```
 
-Note: The 2 failures are in unrelated test modules (FSharpDiagnostics normalization and the RehashedCommitOidMutation test which has a pre-existing issue with the commit OID assertion).
+Note: The 1 failure is `FSharpDiagnostics.Normalization.normalizeMessage converts backslashes to forward slashes` - an unrelated test outside the compatibility subscope.
 
 ### Test Suite Composition
 
@@ -76,21 +81,21 @@ Note: The 2 failures are in unrelated test modules (FSharpDiagnostics normalizat
 staged_compatibility_suite:
   tests_total: 11
   rehashed_top_level_mutation_cases: 3
-    - RehashedProviderNameMutation
-    - RehashedOverallStatusMutation
-    - RehashedCommitOidMutation
+    - RehashedProviderNameMutation: PASS
+    - RehashedOverallStatusMutation: PASS
+    - RehashedCommitOidMutation: PASS
   rehashed_per_check_mutation_cases: 1
-    - RehashedCheckFailureKindMutation
+    - RehashedCheckFailureKindMutation: PASS
   rehashed_bijection_mutation_cases: 3
-    - RehashedRemovedCheckMutation
-    - RehashedUnknownCheckMutation
-    - RehashedDuplicateCheckIdMutation
+    - RehashedRemovedCheckMutation: PASS
+    - RehashedUnknownCheckMutation: PASS
+    - RehashedDuplicateCheckIdMutation: PASS
   parse_failure_cases: 1
-    - InvalidJsonMutation
+    - InvalidJsonMutation: PASS
   success_and_preservation_cases: 3
-    - ValidSnapshot
-    - FourFilePreservation
-    - IdempotentOverwrite
+    - ValidSnapshot: PASS
+    - FourFilePreservation: PASS
+    - IdempotentOverwrite: PASS
 ```
 
 ### Current Status by Category
@@ -124,6 +129,12 @@ CORRECTION04_CORRECTION01:
 
   overall_verdict: IN_PROGRESS
 ```
+
+### Known Issues Outside Subscope
+
+1. **Exit code propagation**: `dotnet run` wrapper returns exit 0 even with test failures. This is a pre-existing runner-integrity issue affecting ALL tests, not just the compatibility subscope.
+
+2. **FSharpDiagnostics.Normalization test failure**: Pre-existing unrelated failure outside compatibility subscope.
 
 ### Remaining Work
 

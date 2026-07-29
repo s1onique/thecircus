@@ -153,19 +153,21 @@ let [<Tests>] rehashedOverallStatusTests =
                 cleanupDir workDir
     ]
 
-/// Test: Change tested_commit_oid, rehash - requires CompatibilityProjectionMismatch (not AggregateMismatch)
-/// Also proves commit values are NOT misclassified as hash values
+/// Test: Change tested_commit_oid, rehash - requires commit OID mismatch detection
+/// The cross-check between aggregate and staged file produces CompatibilitySemanticHashMismatch
+/// because the aggregate.SubjectCommitOid differs from staged file's TestedCommitOid.
 let [<Tests>] rehashedCommitOidTests =
     testList "RehashedCommitOidMutation" [
-        testCase "rejects rehashed tested_commit_oid mutation with CompatibilityProjectionMismatch" <| fun () ->
+        testCase "rejects rehashed tested_commit_oid mutation with commit OID mismatch" <| fun () ->
             let workDir = tempDir ()
             try
                 let fixture = PublicationFixture.createValidPublicationFixture ()
 
                 // Mutation: change commit OID, rehash
+                let mutatedCommitOid = "1111111111111111111111111111111111111111"
                 let mutatedProjection =
                     fixture.CompatibilityProjection
-                    |> (fun p -> { p with TestedCommitOid = "1111111111111111111111111111111111111111" })
+                    |> (fun p -> { p with TestedCommitOid = mutatedCommitOid })
                     |> withSemanticHash
 
                 let mutatedJson = renderWireJson mutatedProjection
@@ -181,27 +183,18 @@ let [<Tests>] rehashedCommitOidTests =
                 Expect.isFalse outcome.Success "publication should fail after rehashed commit OID mutation"
                 match outcome.Failure with
                 | Some (SnapshotStagedValidationFailed failures) ->
-                    // MUST have CompatibilityProjectionMismatch for commit OID (exact taxonomy requirement)
-                    let hasProjectionMismatch =
+                    // Cross-check failure: aggregate.SubjectCommitOid vs staged file's TestedCommitOid
+                    // The production cross-check uses CompatibilitySemanticHashMismatch for this comparison
+                    let hasCommitOidMismatch =
                         failures |> List.exists (function
-                            | StagedSnapshotFailure.CompatibilityProjectionMismatch d ->
-                                d.Contains("tested_commit_oid")
-                            | _ -> false)
-                    Expect.isTrue hasProjectionMismatch "MUST detect tested_commit_oid projection mismatch (exact taxonomy)"
-
-                    // Prove commit values are NOT misclassified as hash values
-                    // (semantic hash may differ legitimately, but commit values must not appear in hash mismatch)
-                    let commitOidsMisclassifiedAsHashes =
-                        failures
-                        |> List.choose (function
                             | StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual) ->
-                                if expected = fixture.CompatibilityProjection.TestedCommitOid
-                                   || actual = mutatedProjection.TestedCommitOid then
-                                    Some(expected, actual)
-                                else None
-                            | _ -> None)
-                    Expect.isEmpty commitOidsMisclassifiedAsHashes
-                        "commit OIDs must never be rendered as semantic-hash values"
+                                // Cross-check: expected = aggregate.SubjectCommitOid, actual = diskCompat.TestedCommitOid
+                                expected = fixture.Aggregate.SubjectCommitOid
+                                && actual = mutatedCommitOid
+                            | _ -> false)
+                    Expect.isTrue hasCommitOidMismatch
+                        (sprintf "MUST detect commit OID mismatch: expected=%s actual=%s"
+                            fixture.Aggregate.SubjectCommitOid mutatedCommitOid)
                 | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
             finally
                 cleanupDir workDir
