@@ -72,6 +72,11 @@
     <Compile Include="CanonicalEvidence/RecordPipelineTests.fs" />
     <Compile Include="CanonicalEvidence/PublicationFixture.fs" />
     <Compile Include="CanonicalEvidence/PublicationTests.fs" />
+    <Compile Include="CanonicalEvidence/CompatibilityStructuralEqualityTests.fs" />
+    <Compile Include="CanonicalEvidence/AggregateStructuralEqualityTests.fs" />
+    <Compile Include="CanonicalEvidence/TypedCleanupFailureBehaviorTests.fs" />
+    <Compile Include="CanonicalEvidence/PartialReplacementAndRestorationTests.fs" />
+    <Compile Include="CanonicalEvidence/ProviderOnceOnlyOrchestrationTests.fs" />
 
     <!-- Dedicated executable authority suites for CORRECTION 03. -->
     <Compile Include="ScopeAuthorityTests.fs" />
