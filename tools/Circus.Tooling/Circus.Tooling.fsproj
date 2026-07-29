@@ -85,6 +85,7 @@
     <Compile Include="CanonicalEvidence\Serialization.fs" />
     <Compile Include="CanonicalEvidence\Validation.fs" />
     <Compile Include="CanonicalEvidence\EvidenceRecords.fs" />
+    <Compile Include="CanonicalEvidence\RecordPipeline.fs" />
     <Compile Include="CanonicalEvidence\Publication.fs" />
     <Compile Include="CanonicalEvidence\Provider.fs" />
     <Compile Include="CanonicalEvidence\Cli.fs" />

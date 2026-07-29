@@ -1310,6 +1310,9 @@ let internal writeArtifactWithDependencies
 // generation entry point for ML-only source policy verification.
 // -----------------------------------------------------------------------------
 
+open Circus.Tooling.CanonicalEvidence.RecordPipeline
+open Circus.Tooling.CanonicalEvidence.EvidenceRecords
+
 type ProvideFailure =
     | ProvideInvalidSubjectOid of detail: string
     | ProvideSubjectNotFound of oid: string
@@ -1323,6 +1326,8 @@ type ProvideFailure =
     | ProvideCheckListEmpty
     | ProvideUnexpectedCheckId of id: string
     | ProvideCheckFailure of EvidenceFailure
+    | ProvideRecordPipelineFailure of RecordPipelineFailure
+    | ProvideRecordValidationFailure of RecordValidationIssue list
 
 let provideFailureToString (f: ProvideFailure) : string =
     match f with
@@ -1338,6 +1343,9 @@ let provideFailureToString (f: ProvideFailure) : string =
     | ProvideCheckListEmpty -> "canonical check list is empty"
     | ProvideUnexpectedCheckId id -> sprintf "unexpected check id: %s" id
     | ProvideCheckFailure e -> sprintf "check execution: %s:%s" e.Reason e.Detail
+    | ProvideRecordPipelineFailure rp -> sprintf "record pipeline: %s" (recordPipelineFailureToString rp)
+    | ProvideRecordValidationFailure issues ->
+        sprintf "record validation: %s" (String.concat "; " (List.map recordValidationIssueToString issues))
 
 /// Resolve a subject commit OID to its identity. Validates that the OID
 /// is a valid commit and resolves its tree.
@@ -1389,23 +1397,128 @@ let resolveSubjectIdentity
                                                     ObjectFormat = fmtStr
                                                 }
 
-/// Generate canonical evidence for an explicit subject commit OID.
-/// This is the authoritative 'provide' entry point.
-let provideWithDependencies
+// -----------------------------------------------------------------------------
+// ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01
+//
+// Full provider result with real per-check execution records
+// Single execution pipeline, single failure hierarchy
+// -----------------------------------------------------------------------------
+
+/// Internal: build the full provider result with real records from executed checks.
+/// Uses ExecutedCanonicalCheck list directly to preserve per-check timestamps
+/// and definition/result pairing from execution.
+let internal buildProviderResult
+    (identity: RepositoryIdentity)
+    (scope: ScopeBinding)
+    (executedChecks: ExecutedCanonicalCheck list)
+    (workingTreeClean: bool)
+    : Result<CanonicalEvidenceProviderResult, RecordPipelineFailure> =
+    // Extract definitions and results for bijection validation
+    let definitions = executedChecks |> List.map (fun e -> e.Definition)
+    let results = executedChecks |> List.map (fun e -> e.Result)
+
+    // Validate definition/result bijection
+    match validateBijection definitions results with
+    | Error failure -> Result.Error failure
+    | Ok () ->
+        // Convert executed checks to records - preserves per-check StartedAt
+        match convertExecutedChecksToRecords executedChecks identity.CommitOid identity.TreeOid workingTreeClean with
+        | Error failure -> Result.Error failure
+        | Ok records ->
+            // Validate records
+            let validation = validateRecords records identity.CommitOid identity.TreeOid
+            if not validation.Valid then
+                Result.Error(RecordPipelineFailure.RecordValidationFailed validation.Issues)
+            else
+                // Derive aggregate from records
+                let aggregate =
+                    records
+                    |> computeAggregate identity.CommitOid identity.TreeOid
+                    |> finalizeAggregate
+
+                // Build compatibility projection
+                let compatibilityProjection =
+                    buildCompatibilityProjection records aggregate scope identity.ObjectFormat
+
+                Result.Ok {
+                    SubjectCommitOid = identity.CommitOid
+                    SubjectTreeOid = identity.TreeOid
+                    ObjectFormat = identity.ObjectFormat
+                    Records = records
+                    Aggregate = aggregate
+                    CompatibilityProjection = compatibilityProjection
+                }
+
+/// Execute canonical checks through dependencies with per-check start times.
+/// The clock is sampled immediately before each RunCheck to capture
+/// the actual start time of each check. Returns ExecutedCanonicalCheck list.
+let internal executeCanonicalChecksWithPerCheckTimestamps
+    (deps: CanonicalEvidenceDependencies)
+    (defs: EvidenceCheckDefinition list)
+    : Result<ExecutedCanonicalCheck list, ProvideFailure> =
+    if List.isEmpty defs then
+        Result.Error ProvideCheckListEmpty
+    else
+        let known = SupportedCheckIdSet
+        let mutable badId : string option = None
+        for d in defs do
+            if not (Set.contains d.Id known) then
+                badId <- Some d.Id
+        match badId with
+        | Some id -> Result.Error(ProvideUnexpectedCheckId id)
+        | None ->
+            let mutable acc : ExecutedCanonicalCheck list = []
+            let mutable firstError : ProvideFailure option = None
+            let mutable halted = false
+            for d in defs do
+                if not halted then
+                    // Sample clock IMMEDIATELY before each RunCheck
+                    let checkStart = deps.GetUtcNow()
+                    match deps.RunCheck d CancellationToken.None with
+                    | Result.Ok r ->
+                        acc <- { Definition = d; Result = r; StartedAt = checkStart } :: acc
+                    | Result.Error e ->
+                        firstError <- Some(ProvideCheckFailure e)
+                        halted <- true
+            match firstError with
+            | Some f -> Result.Error f
+            | None ->
+                // Sort results deterministically
+                let sorted =
+                    acc
+                    |> List.map (fun e -> e.Result.Id, e)
+                    |> List.sortBy fst
+                    |> List.map snd
+                Result.Ok sorted
+
+/// Generate canonical evidence with real per-check execution records for an explicit subject commit OID.
+/// This is the authoritative 'provide' entry point that produces real records.
+/// Returns ProvideFailure for all failure paths - single failure hierarchy.
+let provideWithDependenciesFull
     (deps: CanonicalEvidenceDependencies)
     (repoRoot: string)
     (subjectOid: string)
     (scopeDeclarationPath: string option)
-    : Result<CanonicalEvidence, ProvideFailure> =
+    : Result<CanonicalEvidenceProviderResult, ProvideFailure> =
+    // Step 1: Resolve subject identity
     match resolveSubjectIdentity repoRoot subjectOid with
     | Result.Error err -> Result.Error err
     | Result.Ok identity ->
+        let repoIdentity: RepositoryIdentity = {
+            CommitOid = identity.CommitOid
+            TreeOid = identity.TreeOid
+            ObjectFormat = identity.ObjectFormat
+        }
+
+        // Step 2: Check working tree state
         match deps.ReadWorkingTreeState repoRoot with
-        | Result.Error _ -> Result.Error ProvideWorkingTreeDirty
+        | Result.Error e ->
+            Result.Error(ProvideIdentityFailure(IdentityGitFailure(sprintf "working_tree: %s:%s" e.Reason e.Detail)))
         | Result.Ok state ->
             if state.Dirty then
                 Result.Error ProvideWorkingTreeDirty
             else
+                // Step 3: Resolve scope
                 match
                     deps.ResolveScopeBinding
                         repoRoot
@@ -1415,6 +1528,7 @@ let provideWithDependencies
                 with
                 | Error failure -> Result.Error(ProvideScopeAuthorityFailure failure)
                 | Ok scope ->
+                    // Step 4: Build definitions
                     let defs =
                         CanonicalCheckDefinitions
                             repoRoot
@@ -1422,46 +1536,28 @@ let provideWithDependencies
                             scope.DeclarationPath
                             identity.CommitOid
 
-                    if List.isEmpty defs then
-                        Result.Error ProvideCheckListEmpty
-                    else
-                        let known = SupportedCheckIdSet
-                        let mutable badId : string option = None
-                        for d in defs do
-                            if not (Set.contains d.Id known) then
-                                badId <- Some d.Id
-                        match badId with
-                        | Some id -> Result.Error(ProvideUnexpectedCheckId id)
-                        | None ->
-                            let mutable acc : EvidenceCheckResult list = []
-                            let mutable firstError : ProvideFailure option = None
-                            let mutable halted = false
-                            for d in defs do
-                                if not halted then
-                                    match deps.RunCheck d CancellationToken.None with
-                                    | Result.Ok r -> acc <- r :: acc
-                                    | Result.Error e ->
-                                        firstError <- Some(ProvideCheckFailure e)
-                                        halted <- true
-                            match firstError with
-                            | Some f -> Result.Error f
-                            | None ->
-                                let checks = sortChecksDeterministic acc
-                                let overallStatus = computeOverallStatus checks
-                                let doc = {
-                                    SchemaVersion = SchemaVersionValue
-                                    ProviderName = ProviderNameValue
-                                    ProviderVersion = ProviderVersionValue
-                                    TestedCommitOid = identity.CommitOid
-                                    TestedTreeOid = identity.TreeOid
-                                    ObjectFormat = identity.ObjectFormat
-                                    ActiveScopeActId = scope.ActId
-                                    ActiveScopePointerBlobOid = scope.PointerBlobOid
-                                    ScopeDeclarationPath = scope.DeclarationPath
-                                    DeclarationBlobOid = scope.DeclarationBlobOid
-                                    BaselineCommitOid = scope.BaselineCommitOid
-                                    Checks = checks
-                                    OverallStatus = overallStatus
-                                    SemanticSha256 = ""
-                                }
-                                Result.Ok(withSemanticHash doc)
+                    // Step 5: Execute checks once with per-check start times
+                    match executeCanonicalChecksWithPerCheckTimestamps deps defs with
+                    | Result.Error f -> Result.Error f
+                    | Result.Ok executedChecks ->
+                        // Step 6-10: Build provider result - passes ExecutedCanonicalCheck list directly
+                        // to preserve per-check timestamps and definition/result pairing
+                        match buildProviderResult repoIdentity scope executedChecks (not state.Dirty) with
+                        | Result.Error rpFailure ->
+                            Result.Error(ProvideRecordPipelineFailure rpFailure)
+                        | Result.Ok providerResult ->
+                            // buildProviderResult already validates records and returns RecordValidationFailed if invalid.
+                            // No duplicate validation needed here.
+                            Result.Ok providerResult
+
+/// Delegated entry point: provideWithDependencies now delegates to provideWithDependenciesFull
+/// and returns the compatibility projection. This is the backward-compatible interface.
+let provideWithDependencies
+    (deps: CanonicalEvidenceDependencies)
+    (repoRoot: string)
+    (subjectOid: string)
+    (scopeDeclarationPath: string option)
+    : Result<CanonicalEvidence, ProvideFailure> =
+    match provideWithDependenciesFull deps repoRoot subjectOid scopeDeclarationPath with
+    | Result.Error failure -> Result.Error failure
+    | Result.Ok result -> Result.Ok result.CompatibilityProjection
