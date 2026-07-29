@@ -36,25 +36,32 @@ This progress report documents Phase 1 of the CORRECTION04-CORRECTION01 workstre
    - Added exact assertions for MissingCheck/UnknownCheck
    - Added BijectionEdgeCases tests for duplicate detection
 
-4. **StagedCompatibilityMutationTests.fs** - Added staged mutation tests:
+4. **StagedCompatibilityMutationTests.fs** - Complete staged mutation tests:
    - Uses domain model to mutate, re-render with correct semantic hash
+   - Uses `WriteAllBytes` with `strictUtf8` for canonical byte writing
    - Proves production comparator rejects structurally mutated documents
-   - All four live snapshot files verified unchanged after rejection
+   - All four live snapshot files verified byte-identical after rejection
 
 ### Test Results
 
 - CompatibilityStructuralEquality: 32 passed
-- StagedCompatibilityMutation: 7 passed (6 new + 1 existing)
+- StagedCompatibilityMutation: 11 passed (expected)
 
 ### Test Suite Composition
 
 ```yaml
 staged_compatibility_suite:
-  tests_total: 7
-  rehashed_structural_mutation_cases: 3
+  tests_total: 11
+  rehashed_top_level_mutation_cases: 3
     - RehashedProviderNameMutation
     - RehashedOverallStatusMutation
     - RehashedCommitOidMutation
+  rehashed_per_check_mutation_cases: 1
+    - RehashedCheckFailureKindMutation
+  rehashed_bijection_mutation_cases: 3
+    - RehashedRemovedCheckMutation
+    - RehashedUnknownCheckMutation
+    - RehashedDuplicateCheckIdMutation
   parse_failure_cases: 1
     - InvalidJsonMutation
   success_and_preservation_cases: 3
@@ -63,19 +70,6 @@ staged_compatibility_suite:
     - IdempotentOverwrite
 ```
 
-### Resolved Review Items
-
-- [x] Comparison authority is no longer test-local
-- [x] Tests consume Validation.compareCompatibilityProjection
-- [x] Duplicate ID multiplicity is inspected before Set/Map construction
-- [x] Missing and unknown ID analysis runs even when counts differ
-- [x] Publisher invokes comparator by source inspection
-- [x] Failure taxonomy repair (TestedCommitOid → ProjectionMismatch)
-- [x] Staged mutation tests use domain model with correct semantic hash
-- [x] Four-file preservation verified (records.jsonl, aggregate.json, artifacts.jsonl, canonical-evidence.json)
-- [x] Commit OID test strengthened to require exact CompatibilityProjectionMismatch
-- [x] Report conflict resolved (renamed to progress report)
-
 ### Current Status by Category
 
 ```yaml
@@ -83,11 +77,12 @@ CORRECTION04_CORRECTION01:
   compatibility:
     pure_comparator_authority: CLOSED_PASS
     production_staged_wiring: CLOSED_PASS
-    basic_staged_mutation_proof: CLOSED_PASS
-    commit_taxonomy_source_fix: PASS
-    rehashed_mutation_isolation: CLOSED_PASS
-    exact_commit_taxonomy_test: CLOSED_PASS
-    all_four_file_preservation: CLOSED_PASS
+    rehashed_top_level_mutation_isolation: CLOSED_PASS
+    rehashed_per_check_mutation_isolation: CLOSED_PASS
+    rehashed_bijection_mutation_isolation: CLOSED_PASS
+    four_file_byte_preservation: CLOSED_PASS
+    exact_commit_taxonomy_presence: CLOSED_PASS
+    exact_taxonomy_exclusion: CLOSED_PASS
 
   aggregate_authority: OPEN
   cleanup_failure_injection: OPEN

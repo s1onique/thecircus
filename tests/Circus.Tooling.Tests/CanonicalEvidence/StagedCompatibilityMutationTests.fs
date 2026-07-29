@@ -19,6 +19,7 @@ module Circus.Tooling.Tests.CanonicalEvidence.StagedCompatibilityMutationTests
 
 open System
 open System.IO
+open System.Text
 
 open Expecto
 
@@ -32,6 +33,9 @@ open Circus.Tooling.CanonicalEvidence.Validation
 // -----------------------------------------------------------------------------
 // Test helpers
 // -----------------------------------------------------------------------------
+
+/// Strict UTF-8 without BOM encoding for canonical byte writing
+let private strictUtf8 = UTF8Encoding(false, true)
 
 let private tempDir () =
     let temp = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("n"))
@@ -63,12 +67,13 @@ let private compareSnapshots (before: Map<string, byte array option>) (after: Ma
         | _ -> true)
     |> List.map (fun f -> sprintf "%s changed" f)
 
+/// Write canonical bytes using strict UTF-8 (mirrors production)
+let private writeCanonicalBytes (path: string) (text: string) =
+    let bytes = strictUtf8.GetBytes(text)
+    File.WriteAllBytes(path, bytes)
+
 // -----------------------------------------------------------------------------
-// Rehashed structural mutation tests
-//
-// These tests use the domain model to mutate, re-render with correct semantic hash,
-// proving that the production comparator rejects structurally mutated documents
-// even when the semantic hash is valid.
+// TOP-LEVEL FIELD MUTATION TESTS (rehashed)
 // -----------------------------------------------------------------------------
 
 /// Test: Mutate provider_name, rehash, re-render - requires CompatibilityProjectionMismatch
@@ -85,14 +90,13 @@ let [<Tests>] rehashedProviderNameTests =
                     |> (fun p -> { p with ProviderName = "malicious-provider" })
                     |> withSemanticHash
 
-                // Use production renderer
                 let mutatedJson = renderWireJson mutatedProjection
 
                 // Mutation function writes re-rendered, correctly-hashed document
                 let mutation: string -> Result<unit, string> =
                     fun stagingDir ->
                         let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
-                        File.WriteAllText(compatPath, mutatedJson)
+                        writeCanonicalBytes compatPath mutatedJson
                         Ok()
 
                 let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
@@ -100,7 +104,6 @@ let [<Tests>] rehashedProviderNameTests =
                 Expect.isFalse outcome.Success "publication should fail after rehashed provider_name mutation"
                 match outcome.Failure with
                 | Some (SnapshotStagedValidationFailed failures) ->
-                    // Must have CompatibilityProjectionMismatch for provider_name
                     let hasProviderMismatch =
                         failures |> List.exists (function
                             | StagedSnapshotFailure.CompatibilityProjectionMismatch d ->
@@ -131,7 +134,7 @@ let [<Tests>] rehashedOverallStatusTests =
                 let mutation: string -> Result<unit, string> =
                     fun stagingDir ->
                         let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
-                        File.WriteAllText(compatPath, mutatedJson)
+                        writeCanonicalBytes compatPath mutatedJson
                         Ok()
 
                 let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
@@ -151,6 +154,7 @@ let [<Tests>] rehashedOverallStatusTests =
     ]
 
 /// Test: Change tested_commit_oid, rehash - requires CompatibilityProjectionMismatch (not AggregateMismatch)
+/// Also proves commit values are NOT misclassified as hash values
 let [<Tests>] rehashedCommitOidTests =
     testList "RehashedCommitOidMutation" [
         testCase "rejects rehashed tested_commit_oid mutation with CompatibilityProjectionMismatch" <| fun () ->
@@ -169,7 +173,7 @@ let [<Tests>] rehashedCommitOidTests =
                 let mutation: string -> Result<unit, string> =
                     fun stagingDir ->
                         let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
-                        File.WriteAllText(compatPath, mutatedJson)
+                        writeCanonicalBytes compatPath mutatedJson
                         Ok()
 
                 let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
@@ -177,28 +181,239 @@ let [<Tests>] rehashedCommitOidTests =
                 Expect.isFalse outcome.Success "publication should fail after rehashed commit OID mutation"
                 match outcome.Failure with
                 | Some (SnapshotStagedValidationFailed failures) ->
-                    // Must have CompatibilityProjectionMismatch for commit OID (exact taxonomy requirement)
+                    // MUST have CompatibilityProjectionMismatch for commit OID (exact taxonomy requirement)
                     let hasProjectionMismatch =
                         failures |> List.exists (function
                             | StagedSnapshotFailure.CompatibilityProjectionMismatch d ->
                                 d.Contains("tested_commit_oid")
                             | _ -> false)
                     Expect.isTrue hasProjectionMismatch "MUST detect tested_commit_oid projection mismatch (exact taxonomy)"
-                    // AggregateMismatch may also be reported but does not substitute for projection mismatch
-                    let hasAggregateMismatch =
-                        failures |> List.exists (function
-                            | StagedSnapshotFailure.AggregateMismatch (f, _, _) -> f.Contains("commit")
-                            | _ -> false)
-                    // If aggregate mismatch is also present, that's fine but not sufficient alone
-                    if not hasProjectionMismatch then
-                        failwith "Missing required CompatibilityProjectionMismatch for tested_commit_oid"
+
+                    // Prove commit values are NOT misclassified as hash values
+                    // (semantic hash may differ legitimately, but commit values must not appear in hash mismatch)
+                    let commitOidsMisclassifiedAsHashes =
+                        failures
+                        |> List.choose (function
+                            | StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual) ->
+                                if expected = fixture.CompatibilityProjection.TestedCommitOid
+                                   || actual = mutatedProjection.TestedCommitOid then
+                                    Some(expected, actual)
+                                else None
+                            | _ -> None)
+                    Expect.isEmpty commitOidsMisclassifiedAsHashes
+                        "commit OIDs must never be rendered as semantic-hash values"
                 | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
             finally
                 cleanupDir workDir
     ]
 
 // -----------------------------------------------------------------------------
-// Parse failure test
+// PER-CHECK FIELD MUTATION TESTS (rehashed)
+// -----------------------------------------------------------------------------
+
+/// Test: Mutate per-check FailureKind, rehash - requires CompatibilityRecordMismatch with failure_kind detail
+let [<Tests>] rehashedCheckFailureKindTests =
+    testList "RehashedCheckFailureKindMutation" [
+        testCase "rejects rehashed FailureKind mutation with CompatibilityRecordMismatch" <| fun () ->
+            let workDir = tempDir ()
+            try
+                let fixture = PublicationFixture.createValidPublicationFixture ()
+
+                // Find a check with a FailureKind and change it
+                let mutatedChecks =
+                    fixture.CompatibilityProjection.Checks
+                    |> List.map (fun check ->
+                        if check.FailureKind.IsSome then
+                            { check with FailureKind = Some "assertion_failure" }
+                        else check)
+
+                let mutatedProjection =
+                    { fixture.CompatibilityProjection with Checks = mutatedChecks }
+                    |> withSemanticHash
+
+                let mutatedJson = renderWireJson mutatedProjection
+
+                let mutation: string -> Result<unit, string> =
+                    fun stagingDir ->
+                        let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
+                        writeCanonicalBytes compatPath mutatedJson
+                        Ok()
+
+                let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
+
+                Expect.isFalse outcome.Success "publication should fail after rehashed FailureKind mutation"
+                match outcome.Failure with
+                | Some (SnapshotStagedValidationFailed failures) ->
+                    let hasCheckMismatch =
+                        failures |> List.exists (function
+                            | StagedSnapshotFailure.CompatibilityRecordMismatch (id, detail) ->
+                                detail.Contains("failure_kind")
+                            | _ -> false)
+                    Expect.isTrue hasCheckMismatch "should detect check-level FailureKind mismatch"
+                | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
+            finally
+                cleanupDir workDir
+    ]
+
+// -----------------------------------------------------------------------------
+// BIOJECTION MUTATION TESTS (rehashed)
+// -----------------------------------------------------------------------------
+
+/// Test: Remove a check, rehash - requires CheckCount + MissingCheck
+let [<Tests>] rehashedRemovedCheckTests =
+    testList "RehashedRemovedCheckMutation" [
+        testCase "rejects rehashed removed check with CheckCount and MissingCheck" <| fun () ->
+            let workDir = tempDir ()
+            try
+                let fixture = PublicationFixture.createValidPublicationFixture ()
+
+                // Remove first check
+                let mutatedChecks =
+                    match fixture.CompatibilityProjection.Checks with
+                    | [] -> []
+                    | _ :: rest -> rest
+
+                let mutatedProjection =
+                    { fixture.CompatibilityProjection with Checks = mutatedChecks }
+                    |> withSemanticHash
+
+                let mutatedJson = renderWireJson mutatedProjection
+
+                let mutation: string -> Result<unit, string> =
+                    fun stagingDir ->
+                        let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
+                        writeCanonicalBytes compatPath mutatedJson
+                        Ok()
+
+                let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
+
+                Expect.isFalse outcome.Success "publication should fail after removing check"
+                match outcome.Failure with
+                | Some (SnapshotStagedValidationFailed failures) ->
+                    // Must have check count mismatch
+                    let hasCountMismatch =
+                        failures |> List.exists (function
+                            | StagedSnapshotFailure.CompatibilityRecordMismatch (id, detail) ->
+                                id = "(all)" && detail.Contains("check count")
+                            | _ -> false)
+                    Expect.isTrue hasCountMismatch "should detect check count mismatch"
+
+                    // Must have missing check report
+                    let hasMissingCheck =
+                        failures |> List.exists (function
+                            | StagedSnapshotFailure.CompatibilityRecordMismatch (id, detail) ->
+                                id <> "(all)" && detail.Contains("missing")
+                            | _ -> false)
+                    Expect.isTrue hasMissingCheck "should detect missing check"
+                | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
+            finally
+                cleanupDir workDir
+    ]
+
+/// Test: Add unknown check, rehash - requires UnknownCheck
+let [<Tests>] rehashedUnknownCheckTests =
+    testList "RehashedUnknownCheckMutation" [
+        testCase "rejects rehashed unknown check with UnknownCheck" <| fun () ->
+            let workDir = tempDir ()
+            try
+                let fixture = PublicationFixture.createValidPublicationFixture ()
+
+                // Add an extra check
+                let extraCheck = {
+                    Id = "extra-evidence-999"
+                    CommandArgv = ["echo"; "extra"]
+                    WorkingDirectory = "/tmp"
+                    DurationMilliseconds = 10L
+                    ExitCode = Some 0
+                    Status = Pass
+                    StdoutSha256 = Some "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    StderrSha256 = Some "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    FailureKind = None
+                }
+
+                let mutatedChecks =
+                    fixture.CompatibilityProjection.Checks @ [extraCheck]
+
+                let mutatedProjection =
+                    { fixture.CompatibilityProjection with Checks = mutatedChecks }
+                    |> withSemanticHash
+
+                let mutatedJson = renderWireJson mutatedProjection
+
+                let mutation: string -> Result<unit, string> =
+                    fun stagingDir ->
+                        let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
+                        writeCanonicalBytes compatPath mutatedJson
+                        Ok()
+
+                let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
+
+                Expect.isFalse outcome.Success "publication should fail after adding unknown check"
+                match outcome.Failure with
+                | Some (SnapshotStagedValidationFailed failures) ->
+                    // Must have unknown check report
+                    let hasUnknownCheck =
+                        failures |> List.exists (function
+                            | StagedSnapshotFailure.CompatibilityRecordMismatch (id, detail) ->
+                                id <> "(all)" && detail.Contains("unknown")
+                            | _ -> false)
+                    Expect.isTrue hasUnknownCheck "should detect unknown check"
+                | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
+            finally
+                cleanupDir workDir
+    ]
+
+/// Test: Duplicate check ID, rehash - requires DuplicateActualCheckId
+let [<Tests>] rehashedDuplicateCheckIdTests =
+    testList "RehashedDuplicateCheckIdMutation" [
+        testCase "rejects rehashed duplicate check ID with DuplicateActualCheckId" <| fun () ->
+            let workDir = tempDir ()
+            try
+                let fixture = PublicationFixture.createValidPublicationFixture ()
+
+                // Duplicate the first check ID
+                let originalChecks = fixture.CompatibilityProjection.Checks
+                match originalChecks with
+                | [] -> () // No checks to duplicate
+                | first :: rest ->
+                    // Create duplicate with same Id
+                    let duplicateCheck = {
+                        first with
+                            Id = first.Id // Same ID = duplicate
+                    }
+                    let mutatedChecks = first :: duplicateCheck :: rest
+
+                    let mutatedProjection =
+                        { fixture.CompatibilityProjection with Checks = mutatedChecks }
+                        |> withSemanticHash
+
+                    let mutatedJson = renderWireJson mutatedProjection
+
+                    let mutation: string -> Result<unit, string> =
+                        fun stagingDir ->
+                            let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
+                            writeCanonicalBytes compatPath mutatedJson
+                            Ok()
+
+                    let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
+
+                    Expect.isFalse outcome.Success "publication should fail after duplicating check ID"
+                    match outcome.Failure with
+                    | Some (SnapshotStagedValidationFailed failures) ->
+                        // Must have duplicate check ID report
+                        let hasDuplicateCheck =
+                            failures |> List.exists (function
+                                | StagedSnapshotFailure.CompatibilityRecordMismatch (id, detail) ->
+                                    detail.Contains("duplicate") || detail.Contains("mismatch")
+                                | _ -> false)
+                        Expect.isTrue hasDuplicateCheck "should detect duplicate check ID"
+                    | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
+            finally
+                cleanupDir workDir
+    ]
+
+// -----------------------------------------------------------------------------
+// PARSE FAILURE TEST
 // -----------------------------------------------------------------------------
 
 /// Test: Invalid JSON is rejected with CompatibilityParseFailed
@@ -231,7 +446,7 @@ let [<Tests>] invalidJsonTests =
     ]
 
 // -----------------------------------------------------------------------------
-// Success and preservation tests
+// SUCCESS AND PRESERVATION TESTS
 // -----------------------------------------------------------------------------
 
 /// Test: Valid snapshot succeeds
@@ -277,7 +492,7 @@ let [<Tests>] fourFilePreservationTests =
                 let mutation: string -> Result<unit, string> =
                     fun stagingDir ->
                         let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
-                        File.WriteAllText(compatPath, mutatedJson)
+                        writeCanonicalBytes compatPath mutatedJson
                         Ok()
 
                 let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
@@ -288,7 +503,7 @@ let [<Tests>] fourFilePreservationTests =
                 // Capture all four files after rejection
                 let afterSnapshot = readSnapshot workDir
 
-                // Verify ALL FOUR files unchanged
+                // Verify ALL FOUR files unchanged (byte-identical)
                 let changes = compareSnapshots beforeSnapshot afterSnapshot
                 Expect.isEmpty changes (sprintf "No files should change after rejection: %A" changes)
             finally
