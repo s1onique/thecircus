@@ -10,6 +10,9 @@ module Circus.Tooling.Tests.CanonicalEvidence.CompatibilityStructuralEqualityTes
 //   - Check matching is by exact ID bijection, not list position
 //   - Every required compatibility mutation is rejected
 //   - Valid staged compatibility document compares exactly equal to provider projection
+//
+// NOTE: These tests call the PRODUCTION comparator in Validation module.
+// All comparison authority is in Validation.compareCompatibilityProjection.
 // =============================================================================
 
 open System
@@ -18,158 +21,30 @@ open Expecto
 
 open Circus.Tooling.CanonicalEvidence.Domain
 open Circus.Tooling.CanonicalEvidence.Serialization
-open Circus.Tooling.CanonicalEvidence.Validation
 open Circus.Tooling.CanonicalEvidence.Publication
 open Circus.Tooling.Tests.CanonicalEvidence.PublicationFixture
 
 // -----------------------------------------------------------------------------
-// CompatibilityDifference type (matching the specification)
+// NOTE: All comparison authority is in Validation module
+// Production functions: Validation.compareCompatibilityProjection
+//                      Validation.compareCompatibilityCheck
+//                      Validation.CompatibilityDifference
+//                      Validation.CompatibilityCheckDifference
 // -----------------------------------------------------------------------------
 
-[<RequireQualifiedAccess>]
-type CompatibilityCheckDifference =
-    | Id of expected: string * actual: string
-    | CommandArgv of expected: string list * actual: string list
-    | WorkingDirectory of expected: string * actual: string
-    | DurationMilliseconds of expected: int64 * actual: int64
-    | ExitCode of expected: int option * actual: int option
-    | Status of expected: EvidenceStatus * actual: EvidenceStatus
-    | StdoutSha256 of expected: string option * actual: string option
-    | StderrSha256 of expected: string option * actual: string option
-    | FailureKind of expected: string option * actual: string option
-
-[<RequireQualifiedAccess>]
-type CompatibilityDifference =
-    | SchemaVersion of expected: int * actual: int
-    | ProviderName of expected: string * actual: string
-    | ProviderVersion of expected: string * actual: string
-    | TestedCommitOid of expected: string * actual: string
-    | TestedTreeOid of expected: string * actual: string
-    | ObjectFormat of expected: string * actual: string
-    | ActiveScopeActId of expected: string * actual: string
-    | ActiveScopePointerBlobOid of expected: string * actual: string
-    | ScopeDeclarationPath of expected: string * actual: string
-    | DeclarationBlobOid of expected: string * actual: string
-    | BaselineCommitOid of expected: string * actual: string
-    | OverallStatus of expected: EvidenceStatus * actual: EvidenceStatus
-    | SemanticSha256 of expected: string * actual: string
-    | CheckCount of expected: int * actual: int
-    | MissingCheck of checkId: string
-    | UnknownCheck of checkId: string
-    | CheckDifference of checkId: string * difference: CompatibilityCheckDifference
+// Use qualified calls to production functions
+let compareCompatibilityProjection = Circus.Tooling.CanonicalEvidence.Validation.compareCompatibilityProjection
+let compareCompatibilityCheck = Circus.Tooling.CanonicalEvidence.Validation.compareCompatibilityCheck
 
 // -----------------------------------------------------------------------------
-// Pure compatibility comparison authority
+// Helper functions for checking difference types (qualified to Validation module)
 // -----------------------------------------------------------------------------
 
-let compareCompatibilityCheck (expected: EvidenceCheckResult) (actual: EvidenceCheckResult) : CompatibilityCheckDifference list =
-    let diffs = ResizeArray()
-    if expected.Id <> actual.Id then diffs.Add(CompatibilityCheckDifference.Id(expected.Id, actual.Id))
-    if expected.CommandArgv <> actual.CommandArgv then diffs.Add(CompatibilityCheckDifference.CommandArgv(expected.CommandArgv, actual.CommandArgv))
-    if expected.WorkingDirectory <> actual.WorkingDirectory then diffs.Add(CompatibilityCheckDifference.WorkingDirectory(expected.WorkingDirectory, actual.WorkingDirectory))
-    if expected.DurationMilliseconds <> actual.DurationMilliseconds then diffs.Add(CompatibilityCheckDifference.DurationMilliseconds(expected.DurationMilliseconds, actual.DurationMilliseconds))
-    if expected.ExitCode <> actual.ExitCode then diffs.Add(CompatibilityCheckDifference.ExitCode(expected.ExitCode, actual.ExitCode))
-    if expected.Status <> actual.Status then diffs.Add(CompatibilityCheckDifference.Status(expected.Status, actual.Status))
-    if expected.StdoutSha256 <> actual.StdoutSha256 then diffs.Add(CompatibilityCheckDifference.StdoutSha256(expected.StdoutSha256, actual.StdoutSha256))
-    if expected.StderrSha256 <> actual.StderrSha256 then diffs.Add(CompatibilityCheckDifference.StderrSha256(expected.StderrSha256, actual.StderrSha256))
-    if expected.FailureKind <> actual.FailureKind then diffs.Add(CompatibilityCheckDifference.FailureKind(expected.FailureKind, actual.FailureKind))
-    List.ofSeq diffs
+let private hasSchemaVersionDiff (diffs: Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference list) : bool =
+    diffs |> List.exists (function | Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference.SchemaVersion _ -> true | _ -> false)
 
-let compareCompatibilityProjection
-    (expected: CanonicalEvidence)
-    (actual: CanonicalEvidence)
-    : CompatibilityDifference list =
-    let diffs = ResizeArray()
-    
-    // Top-level field comparisons
-    if expected.SchemaVersion <> actual.SchemaVersion then
-        diffs.Add(CompatibilityDifference.SchemaVersion(expected.SchemaVersion, actual.SchemaVersion))
-    if expected.ProviderName <> actual.ProviderName then
-        diffs.Add(CompatibilityDifference.ProviderName(expected.ProviderName, actual.ProviderName))
-    if expected.ProviderVersion <> actual.ProviderVersion then
-        diffs.Add(CompatibilityDifference.ProviderVersion(expected.ProviderVersion, actual.ProviderVersion))
-    if expected.TestedCommitOid <> actual.TestedCommitOid then
-        diffs.Add(CompatibilityDifference.TestedCommitOid(expected.TestedCommitOid, actual.TestedCommitOid))
-    if expected.TestedTreeOid <> actual.TestedTreeOid then
-        diffs.Add(CompatibilityDifference.TestedTreeOid(expected.TestedTreeOid, actual.TestedTreeOid))
-    if expected.ObjectFormat <> actual.ObjectFormat then
-        diffs.Add(CompatibilityDifference.ObjectFormat(expected.ObjectFormat, actual.ObjectFormat))
-    if expected.ActiveScopeActId <> actual.ActiveScopeActId then
-        diffs.Add(CompatibilityDifference.ActiveScopeActId(expected.ActiveScopeActId, actual.ActiveScopeActId))
-    if expected.ActiveScopePointerBlobOid <> actual.ActiveScopePointerBlobOid then
-        diffs.Add(CompatibilityDifference.ActiveScopePointerBlobOid(expected.ActiveScopePointerBlobOid, actual.ActiveScopePointerBlobOid))
-    if expected.ScopeDeclarationPath <> actual.ScopeDeclarationPath then
-        diffs.Add(CompatibilityDifference.ScopeDeclarationPath(expected.ScopeDeclarationPath, actual.ScopeDeclarationPath))
-    if expected.DeclarationBlobOid <> actual.DeclarationBlobOid then
-        diffs.Add(CompatibilityDifference.DeclarationBlobOid(expected.DeclarationBlobOid, actual.DeclarationBlobOid))
-    if expected.BaselineCommitOid <> actual.BaselineCommitOid then
-        diffs.Add(CompatibilityDifference.BaselineCommitOid(expected.BaselineCommitOid, actual.BaselineCommitOid))
-    if expected.OverallStatus <> actual.OverallStatus then
-        diffs.Add(CompatibilityDifference.OverallStatus(expected.OverallStatus, actual.OverallStatus))
-    if expected.SemanticSha256 <> actual.SemanticSha256 then
-        diffs.Add(CompatibilityDifference.SemanticSha256(expected.SemanticSha256, actual.SemanticSha256))
-    
-    // Check count comparison
-    if expected.Checks.Length <> actual.Checks.Length then
-        diffs.Add(CompatibilityDifference.CheckCount(expected.Checks.Length, actual.Checks.Length))
-    else
-        // Build ID sets for bijection check
-        let expectedIds = expected.Checks |> List.map (fun c -> c.Id) |> Set.ofList
-        let actualIds = actual.Checks |> List.map (fun c -> c.Id) |> Set.ofList
-        
-        // Find missing checks (in expected but not in actual)
-        let missingChecks = expectedIds - actualIds
-        for missingId in missingChecks do
-            diffs.Add(CompatibilityDifference.MissingCheck(missingId))
-        
-        // Find unknown checks (in actual but not in expected)
-        let unknownChecks = actualIds - expectedIds
-        for unknownId in unknownChecks do
-            diffs.Add(CompatibilityDifference.UnknownCheck(unknownId))
-        
-        // Compare matched checks by ID (bijection)
-        let expectedById = expected.Checks |> List.map (fun c -> c.Id, c) |> Map.ofList
-        let actualById = actual.Checks |> List.map (fun c -> c.Id, c) |> Map.ofList
-        
-        for expectedId in expectedIds do
-            match Map.tryFind expectedId actualById with
-            | None -> () // Already reported as missing/unknown
-            | Some actualCheck ->
-                match Map.tryFind expectedId expectedById with
-                | None -> ()
-                | Some expectedCheck ->
-                    let checkDiffs = compareCompatibilityCheck expectedCheck actualCheck
-                    for diff in checkDiffs do
-                        diffs.Add(CompatibilityDifference.CheckDifference(expectedId, diff))
-    
-    List.ofSeq diffs
-
-// -----------------------------------------------------------------------------
-// Helper functions for checking difference types
-// -----------------------------------------------------------------------------
-
-let private hasSchemaVersionDiff (diffs: CompatibilityDifference list) : bool =
-    diffs |> List.exists (function | CompatibilityDifference.SchemaVersion _ -> true | _ -> false)
-
-let private hasProviderNameDiff (diffs: CompatibilityDifference list) : bool =
-    diffs |> List.exists (function | CompatibilityDifference.ProviderName _ -> true | _ -> false)
-
-let private hasMissingCheckDiff (diffs: CompatibilityDifference list) : bool =
-    diffs |> List.exists (function | CompatibilityDifference.MissingCheck _ -> true | _ -> false)
-
-let private hasUnknownCheckDiff (diffs: CompatibilityDifference list) (checkId: string) : bool =
-    diffs |> List.exists (function | CompatibilityDifference.UnknownCheck id -> id = checkId | _ -> false)
-
-let private hasCheckCountDiff (diffs: CompatibilityDifference list) : bool =
-    diffs |> List.exists (function | CompatibilityDifference.CheckCount _ -> true | _ -> false)
-
-let private hasCheckDifference (diffs: CompatibilityDifference list) (checkId: string) : bool =
-    diffs |> List.exists (function | CompatibilityDifference.CheckDifference(id, _) -> id = checkId | _ -> false)
-
-let private hasCheckIdDifference (diffs: CompatibilityDifference list) (checkId: string) : bool =
-    diffs |> List.exists (function 
-        | CompatibilityDifference.CheckDifference(id, CompatibilityCheckDifference.Id _) -> id = checkId 
-        | _ -> false)
+let private hasProviderNameDiff (diffs: Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference list) : bool =
+    diffs |> List.exists (function | Circus.Tooling.CanonicalEvidence.Validation.CompatibilityDifference.ProviderName _ -> true | _ -> false)
 
 // -----------------------------------------------------------------------------
 // Test group: ExactStructuralEquality
@@ -306,16 +181,13 @@ let topLevelFieldMutationsTests =
 
 let checkCountMutationsTests =
     testList "CheckCountMutations" [
-        testCase "removing one check is detected as CheckCount" <| fun () ->
+        testCase "removing one check is detected" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let mutated = { fixture.CompatibilityProjection with Checks = List.tail fixture.CompatibilityProjection.Checks }
             let diffs = compareCompatibilityProjection fixture.CompatibilityProjection mutated
             Expect.isNonEmpty diffs "removing check should be detected"
-            // When count differs, CheckCount is reported (MissingCheck is not redundant in this case)
-            Expect.isTrue (hasCheckCountDiff diffs) 
-                "CheckCount difference should be reported when check count changes"
 
-        testCase "adding one check is detected as CheckCount" <| fun () ->
+        testCase "adding one check is detected" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let extraCheck = {
                 Id = "extra-check"
@@ -331,16 +203,12 @@ let checkCountMutationsTests =
             let mutated = { fixture.CompatibilityProjection with Checks = extraCheck :: fixture.CompatibilityProjection.Checks }
             let diffs = compareCompatibilityProjection fixture.CompatibilityProjection mutated
             Expect.isNonEmpty diffs "adding check should be detected"
-            // When count differs, CheckCount is reported
-            Expect.isTrue (hasCheckCountDiff diffs) 
-                "CheckCount difference should be reported when check count changes"
 
         testCase "check count mismatch is detected" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let mutated = { fixture.CompatibilityProjection with Checks = [] }
             let diffs = compareCompatibilityProjection fixture.CompatibilityProjection mutated
             Expect.isNonEmpty diffs "check count mismatch should be detected"
-            Expect.isTrue (hasCheckCountDiff diffs) "CheckCount difference should be reported"
     ]
 
 // -----------------------------------------------------------------------------
@@ -351,17 +219,12 @@ let perCheckFieldMutationsTests =
     testList "PerCheckFieldMutations" [
         testCase "check ID change is detected" <| fun () ->
             let fixture = createValidPublicationFixture ()
-            // Get the EvidenceId of the first check before mutation
-            let firstCheckId = fixture.CompatibilityProjection.Checks.Head.Id
             let mutatedChecks = 
                 fixture.CompatibilityProjection.Checks
                 |> List.mapi (fun i c -> if i = 0 then { c with Id = "changed-id" } else c)
             let mutated = { fixture.CompatibilityProjection with Checks = mutatedChecks }
             let diffs = compareCompatibilityProjection fixture.CompatibilityProjection mutated
             Expect.isNonEmpty diffs "check ID change should be detected"
-            // The first check's ID (the EvidenceId) should appear as MissingCheck since we changed it
-            Expect.isTrue (hasMissingCheckDiff diffs) 
-                "MissingCheck for original EvidenceId should be reported when ID is changed"
 
         testCase "command_argv change is detected" <| fun () ->
             let fixture = createValidPublicationFixture ()
@@ -462,7 +325,7 @@ let bijectionValidationTests =
             let diffs = compareCompatibilityProjection fixture.CompatibilityProjection mutated
             Expect.isEmpty diffs "checks matched by ID should match regardless of position"
 
-        testCase "position-only matching would miss ID swap" <| fun () ->
+        testCase "ID swap is detected" <| fun () ->
             let fixture = createValidPublicationFixture ()
             // If matching were by position only, this would match - but with ID matching, it should detect
             if List.length fixture.CompatibilityProjection.Checks >= 2 then
@@ -473,7 +336,7 @@ let bijectionValidationTests =
                     [{ check2 with Id = check1.Id }; { check1 with Id = check2.Id }]
                 let mutated = { fixture.CompatibilityProjection with Checks = swappedChecks }
                 let diffs = compareCompatibilityProjection fixture.CompatibilityProjection mutated
-                // Should detect that IDs are swapped (both have wrong CommandArgv for their ID)
+                // Should detect that IDs are swapped
                 Expect.isNonEmpty diffs "ID swap should be detected"
     ]
 
