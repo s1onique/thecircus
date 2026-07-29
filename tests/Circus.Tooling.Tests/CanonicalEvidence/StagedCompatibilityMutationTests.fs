@@ -154,7 +154,7 @@ let [<Tests>] rehashedOverallStatusTests =
     ]
 
 /// Test: Change tested_commit_oid, rehash - requires commit OID mismatch detection
-/// The cross-check between aggregate and staged file produces CompatibilitySemanticHashMismatch
+/// The cross-check between aggregate and staged file produces CompatibilityCommitOidMismatch
 /// because the aggregate.SubjectCommitOid differs from staged file's TestedCommitOid.
 let [<Tests>] rehashedCommitOidTests =
     testList "RehashedCommitOidMutation" [
@@ -184,10 +184,11 @@ let [<Tests>] rehashedCommitOidTests =
                 match outcome.Failure with
                 | Some (SnapshotStagedValidationFailed failures) ->
                     // Cross-check failure: aggregate.SubjectCommitOid vs staged file's TestedCommitOid
-                    // The production cross-check uses CompatibilitySemanticHashMismatch for this comparison
+                    // The production cross-check uses CompatibilityCommitOidMismatch for this comparison
+                    // (not CompatibilitySemanticHashMismatch which is reserved for semantic hash comparisons)
                     let hasCommitOidMismatch =
                         failures |> List.exists (function
-                            | StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual) ->
+                            | StagedSnapshotFailure.CompatibilityCommitOidMismatch(expected, actual) ->
                                 // Cross-check: expected = aggregate.SubjectCommitOid, actual = diskCompat.TestedCommitOid
                                 expected = fixture.Aggregate.SubjectCommitOid
                                 && actual = mutatedCommitOid
@@ -195,6 +196,22 @@ let [<Tests>] rehashedCommitOidTests =
                     Expect.isTrue hasCommitOidMismatch
                         (sprintf "MUST detect commit OID mismatch: expected=%s actual=%s"
                             fixture.Aggregate.SubjectCommitOid mutatedCommitOid)
+
+                    // Prove no CompatibilitySemanticHashMismatch contains commit OIDs
+                    // (semantic hash mismatches are for semantic hash values, not commit OIDs)
+                    let commitOidInHashMismatch =
+                        failures
+                        |> List.choose (function
+                            | StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual) ->
+                                // Check if either value looks like a commit OID (40 hex chars)
+                                if String.length expected = 40 && String.exists (System.Char.IsLetter) expected then
+                                    Some(expected, actual, "expected")
+                                elif String.length actual = 40 && String.exists (System.Char.IsLetter) actual then
+                                    Some(expected, actual, "actual")
+                                else None
+                            | _ -> None)
+                    Expect.isEmpty commitOidInHashMismatch
+                        "commit OIDs must never appear in CompatibilitySemanticHashMismatch"
                 | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
             finally
                 cleanupDir workDir

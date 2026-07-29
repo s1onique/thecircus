@@ -93,6 +93,8 @@ type StagedSnapshotFailure =
     | ArtifactHashMismatch of path: string * expected: string * actual: string
     | ArtifactLengthMismatch of path: string * expected: int64 * actual: int64
     | CompatibilitySemanticHashMismatch of expected: string * actual: string
+    | CompatibilityCommitOidMismatch of expected: string * actual: string
+    | CompatibilityTreeOidMismatch of expected: string * actual: string
     | CompatibilityProjectionMismatch of detail: string
     | CompatibilityRecordMismatch of checkId: string * detail: string
     | MutationHookFailed of detail: string
@@ -121,6 +123,10 @@ let stagedSnapshotFailureToString (f: StagedSnapshotFailure) : string =
         sprintf "artifact length mismatch for %s: expected=%d actual=%d" path expected actual
     | StagedSnapshotFailure.CompatibilitySemanticHashMismatch (expected, actual) ->
         sprintf "compatibility semantic hash mismatch: expected=%s actual=%s" expected actual
+    | StagedSnapshotFailure.CompatibilityCommitOidMismatch (expected, actual) ->
+        sprintf "compatibility commit OID mismatch: expected=%s actual=%s" expected actual
+    | StagedSnapshotFailure.CompatibilityTreeOidMismatch (expected, actual) ->
+        sprintf "compatibility tree OID mismatch: expected=%s actual=%s" expected actual
     | StagedSnapshotFailure.CompatibilityProjectionMismatch d -> sprintf "compatibility projection mismatch: %s" d
     | StagedSnapshotFailure.CompatibilityRecordMismatch (id, d) -> sprintf "compatibility record mismatch for %s: %s" id d
     | StagedSnapshotFailure.MutationHookFailed d -> sprintf "mutation hook failed: %s" d
@@ -804,15 +810,15 @@ let private validateCompatibilityEvidence
                     failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
                         checkId, sprintf "duplicate check id in disk: %s (count=%d)" checkId count))
             
-            // Phase 2: Legacy record consistency checks (for backward compatibility with aggregate)
-            // Verify commit
+            // Phase 2: Cross-file consistency checks (aggregate vs compatibility)
+            // Verify commit: use dedicated type to avoid misclassifying OIDs as hashes
             if diskCompat.TestedCommitOid <> aggregate.SubjectCommitOid then
-                failures.Add(StagedSnapshotFailure.CompatibilitySemanticHashMismatch(
+                failures.Add(StagedSnapshotFailure.CompatibilityCommitOidMismatch(
                     aggregate.SubjectCommitOid, diskCompat.TestedCommitOid))
-            // Verify tree
+            // Verify tree: use dedicated type for consistency
             if diskCompat.TestedTreeOid <> aggregate.SubjectTreeOid then
-                failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                    sprintf "tree mismatch: compat=%s aggregate=%s" diskCompat.TestedTreeOid aggregate.SubjectTreeOid))
+                failures.Add(StagedSnapshotFailure.CompatibilityTreeOidMismatch(
+                    aggregate.SubjectTreeOid, diskCompat.TestedTreeOid))
             // Verify record IDs match (diskCompat.Checks uses EvidenceCheckResult with Id field)
             let compatRecordIds = List.map (fun (e: EvidenceCheckResult) -> e.Id) diskCompat.Checks |> List.sort
             let aggregateRecordIds = aggregate.RecordIds

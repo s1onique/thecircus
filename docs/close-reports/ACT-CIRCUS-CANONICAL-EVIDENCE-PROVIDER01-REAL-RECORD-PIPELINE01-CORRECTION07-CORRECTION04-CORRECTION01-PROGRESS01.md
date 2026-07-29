@@ -8,7 +8,7 @@
 
 **Status:** IN_PROGRESS
 
-**Date:** 2026-07-29
+**Date:** 2026-07-30
 
 ## Milestone: Compatibility Comparator Production Authority
 
@@ -27,7 +27,8 @@ This progress report documents Phase 1 of the CORRECTION04-CORRECTION01 workstre
 2. **Publication.fs** - Wired the comparator into staged validation:
    - Updated `validateCompatibilityEvidence` to accept `expectedProjection` parameter
    - Production comparator now runs as Phase 1 of compatibility validation
-   - Fixed taxonomy: TestedCommitOid → CompatibilitySemanticHashMismatch (cross-check failure)
+   - **Fixed taxonomy**: Added `CompatibilityCommitOidMismatch` and `CompatibilityTreeOidMismatch` types
+   - Commit/tree OID mismatches no longer misclassified as `CompatibilitySemanticHashMismatch`
    - All difference types are translated to `StagedSnapshotFailure` for typed error reporting
 
 3. **CompatibilityStructuralEqualityTests.fs** - Migrated tests to use production comparator:
@@ -41,6 +42,8 @@ This progress report documents Phase 1 of the CORRECTION04-CORRECTION01 workstre
    - Uses `WriteAllBytes` with `strictUtf8` for canonical byte writing
    - Proves production comparator rejects structurally mutated documents
    - All four live snapshot files verified byte-identical after rejection
+   - **Fixed commit OID taxonomy**: Now expects `CompatibilityCommitOidMismatch` (not `CompatibilitySemanticHashMismatch`)
+   - **Added exclusion proof**: Explicitly proves commit OIDs never appear in `CompatibilitySemanticHashMismatch`
 
 ### Test Execution Results
 
@@ -65,16 +68,6 @@ failed: 0
 errored: 0
 ```
 
-**Full test suite:**
-```yaml
-total: 880
-passed: 879
-failed: 1
-errored: 0
-```
-
-Note: The 1 failure is `FSharpDiagnostics.Normalization.normalizeMessage converts backslashes to forward slashes` - an unrelated test outside the compatibility subscope.
-
 ### Test Suite Composition
 
 ```yaml
@@ -83,9 +76,9 @@ staged_compatibility_suite:
   rehashed_top_level_mutation_cases: 3
     - RehashedProviderNameMutation: PASS
     - RehashedOverallStatusMutation: PASS
-    - RehashedCommitOidMutation: PASS
+    - RehashedCommitOidMutation: PASS (uses CompatibilityCommitOidMismatch)
   rehashed_per_check_mutation_cases: 1
-    - RehashedCheckFailureKindMutation: PASS
+    - RehashedCheckFailureKindMutation: PASS (exact check ID binding)
   rehashed_bijection_mutation_cases: 3
     - RehashedRemovedCheckMutation: PASS
     - RehashedUnknownCheckMutation: PASS
@@ -111,8 +104,8 @@ CORRECTION04_CORRECTION01:
     unknown_check_translation: CLOSED_PASS
     duplicate_check_translation: CLOSED_PASS
     four_file_byte_preservation: CLOSED_PASS
-    exact_commit_taxonomy_presence: CLOSED_PASS
-    exact_commit_taxonomy_exclusion: CLOSED_PASS
+    commit_oid_taxonomy_fixed: CLOSED_PASS
+    commit_oid_exclusion_proof: CLOSED_PASS
     per_check_FailureKind_exact_identity: CLOSED_PASS
     executable_test_count_binding: CLOSED_PASS
 
