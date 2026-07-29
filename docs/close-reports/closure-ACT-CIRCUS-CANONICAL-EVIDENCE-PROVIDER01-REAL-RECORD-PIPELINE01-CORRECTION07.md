@@ -2,10 +2,10 @@
 
 ## Summary
 
-**ACT:** ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01-CORRECTION07  
-**Title:** Constructor-derived publication fixtures with valid OIDs  
-**Status:** CLOSED  
-**Date:** 2026-07-29  
+**ACT:** ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01-CORRECTION07
+**Title:** Constructor-derived publication fixtures with valid OIDs
+**Status:** PARTIAL_CHECKPOINT
+**Date:** 2026-07-29
 
 ## Problem Statement
 
@@ -117,7 +117,7 @@ SHA-256: 4c7a8b2d9e3f1a6c5b8d2e4f7a9c1b3d5e7f8a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d
 ## Closure Evidence
 
 - [x] Tests use valid 40-char SHA-1 OIDs for commits/trees
-- [x] Tests use valid 64-char SHA-256 for evidence IDs  
+- [x] Tests use valid 64-char SHA-256 for evidence IDs
 - [x] All publication tests pass (18/18)
 - [x] Fixture builder produces data through production pipeline
 - [x] Semantic hashes recompute correctly
