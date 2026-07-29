@@ -183,6 +183,124 @@ let validate (rawJsonKeys: string list) (e: CanonicalEvidence) : ValidationResul
 let isValid (r: ValidationResult) : bool =
     List.isEmpty r.Issues
 
+// -----------------------------------------------------------------------------
+// Compatibility projection comparison (for staged validation)
+// -----------------------------------------------------------------------------
+
+[<RequireQualifiedAccess>]
+type CompatibilityCheckDifference =
+    | Id of expected: string * actual: string
+    | CommandArgv of expected: string list * actual: string list
+    | WorkingDirectory of expected: string * actual: string
+    | DurationMilliseconds of expected: int64 * actual: int64
+    | ExitCode of expected: int option * actual: int option
+    | Status of expected: EvidenceStatus * actual: EvidenceStatus
+    | StdoutSha256 of expected: string option * actual: string option
+    | StderrSha256 of expected: string option * actual: string option
+    | FailureKind of expected: string option * actual: string option
+
+[<RequireQualifiedAccess>]
+type CompatibilityDifference =
+    | SchemaVersion of expected: int * actual: int
+    | ProviderName of expected: string * actual: string
+    | ProviderVersion of expected: string * actual: string
+    | TestedCommitOid of expected: string * actual: string
+    | TestedTreeOid of expected: string * actual: string
+    | ObjectFormat of expected: string * actual: string
+    | ActiveScopeActId of expected: string * actual: string
+    | ActiveScopePointerBlobOid of expected: string * actual: string
+    | ScopeDeclarationPath of expected: string * actual: string
+    | DeclarationBlobOid of expected: string * actual: string
+    | BaselineCommitOid of expected: string * actual: string
+    | OverallStatus of expected: EvidenceStatus * actual: EvidenceStatus
+    | SemanticSha256 of expected: string * actual: string
+    | CheckCount of expected: int * actual: int
+    | MissingCheck of checkId: string
+    | UnknownCheck of checkId: string
+    | CheckDifference of checkId: string * difference: CompatibilityCheckDifference
+
+/// Compare two evidence check results field by field
+let compareCompatibilityCheck (expected: EvidenceCheckResult) (actual: EvidenceCheckResult) : CompatibilityCheckDifference list =
+    let diffs = ResizeArray()
+    if expected.Id <> actual.Id then diffs.Add(CompatibilityCheckDifference.Id(expected.Id, actual.Id))
+    if expected.CommandArgv <> actual.CommandArgv then diffs.Add(CompatibilityCheckDifference.CommandArgv(expected.CommandArgv, actual.CommandArgv))
+    if expected.WorkingDirectory <> actual.WorkingDirectory then diffs.Add(CompatibilityCheckDifference.WorkingDirectory(expected.WorkingDirectory, actual.WorkingDirectory))
+    if expected.DurationMilliseconds <> actual.DurationMilliseconds then diffs.Add(CompatibilityCheckDifference.DurationMilliseconds(expected.DurationMilliseconds, actual.DurationMilliseconds))
+    if expected.ExitCode <> actual.ExitCode then diffs.Add(CompatibilityCheckDifference.ExitCode(expected.ExitCode, actual.ExitCode))
+    if expected.Status <> actual.Status then diffs.Add(CompatibilityCheckDifference.Status(expected.Status, actual.Status))
+    if expected.StdoutSha256 <> actual.StdoutSha256 then diffs.Add(CompatibilityCheckDifference.StdoutSha256(expected.StdoutSha256, actual.StdoutSha256))
+    if expected.StderrSha256 <> actual.StderrSha256 then diffs.Add(CompatibilityCheckDifference.StderrSha256(expected.StderrSha256, actual.StderrSha256))
+    if expected.FailureKind <> actual.FailureKind then diffs.Add(CompatibilityCheckDifference.FailureKind(expected.FailureKind, actual.FailureKind))
+    List.ofSeq diffs
+
+/// Compare two complete compatibility documents field by field
+/// Returns a list of differences for validation reporting
+let compareCompatibilityProjection (expected: CanonicalEvidence) (actual: CanonicalEvidence) : CompatibilityDifference list =
+    let diffs = ResizeArray()
+    
+    // Top-level field comparisons
+    if expected.SchemaVersion <> actual.SchemaVersion then
+        diffs.Add(CompatibilityDifference.SchemaVersion(expected.SchemaVersion, actual.SchemaVersion))
+    if expected.ProviderName <> actual.ProviderName then
+        diffs.Add(CompatibilityDifference.ProviderName(expected.ProviderName, actual.ProviderName))
+    if expected.ProviderVersion <> actual.ProviderVersion then
+        diffs.Add(CompatibilityDifference.ProviderVersion(expected.ProviderVersion, actual.ProviderVersion))
+    if expected.TestedCommitOid <> actual.TestedCommitOid then
+        diffs.Add(CompatibilityDifference.TestedCommitOid(expected.TestedCommitOid, actual.TestedCommitOid))
+    if expected.TestedTreeOid <> actual.TestedTreeOid then
+        diffs.Add(CompatibilityDifference.TestedTreeOid(expected.TestedTreeOid, actual.TestedTreeOid))
+    if expected.ObjectFormat <> actual.ObjectFormat then
+        diffs.Add(CompatibilityDifference.ObjectFormat(expected.ObjectFormat, actual.ObjectFormat))
+    if expected.ActiveScopeActId <> actual.ActiveScopeActId then
+        diffs.Add(CompatibilityDifference.ActiveScopeActId(expected.ActiveScopeActId, actual.ActiveScopeActId))
+    if expected.ActiveScopePointerBlobOid <> actual.ActiveScopePointerBlobOid then
+        diffs.Add(CompatibilityDifference.ActiveScopePointerBlobOid(expected.ActiveScopePointerBlobOid, actual.ActiveScopePointerBlobOid))
+    if expected.ScopeDeclarationPath <> actual.ScopeDeclarationPath then
+        diffs.Add(CompatibilityDifference.ScopeDeclarationPath(expected.ScopeDeclarationPath, actual.ScopeDeclarationPath))
+    if expected.DeclarationBlobOid <> actual.DeclarationBlobOid then
+        diffs.Add(CompatibilityDifference.DeclarationBlobOid(expected.DeclarationBlobOid, actual.DeclarationBlobOid))
+    if expected.BaselineCommitOid <> actual.BaselineCommitOid then
+        diffs.Add(CompatibilityDifference.BaselineCommitOid(expected.BaselineCommitOid, actual.BaselineCommitOid))
+    if expected.OverallStatus <> actual.OverallStatus then
+        diffs.Add(CompatibilityDifference.OverallStatus(expected.OverallStatus, actual.OverallStatus))
+    if expected.SemanticSha256 <> actual.SemanticSha256 then
+        diffs.Add(CompatibilityDifference.SemanticSha256(expected.SemanticSha256, actual.SemanticSha256))
+    
+    // Check count comparison
+    if expected.Checks.Length <> actual.Checks.Length then
+        diffs.Add(CompatibilityDifference.CheckCount(expected.Checks.Length, actual.Checks.Length))
+    else
+        // Build ID sets for bijection check
+        let expectedIds = expected.Checks |> List.map (fun c -> c.Id) |> Set.ofList
+        let actualIds = actual.Checks |> List.map (fun c -> c.Id) |> Set.ofList
+        
+        // Find missing checks (in expected but not in actual)
+        let missingChecks = expectedIds - actualIds
+        for missingId in missingChecks do
+            diffs.Add(CompatibilityDifference.MissingCheck(missingId))
+        
+        // Find unknown checks (in actual but not in expected)
+        let unknownChecks = actualIds - expectedIds
+        for unknownId in unknownChecks do
+            diffs.Add(CompatibilityDifference.UnknownCheck(unknownId))
+        
+        // Compare matched checks by ID (bijection)
+        let expectedById = expected.Checks |> List.map (fun c -> c.Id, c) |> Map.ofList
+        let actualById = actual.Checks |> List.map (fun c -> c.Id, c) |> Map.ofList
+        
+        for expectedId in expectedIds do
+            match Map.tryFind expectedId actualById with
+            | None -> () // Already reported as missing/unknown
+            | Some actualCheck ->
+                match Map.tryFind expectedId expectedById with
+                | None -> ()
+                | Some expectedCheck ->
+                    let checkDiffs = compareCompatibilityCheck expectedCheck actualCheck
+                    for diff in checkDiffs do
+                        diffs.Add(CompatibilityDifference.CheckDifference(expectedId, diff))
+    
+    List.ofSeq diffs
+
 /// Enumerate the document's top-level JSON property names. This
 /// runs alongside the deserializer so the field allow-list and the
 /// forbidden set can both be enforced.

@@ -18,6 +18,7 @@ open Expecto
 
 open Circus.Tooling.CanonicalEvidence.Domain
 open Circus.Tooling.CanonicalEvidence.Serialization
+open Circus.Tooling.CanonicalEvidence.Validation
 open Circus.Tooling.CanonicalEvidence.Publication
 open Circus.Tooling.Tests.CanonicalEvidence.PublicationFixture
 
