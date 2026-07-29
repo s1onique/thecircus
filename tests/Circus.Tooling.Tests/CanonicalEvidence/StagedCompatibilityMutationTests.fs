@@ -219,12 +219,25 @@ let [<Tests>] rehashedCheckFailureKindTests =
             try
                 let fixture = PublicationFixture.createValidPublicationFixture ()
 
-                // Find a check with a FailureKind and change it
+                // Find a check with a FailureKind and bind its exact identity
+                let target =
+                    fixture.CompatibilityProjection.Checks
+                    |> List.tryFind (fun check -> check.FailureKind.IsSome)
+                    |> Option.defaultWith (fun () ->
+                        failtest "fixture must contain a check with FailureKind")
+
+                let originalFailureKind = target.FailureKind
+                let mutatedFailureKind = Some "assertion_failure"
+
+                Expect.notEqual mutatedFailureKind originalFailureKind
+                    "test must actually change FailureKind"
+
+                // Mutate the target check
                 let mutatedChecks =
                     fixture.CompatibilityProjection.Checks
                     |> List.map (fun check ->
-                        if check.FailureKind.IsSome then
-                            { check with FailureKind = Some "assertion_failure" }
+                        if check.Id = target.Id then
+                            { check with FailureKind = mutatedFailureKind }
                         else check)
 
                 let mutatedProjection =
@@ -244,12 +257,14 @@ let [<Tests>] rehashedCheckFailureKindTests =
                 Expect.isFalse outcome.Success "publication should fail after rehashed FailureKind mutation"
                 match outcome.Failure with
                 | Some (SnapshotStagedValidationFailed failures) ->
+                    // Must report FailureKind mismatch for the exact check ID
                     let hasCheckMismatch =
                         failures |> List.exists (function
                             | StagedSnapshotFailure.CompatibilityRecordMismatch (id, detail) ->
-                                detail.Contains("failure_kind")
+                                id = target.Id && detail.Contains("failure_kind")
                             | _ -> false)
-                    Expect.isTrue hasCheckMismatch "should detect check-level FailureKind mismatch"
+                    Expect.isTrue hasCheckMismatch
+                        (sprintf "should detect FailureKind mismatch for check '%s'" target.Id)
                 | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
             finally
                 cleanupDir workDir
