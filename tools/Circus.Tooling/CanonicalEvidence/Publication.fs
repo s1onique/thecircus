@@ -95,6 +95,8 @@ type StagedSnapshotFailure =
     | CompatibilityProjectionMismatch of detail: string
     | CompatibilityRecordMismatch of checkId: string * detail: string
     | MutationHookFailed of detail: string
+    | UnknownArtifactPath of path: string
+    | DuplicateArtifactPath of path: string
 
 let stagedSnapshotFailureToString (f: StagedSnapshotFailure) : string =
     match f with
@@ -121,6 +123,8 @@ let stagedSnapshotFailureToString (f: StagedSnapshotFailure) : string =
     | StagedSnapshotFailure.CompatibilityProjectionMismatch d -> sprintf "compatibility projection mismatch: %s" d
     | StagedSnapshotFailure.CompatibilityRecordMismatch (id, d) -> sprintf "compatibility record mismatch for %s: %s" id d
     | StagedSnapshotFailure.MutationHookFailed d -> sprintf "mutation hook failed: %s" d
+    | StagedSnapshotFailure.UnknownArtifactPath p -> sprintf "unknown artifact path in manifest: %s" p
+    | StagedSnapshotFailure.DuplicateArtifactPath p -> sprintf "duplicate artifact path in manifest: %s" p
 
 type PublicationFailure =
     | SnapshotStagingFailed of detail: string
@@ -663,7 +667,27 @@ let private parseAndValidateArtifactsJsonl
         | Result.Error errors ->
             failures.Add(StagedSnapshotFailure.ArtifactManifestParseFailed(errors))
         | Result.Ok entries ->
-            // Verify each required artifact
+            // Exact manifest inventory: only these three paths are permitted
+            let requiredPaths = ["records.jsonl"; "aggregate.json"; "canonical-evidence.json"] |> Set.ofList
+            let actualPaths = entries |> List.map (fun e -> e.Path) |> Set.ofList
+            
+            // Check for missing paths
+            let missingPaths = requiredPaths - actualPaths
+            for p in missingPaths do
+                failures.Add(StagedSnapshotFailure.MissingFile(p))
+            
+            // Check for unknown paths (extra entries not allowed)
+            let unknownPaths = actualPaths - requiredPaths
+            for p in unknownPaths do
+                failures.Add(StagedSnapshotFailure.UnknownArtifactPath(p))
+            
+            // Check for duplicate paths
+            let pathCounts = entries |> List.countBy (fun e -> e.Path)
+            for path, count in pathCounts do
+                if count > 1 then
+                    failures.Add(StagedSnapshotFailure.DuplicateArtifactPath(path))
+            
+            // Verify each required artifact's hash and length
             let recordsHash = sha256HexOfBytes recordsBytes
             let recordsLength = int64 recordsBytes.Length
             let aggregateHash = sha256HexOfBytes aggregateBytes
@@ -673,8 +697,7 @@ let private parseAndValidateArtifactsJsonl
             
             let checkArtifact expectedPath expectedHash expectedLength =
                 match List.tryFind (fun (e: SnapshotArtifactEntry) -> e.Path = expectedPath) entries with
-                | None ->
-                    failures.Add(StagedSnapshotFailure.MissingFile(expectedPath))
+                | None -> () // Already reported as missing above
                 | Some entry ->
                     if entry.Sha256 <> expectedHash then
                         failures.Add(StagedSnapshotFailure.ArtifactHashMismatch(expectedPath, expectedHash, entry.Sha256))
