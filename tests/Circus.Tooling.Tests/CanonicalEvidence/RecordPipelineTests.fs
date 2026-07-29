@@ -759,7 +759,7 @@ let strictParserTests =
             match parseArtifactManifestJsonlStrict manifest with
             | Ok _ -> failwith "Expected missing path to be detected"
             | Error errors ->
-                Expect.isTrue (errors |> List.exists (function | ArtifactManifestParseError.UnknownPath "records.jsonl" -> true | _ -> false)) "Expected UnknownPath error"
+                Expect.isTrue (errors |> List.exists (function | ArtifactManifestParseError.MissingRequiredPath "records.jsonl" -> true | _ -> false)) "Expected MissingRequiredPath error"
 
         testCase "manifest unknown path rejects" <| fun () ->
             let manifest = "{\"path\":\"records.jsonl\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":100}\n{\"path\":\"aggregate.json\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":200}\n{\"path\":\"canonical-evidence.json\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":300}\n{\"path\":\"extra-file.json\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"byte_length\":50}\n"
