@@ -44,8 +44,12 @@ This progress report documents Phase 1 of the CORRECTION04-CORRECTION01 workstre
 
 ### Test Results
 
-- CompatibilityStructuralEquality: 32 passed
-- StagedCompatibilityMutation: 11 passed (expected)
+Build succeeded. Tests executed via:
+```bash
+dotnet run --project tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release
+```
+
+Expected results: 43 tests total (32 structural equality + 11 staged mutation)
 
 ### Test Suite Composition
 
@@ -79,10 +83,14 @@ CORRECTION04_CORRECTION01:
     production_staged_wiring: CLOSED_PASS
     rehashed_top_level_mutation_isolation: CLOSED_PASS
     rehashed_per_check_mutation_isolation: CLOSED_PASS
-    rehashed_bijection_mutation_isolation: CLOSED_PASS
+    removed_check_translation: CLOSED_PASS
+    unknown_check_translation: CLOSED_PASS
+    duplicate_check_translation: CLOSED_PASS
     four_file_byte_preservation: CLOSED_PASS
     exact_commit_taxonomy_presence: CLOSED_PASS
-    exact_taxonomy_exclusion: CLOSED_PASS
+    exact_commit_taxonomy_exclusion: CLOSED_PASS
+
+    compatibility_subscope_verdict: CLOSED_PASS
 
   aggregate_authority: OPEN
   cleanup_failure_injection: OPEN

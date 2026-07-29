@@ -256,7 +256,7 @@ let [<Tests>] rehashedCheckFailureKindTests =
     ]
 
 // -----------------------------------------------------------------------------
-// BIOJECTION MUTATION TESTS (rehashed)
+// BIJECTION MUTATION TESTS (rehashed)
 // -----------------------------------------------------------------------------
 
 /// Test: Remove a check, rehash - requires CheckCount + MissingCheck
@@ -268,10 +268,11 @@ let [<Tests>] rehashedRemovedCheckTests =
                 let fixture = PublicationFixture.createValidPublicationFixture ()
 
                 // Remove first check
-                let mutatedChecks =
-                    match fixture.CompatibilityProjection.Checks with
-                    | [] -> []
-                    | _ :: rest -> rest
+                if fixture.CompatibilityProjection.Checks.IsEmpty then
+                    failtest "fixture must contain a check to remove"
+
+                let removedCheckId = fixture.CompatibilityProjection.Checks.Head.Id
+                let mutatedChecks = fixture.CompatibilityProjection.Checks.Tail
 
                 let mutatedProjection =
                     { fixture.CompatibilityProjection with Checks = mutatedChecks }
@@ -298,13 +299,14 @@ let [<Tests>] rehashedRemovedCheckTests =
                             | _ -> false)
                     Expect.isTrue hasCountMismatch "should detect check count mismatch"
 
-                    // Must have missing check report
+                    // Must have missing check report for the exact removed check ID
                     let hasMissingCheck =
                         failures |> List.exists (function
                             | StagedSnapshotFailure.CompatibilityRecordMismatch (id, detail) ->
-                                id <> "(all)" && detail.Contains("missing")
+                                id = removedCheckId && detail.Contains("missing")
                             | _ -> false)
-                    Expect.isTrue hasMissingCheck "should detect missing check"
+                    Expect.isTrue hasMissingCheck
+                        (sprintf "should detect missing check '%s'" removedCheckId)
                 | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
             finally
                 cleanupDir workDir
@@ -351,13 +353,13 @@ let [<Tests>] rehashedUnknownCheckTests =
                 Expect.isFalse outcome.Success "publication should fail after adding unknown check"
                 match outcome.Failure with
                 | Some (SnapshotStagedValidationFailed failures) ->
-                    // Must have unknown check report
+                    // Must have unknown check report for the exact extra check ID
                     let hasUnknownCheck =
                         failures |> List.exists (function
                             | StagedSnapshotFailure.CompatibilityRecordMismatch (id, detail) ->
-                                id <> "(all)" && detail.Contains("unknown")
+                                id = "extra-evidence-999" && detail.Contains("unknown")
                             | _ -> false)
-                    Expect.isTrue hasUnknownCheck "should detect unknown check"
+                    Expect.isTrue hasUnknownCheck "should detect unknown check 'extra-evidence-999'"
                 | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
             finally
                 cleanupDir workDir
@@ -373,41 +375,47 @@ let [<Tests>] rehashedDuplicateCheckIdTests =
 
                 // Duplicate the first check ID
                 let originalChecks = fixture.CompatibilityProjection.Checks
-                match originalChecks with
-                | [] -> () // No checks to duplicate
-                | first :: rest ->
-                    // Create duplicate with same Id
-                    let duplicateCheck = {
-                        first with
-                            Id = first.Id // Same ID = duplicate
-                    }
-                    let mutatedChecks = first :: duplicateCheck :: rest
+                if originalChecks.IsEmpty then
+                    failtest "fixture must contain a check to duplicate"
 
-                    let mutatedProjection =
-                        { fixture.CompatibilityProjection with Checks = mutatedChecks }
-                        |> withSemanticHash
+                let first = originalChecks.Head
+                let rest = originalChecks.Tail
 
-                    let mutatedJson = renderWireJson mutatedProjection
+                // Create duplicate with same Id
+                let duplicateCheck = {
+                    first with
+                        Id = first.Id // Same ID = duplicate
+                }
+                let mutatedChecks = first :: duplicateCheck :: rest
 
-                    let mutation: string -> Result<unit, string> =
-                        fun stagingDir ->
-                            let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
-                            writeCanonicalBytes compatPath mutatedJson
-                            Ok()
+                let mutatedProjection =
+                    { fixture.CompatibilityProjection with Checks = mutatedChecks }
+                    |> withSemanticHash
 
-                    let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
+                let mutatedJson = renderWireJson mutatedProjection
 
-                    Expect.isFalse outcome.Success "publication should fail after duplicating check ID"
-                    match outcome.Failure with
-                    | Some (SnapshotStagedValidationFailed failures) ->
-                        // Must have duplicate check ID report
-                        let hasDuplicateCheck =
-                            failures |> List.exists (function
-                                | StagedSnapshotFailure.CompatibilityRecordMismatch (id, detail) ->
-                                    detail.Contains("duplicate") || detail.Contains("mismatch")
-                                | _ -> false)
-                        Expect.isTrue hasDuplicateCheck "should detect duplicate check ID"
-                    | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
+                let mutation: string -> Result<unit, string> =
+                    fun stagingDir ->
+                        let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
+                        writeCanonicalBytes compatPath mutatedJson
+                        Ok()
+
+                let outcome = stageAndPublishSnapshot workDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection (Some mutation)
+
+                Expect.isFalse outcome.Success "publication should fail after duplicating check ID"
+                match outcome.Failure with
+                | Some (SnapshotStagedValidationFailed failures) ->
+                    // Must have DuplicateActualCheckId for the duplicated check
+                    let duplicateFailures =
+                        failures
+                        |> List.choose (function
+                            | StagedSnapshotFailure.CompatibilityRecordMismatch(id, detail)
+                                when id = first.Id && detail.Contains("duplicate") ->
+                                Some detail
+                            | _ -> None)
+                    Expect.hasLength duplicateFailures 1
+                        (sprintf "must report DuplicateActualCheckId for check '%s'" first.Id)
+                | _ -> failwithf "expected SnapshotStagedValidationFailed, got %A" outcome.Failure
             finally
                 cleanupDir workDir
     ]
