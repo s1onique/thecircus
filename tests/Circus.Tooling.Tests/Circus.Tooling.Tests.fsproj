@@ -70,6 +70,8 @@
     <Compile Include="CanonicalEvidence/PerSuiteEvidenceTests.fs" />
     <Compile Include="CanonicalEvidence/ClosureEvidenceTests.fs" />
     <Compile Include="CanonicalEvidence/RecordPipelineTests.fs" />
+    <Compile Include="CanonicalEvidence/PublicationFixture.fs" />
+    <Compile Include="CanonicalEvidence/PublicationTests.fs" />
 
     <!-- Dedicated executable authority suites for CORRECTION 03. -->
     <Compile Include="ScopeAuthorityTests.fs" />
