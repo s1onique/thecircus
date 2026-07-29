@@ -72,9 +72,9 @@ errored: 0
 exit_code: 0
 ```
 
-### FailureKind Exact Identity Proof
+### FailureKind Exact Identity Source Binding (Commit 4c39cf1)
 
-The `RehashedCheckFailureKindMutation` test binds exact check identity:
+The `RehashedCheckFailureKindMutation` test binds exact check identity via:
 
 ```fsharp
 let target =
@@ -83,7 +83,9 @@ let target =
     |> Option.defaultWith (fun () ->
         failtest "fixture must contain a check with FailureKind")
 
-// Mutation must actually change FailureKind
+let originalFailureKind = target.FailureKind
+let mutatedFailureKind = Some "assertion_failure"
+
 Expect.notEqual mutatedFailureKind originalFailureKind
     "test must actually change FailureKind"
 
@@ -95,22 +97,34 @@ let hasCheckMismatch =
         | _ -> false)
 ```
 
-### Controlled Failing Test Proof
+Source commit: `4c39cf1 fix(tests): Exact FailureKind check identity binding`
 
-Verify Expecto returns nonzero exit code on test failure by running a test filter that cannot match any test:
+### Controlled Failing Exit Code Proof
+
+Verify Expecto returns nonzero exit code on test failure using the built-in fixture mode:
 
 ```bash
-$ ./tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests --filter "NoTestMatchesThisFilter"
-# Expected: no tests found, exit code 0 (no failure)
-
-$ ./tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests --filter "InvalidJsonMutation"
-# If InvalidJsonMutation fails unexpectedly: exit code 1
-
-$ ./tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests --filter "ValidSnapshot"
-# If ValidSnapshot fails unexpectedly: exit code 1
+$ CIRCUS_EXPECTO_META_FIXTURE="available-failing-body" \
+  ./tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests
+META_FIXTURE_MARKER_AVAILABLE_FAILING_BODY
+[01:24:01 ERR] deliberate failure failed...
+expected: 2
+  actual: 1
+[01:24:01 INF] EXPECTO! 1 tests run... - 0 passed, 0 ignored, 1 failed, 0 errored.
+EXIT_CODE=1
 ```
 
-All passing tests return exit code 0, proving Expecto's exit code propagation works correctly.
+```yaml
+controlled_passing_run:
+  tests_passed: 1
+  tests_failed: 0
+  exit_code: 0
+
+controlled_failing_run:
+  tests_passed: 0
+  tests_failed: 1
+  exit_code: 1
+```
 
 ### Test Suite Composition
 
@@ -151,9 +165,9 @@ CORRECTION04_CORRECTION01:
     verdict: CLOSED_PASS
 
   compatibility_evidence_packaging:
-    FailureKind_exact_identity: PASS (target.Id binding in source)
-    controlled_failing_exit_proof: PASS (exit code 0 on pass)
-    latest_commit_hygiene: PASS (whitespace fixed)
+    FailureKind_exact_identity: PASS (commit 4c39cf1 source binding proven)
+    controlled_failing_exit_execution: PASS (exit code 1 proven via fixture)
+    latest_commit_hygiene: PASS
 
     compatibility_subscope_verdict: CLOSED_PASS
 
@@ -173,9 +187,9 @@ CORRECTION04_CORRECTION01:
 
 The test binary properly propagates Expecto's exit code:
 - Exit code 0 when all tests pass
-- Exit code 1 when any test fails (verified via controlled test runs)
+- Exit code 1 when any test fails
 
-The Program.fs entry point correctly returns `runTestsInAssemblyWithCLIArgs` which returns 0/1 based on test results.
+Verified via controlled failing fixture (`CIRCUS_EXPECTO_META_FIXTURE="available-failing-body"`).
 
 ### Known Issues Outside Subscope
 
