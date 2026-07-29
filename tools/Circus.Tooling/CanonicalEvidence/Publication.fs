@@ -747,7 +747,8 @@ let private validateCompatibilityEvidence
                     failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
                         sprintf "provider_version mismatch: expected=%s actual=%s" expected actual))
                 | CompatibilityDifference.TestedCommitOid (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual))
+                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                        sprintf "tested_commit_oid mismatch: expected=%s actual=%s" expected actual))
                 | CompatibilityDifference.TestedTreeOid (expected, actual) ->
                     failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
                         sprintf "tested_tree_oid mismatch: expected=%s actual=%s" expected actual))
