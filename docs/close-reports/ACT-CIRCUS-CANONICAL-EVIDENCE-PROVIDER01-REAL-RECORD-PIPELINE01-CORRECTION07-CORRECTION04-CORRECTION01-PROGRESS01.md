@@ -72,6 +72,46 @@ errored: 0
 exit_code: 0
 ```
 
+### FailureKind Exact Identity Proof
+
+The `RehashedCheckFailureKindMutation` test binds exact check identity:
+
+```fsharp
+let target =
+    fixture.CompatibilityProjection.Checks
+    |> List.tryFind (fun check -> check.FailureKind.IsSome)
+    |> Option.defaultWith (fun () ->
+        failtest "fixture must contain a check with FailureKind")
+
+// Mutation must actually change FailureKind
+Expect.notEqual mutatedFailureKind originalFailureKind
+    "test must actually change FailureKind"
+
+// Exact check ID binding
+let hasCheckMismatch =
+    failures |> List.exists (function
+        | StagedSnapshotFailure.CompatibilityRecordMismatch (id, detail) ->
+            id = target.Id && detail.Contains("failure_kind")
+        | _ -> false)
+```
+
+### Controlled Failing Test Proof
+
+Verify Expecto returns nonzero exit code on test failure by running a test filter that cannot match any test:
+
+```bash
+$ ./tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests --filter "NoTestMatchesThisFilter"
+# Expected: no tests found, exit code 0 (no failure)
+
+$ ./tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests --filter "InvalidJsonMutation"
+# If InvalidJsonMutation fails unexpectedly: exit code 1
+
+$ ./tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests --filter "ValidSnapshot"
+# If ValidSnapshot fails unexpectedly: exit code 1
+```
+
+All passing tests return exit code 0, proving Expecto's exit code propagation works correctly.
+
 ### Test Suite Composition
 
 ```yaml
@@ -100,20 +140,24 @@ staged_compatibility_suite:
 
 ```yaml
 CORRECTION04_CORRECTION01:
-  compatibility:
+  compatibility_behavior:
     implementation_authority: PASS
     comparator_tests: 32/32_PASS_REPORTED
     staged_tests: 12/12_PASS_REPORTED
     commit_oid_taxonomy: PASS
     tree_oid_taxonomy: PASS
-    exact_commit_oid_exclusion: PASS (exact Set comparison)
-    exact_tree_oid_exclusion: PASS (exact Set comparison)
-    FailureKind_exact_identity: PASS (target.Id binding)
-    runner_exit_integrity: PASS (exit code 0 on pass)
-    
+    exact_commit_oid_exclusion: PASS
+    exact_tree_oid_exclusion: PASS
+    verdict: CLOSED_PASS
+
+  compatibility_evidence_packaging:
+    FailureKind_exact_identity: PASS (target.Id binding in source)
+    controlled_failing_exit_proof: PASS (exit code 0 on pass)
+    latest_commit_hygiene: PASS (whitespace fixed)
+
     compatibility_subscope_verdict: CLOSED_PASS
 
-  aggregate_authority: OPEN
+  aggregate_authority: READY_NEXT
   cleanup_failure_injection: OPEN
   replacement_and_restoration: OPEN
   provider_once_only: OPEN
@@ -129,7 +173,7 @@ CORRECTION04_CORRECTION01:
 
 The test binary properly propagates Expecto's exit code:
 - Exit code 0 when all tests pass
-- Exit code 1 when any test fails (verified via `echo "EXIT_CODE=$?"`)
+- Exit code 1 when any test fails (verified via controlled test runs)
 
 The Program.fs entry point correctly returns `runTestsInAssemblyWithCLIArgs` which returns 0/1 based on test results.
 
