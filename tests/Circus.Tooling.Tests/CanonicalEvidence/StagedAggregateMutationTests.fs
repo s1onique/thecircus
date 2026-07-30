@@ -1012,7 +1012,7 @@ let derivedFieldMutationTests =
                 // This keeps the list sorted: "eeee...eeee" < "eeee...eeef" < "ffff...ffff"
                 // If there's only one record, we need at least 2 to test this mutation
                 // We replace the first ID with a new valid one
-                let mutatedRecordIds = 
+                let mutatedRecordIds =
                     match fixture.Aggregate.RecordIds with
                     | [] -> [String.replicate 64 "c"]
                     | [single] -> [String.replicate 64 "a"; String.replicate 64 "c"]
@@ -1663,7 +1663,7 @@ let schemaVersionMutationTests =
                     let liveSnapshotAfter = readSnapshotFiles tempDir
                     Expect.isTrue (verifyFilesPreserved liveSnapshotBefore liveSnapshotAfter)
                         "all four live files should be preserved after rejection"
-                | Some other -> 
+                | Some other ->
                     failwithf "Expected SnapshotStagedValidationFailed, got %A" other
                 | None ->
                     failwith "Expected failure but got Success"
