@@ -1367,20 +1367,20 @@ let malformedRecordIsolationTests =
                     Expect.isTrue hasRecordParseFailure
                         (sprintf "RecordParseFailure should be present. Failures: %A" failures)
 
-                    // Should NOT have AggregateFieldMismatch for records-derived fields
-                    // (the aggregate is NOT recomputed from empty records)
-                    let hasRecordsTotalMismatch = failures |> List.exists (function
-                        | StagedSnapshotFailure.AggregateFieldMismatch(AggregateDifference.RecordsTotal _) -> true
-                        | _ -> false)
-                    Expect.isFalse hasRecordsTotalMismatch
-                        "Should NOT have RecordsTotal field mismatch (aggregate not recomputed from empty records)"
+                    // Should NOT have ANY AggregateFieldMismatch (parse failure means aggregate not recomputed)
+                    Expect.isTrue (noAggregateFieldMismatch failures)
+                        (sprintf "Should NOT have any AggregateFieldMismatch for malformed records. Failures: %A" failures)
 
                     // Should NOT have AggregateSemanticHashMismatch
                     let hasHashMismatch = failures |> List.exists (function
                         | StagedSnapshotFailure.AggregateSemanticHashMismatch _ -> true
                         | _ -> false)
                     Expect.isFalse hasHashMismatch
-                        "Should NOT have AggregateSemanticHashMismatch"
+                        "Should NOT have AggregateSemanticHashMismatch for malformed records"
+
+                    // Should NOT have RecordValidationFailed
+                    Expect.isTrue (noRecordValidationFailure failures)
+                        "Should NOT have RecordValidationFailed for malformed records"
 
                     // Previous snapshot should be preserved
                     let liveSnapshotAfter = readSnapshotFiles tempDir
@@ -1446,6 +1446,10 @@ let malformedRecordIsolationTests =
                         | _ -> false)
                     Expect.isFalse hasHashMismatch
                         "Should NOT have AggregateSemanticHashMismatch for malformed records"
+
+                    // Should NOT have RecordValidationFailed
+                    Expect.isTrue (noRecordValidationFailure failures)
+                        "Should NOT have RecordValidationFailed for malformed records"
 
                     let liveSnapshotAfter = readSnapshotFiles tempDir
                     Expect.isTrue (verifyFilesPreserved liveSnapshotBefore liveSnapshotAfter)
