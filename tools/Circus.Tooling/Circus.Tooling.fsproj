@@ -107,6 +107,13 @@
     <Compile Include="FSharpDiagnostics\RepairEpisodes\CaptureBinding.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Engine.fs" />
     <Compile Include="FSharpDiagnostics\RepairEpisodes\Cli.fs" />
+    <Compile Include="FSharpDiagnostics\RuleCandidates\Domain.fs" />
+    <Compile Include="FSharpDiagnostics\RuleCandidates\Paths.fs" />
+    <Compile Include="FSharpDiagnostics\RuleCandidates\Classification.fs" />
+    <Compile Include="FSharpDiagnostics\RuleCandidates\Selection.fs" />
+    <Compile Include="FSharpDiagnostics\RuleCandidates\Serialization.fs" />
+    <Compile Include="FSharpDiagnostics\RuleCandidates\Engine.fs" />
+    <Compile Include="FSharpDiagnostics\RuleCandidates\Cli.fs" />
     <Compile Include="FSharpDiagnostics\Cli.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

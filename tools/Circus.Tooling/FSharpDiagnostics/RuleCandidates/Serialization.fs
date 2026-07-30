@@ -178,12 +178,16 @@ let computeCandidateId
     (afterCommitOid: string)
     (afterTreeOid: string)
     : string =
-    let sb = StringBuilder()
+    let buffer = ResizeArray<byte>()
 
     let add (x: string) =
         let bytes = Encoding.UTF8.GetBytes x
-        sb.Append(BitConverter.GetBytes(bytes.Length)) |> ignore
-        sb.Append(bytes) |> ignore
+        // Big-endian length prefix
+        buffer.Add(byte (bytes.Length >>> 24 &&& 0xFF))
+        buffer.Add(byte (bytes.Length >>> 16 &&& 0xFF))
+        buffer.Add(byte (bytes.Length >>> 8 &&& 0xFF))
+        buffer.Add(byte (bytes.Length &&& 0xFF))
+        buffer.AddRange(bytes)
 
     add schemaVersion
     add (ruleCandidateKindToken kind)
@@ -225,7 +229,7 @@ let computeCandidateId
     add beforeTreeOid
     add afterCommitOid
     add afterTreeOid
-    sha256OfBytes (sb.ToString() |> Encoding.UTF8.GetBytes)
+    sha256OfBytes (buffer.ToArray())
 
 let private utf8NoBom = UTF8Encoding(false)
 

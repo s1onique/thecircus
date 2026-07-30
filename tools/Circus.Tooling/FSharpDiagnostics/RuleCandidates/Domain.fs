@@ -124,8 +124,25 @@ type TransitionGroupFacts =
       TransitionIds: string list }
 
 let compareTransitionGroupFacts (a: TransitionGroupFacts) (b: TransitionGroupFacts) : int =
+    // 1. Transition count descending
     match compare b.TransitionCount a.TransitionCount with
-    | 0 -> compare a.Path b.Path
+    | 0 ->
+        // 2. Distinct code count descending
+        match compare b.DiagnosticCodes.Length a.DiagnosticCodes.Length with
+        | 0 ->
+            // 3. Earliest line ascending (None = infinity)
+            let cmpLine x y =
+                match x, y with
+                | None, None -> 0
+                | None, Some _ -> 1
+                | Some _, None -> -1
+                | Some xl, Some yl -> compare xl yl
+            match cmpLine a.EarliestLine b.EarliestLine with
+            | 0 ->
+                // 4. Path ordinal ascending
+                compare a.Path b.Path
+            | x -> x
+        | x -> x
     | x -> x
 
 // -----------------------------------------------------------------------------
@@ -152,7 +169,16 @@ let deriveParserCascadeProse (episodeKey: string) (afterCommitOid: string) (gf: 
 // Parser family classification
 // -----------------------------------------------------------------------------
 
-let isParserDiagnostic (code: string) : bool = code = "FS0010" || code = "FS3118"
+/// Closed set of parser-family diagnostic codes per ACT specification.
+let parserDiagnosticCodes =
+    Set.ofList [
+        "FS0010"
+        "FS0603"
+        "FS1156"
+        "FS3118"
+    ]
+
+let isParserDiagnostic (code: string) : bool = Set.contains code parserDiagnosticCodes
 
 let isNonParserDiagnostic (code: string) : bool =
     code.StartsWith("FS") && not (isParserDiagnostic code)

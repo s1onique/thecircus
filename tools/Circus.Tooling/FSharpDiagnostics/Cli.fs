@@ -33,6 +33,12 @@ type Command =
     | RepairEpisodesVerify
     | RepairEpisodesShow of episodeId: string
     | RepairEpisodesHelp
+    | RuleCandidatesRedirect
+    | RuleCandidatesInventory
+    | RuleCandidatesRegenerate
+    | RuleCandidatesVerify
+    | RuleCandidatesShow of candidateId: string
+    | RuleCandidatesHelp
     | HelpCmd
 
 let helpText () : string =
@@ -78,9 +84,15 @@ let parse (argv: string list) : Result<Command, string> =
     | [ "repair-episodes"; "regenerate" ] -> Ok RepairEpisodesRegenerate
     | [ "repair-episodes"; "verify" ] -> Ok RepairEpisodesVerify
     | [ "repair-episodes"; "show"; id ] -> Ok(RepairEpisodesShow id)
+    | [ "rule-candidates" ] -> Ok RuleCandidatesHelp
+    | [ "rule-candidates"; "help" ] -> Ok RuleCandidatesHelp
+    | [ "rule-candidates"; "inventory" ] -> Ok RuleCandidatesInventory
+    | [ "rule-candidates"; "regenerate" ] -> Ok RuleCandidatesRegenerate
+    | [ "rule-candidates"; "verify" ] -> Ok RuleCandidatesVerify
+    | [ "rule-candidates"; "show"; id ] -> Ok(RuleCandidatesShow id)
     | _ ->
         Result.Error
-            "usage: circus-tooling fsharp-diagnostics {inventory|extract-binlog|extract-legacy-text|regenerate|verify|repair-episodes {inventory|regenerate|verify|show <id>}|help}"
+            "usage: circus-tooling fsharp-diagnostics {inventory|extract-binlog|extract-legacy-text|regenerate|verify|repair-episodes {inventory|regenerate|verify|show <id>}|rule-candidates {inventory|regenerate|verify|show <id>}|help}"
 
 /// Render inventory JSON.
 let private renderInventoryJson (repoRoot: string) : string =
@@ -373,6 +385,17 @@ let run (argv: string list) : int =
         Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Cli.run [ "show"; id ]
     | Ok RepairEpisodesHelp ->
         Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Cli.run [ "help" ]
+    | Ok RuleCandidatesRedirect
+    | Ok RuleCandidatesInventory ->
+        Circus.Tooling.FSharpDiagnostics.RuleCandidates.Cli.run [ "inventory" ]
+    | Ok RuleCandidatesRegenerate ->
+        Circus.Tooling.FSharpDiagnostics.RuleCandidates.Cli.run [ "regenerate" ]
+    | Ok RuleCandidatesVerify ->
+        Circus.Tooling.FSharpDiagnostics.RuleCandidates.Cli.run [ "verify" ]
+    | Ok(RuleCandidatesShow id) ->
+        Circus.Tooling.FSharpDiagnostics.RuleCandidates.Cli.run [ "show"; id ]
+    | Ok RuleCandidatesHelp ->
+        Circus.Tooling.FSharpDiagnostics.RuleCandidates.Cli.run [ "help" ]
     | Result.Error msg ->
         stderr.WriteLine(sprintf "error: %s" msg)
         stderr.WriteLine(helpText())
