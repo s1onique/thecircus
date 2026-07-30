@@ -96,6 +96,33 @@ let publishCandidates (repoRoot: string) (result: ExtractionResult) : bool =
         false
 
 // -----------------------------------------------------------------------------
+// Duplicate detection helper
+// -----------------------------------------------------------------------------
+
+/// Fails if duplicate identities are found, otherwise returns map.
+let private buildUniqueMap
+    (identity: 'a -> string)
+    (items: 'a list)
+    : Result<Map<string, 'a>, EngineError> =
+    let duplicates =
+        items
+        |> List.countBy identity
+        |> List.filter (fun (_, count) -> count > 1)
+
+    if not duplicates.IsEmpty then
+        let dupList = duplicates |> List.map fst |> String.concat ", "
+        Error(
+            EngineError.Internal(
+                sprintf "Duplicate identities found: %s" dupList
+            )
+        )
+    else
+        items
+        |> List.map (fun item -> identity item, item)
+        |> Map.ofList
+        |> Ok
+
+// -----------------------------------------------------------------------------
 // Single canonical input snapshot from episode engine
 // -----------------------------------------------------------------------------
 
@@ -105,7 +132,7 @@ type RuleCandidateInputs =
     { Episodes: RepairEpisode list
       Transitions: DiagnosticTransition list
       ChangeSets: Map<string, GitChangeSet>
-      VerificationEvidence: Map<string, VerificationEvidence> }
+      VerificationEvidence: Map<string, LocatedVerificationEvidence> }
 
 let private mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError =
     match failure with
@@ -122,33 +149,26 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
     match runEpisodeEngine repoRoot defaultEngineOptions with
     | EpisodeEngineExecution.Failed failure -> Error(mapEpisodeEngineFailure failure)
     | EpisodeEngineExecution.Completed result ->
-        Ok
-            { Episodes = result.RepairEpisodes
-              Transitions = result.Transitions
-              ChangeSets =
-                  result.ChangeSets
-                  |> List.map (fun cs -> cs.ChangeSetId, cs)
-                  |> Map.ofList
-              VerificationEvidence =
-                  result.Verification
-                  |> List.map (fun lv -> lv.Evidence.EvidenceId, lv.Evidence)
-                  |> Map.ofList }
+        // Build maps with duplicate detection
+        match buildUniqueMap (fun (cs: GitChangeSet) -> cs.ChangeSetId) result.ChangeSets with
+        | Error e -> Error e
+        | Ok cssMap ->
+            match
+                buildUniqueMap
+                    (fun (lv: LocatedVerificationEvidence) -> lv.Evidence.EvidenceId)
+                    result.Verification
+            with
+            | Error e -> Error e
+            | Ok evidMap ->
+                Ok
+                    { Episodes = result.RepairEpisodes
+                      Transitions = result.Transitions
+                      ChangeSets = cssMap
+                      VerificationEvidence = evidMap }
 
-// Backward-compatible individual loaders that share one engine execution
+// Single entry point - no backward-compatible wrappers to avoid multiple engine calls
 let loadAllInputs (repoRoot: string) : Result<RuleCandidateInputs, EngineError> =
     loadFromEpisodeEngine repoRoot
-
-let loadRepairEpisodes (repoRoot: string) : Result<RepairEpisode list, EngineError> =
-    loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.Episodes)
-
-let loadTransitions (repoRoot: string) : Result<DiagnosticTransition list, EngineError> =
-    loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.Transitions)
-
-let loadChangeSets (repoRoot: string) : Result<Map<string, GitChangeSet>, EngineError> =
-    loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.ChangeSets)
-
-let loadVerificationEvidence (repoRoot: string) : Result<Map<string, VerificationEvidence>, EngineError> =
-    loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.VerificationEvidence)
 
 // -----------------------------------------------------------------------------
 // Candidate building
@@ -220,7 +240,10 @@ let buildCandidate (ep: RepairEpisode) (cs: GitChangeSet) (gf: TransitionGroupFa
 
 /// Validates that all referenced verification evidence records exist and are valid.
 /// Returns None if any binding fails, Some with error message otherwise.
-let validateVerificationBinding (ep: RepairEpisode) (verificationMap: Map<string, VerificationEvidence>) : string option =
+let validateVerificationBinding
+    (ep: RepairEpisode)
+    (verificationMap: Map<string, LocatedVerificationEvidence>)
+    : string option =
     let evidId = ep.VerificationEvidenceIds
 
     if evidId.IsEmpty then
@@ -233,7 +256,8 @@ let validateVerificationBinding (ep: RepairEpisode) (verificationMap: Map<string
             match Map.tryFind evid verificationMap with
             | None ->
                 firstError <- Some (sprintf "Verification evidence %s not found" evid)
-            | Some record ->
+            | Some locatedRecord ->
+                let record = locatedRecord.Evidence
                 // Verify episode_id matches
                 if record.EpisodeId <> ep.EpisodeId then
                     firstError <-
@@ -289,17 +313,40 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
 
                     let et = inputs.Transitions |> List.filter (fun t -> t.EpisodeId = ep.EpisodeId)
 
-                    match
-                        selectCandidateGroup ep (Map.find ep.ChangeSetId inputs.ChangeSets) et
-                    with
-                    | Some gf ->
-                        cands.Add(buildCandidate ep (Map.find ep.ChangeSetId inputs.ChangeSets) gf)
-                        epWC <- epWC + 1
-                    | None -> ()
+                    // Use tryFind to avoid throwing on missing change set
+                    match Map.tryFind ep.ChangeSetId inputs.ChangeSets with
+                    | None ->
+                        errs.Add(
+                            EngineError.CandidateGenerationFailed(
+                                sprintf "change set %s not found" ep.ChangeSetId
+                            )
+                        )
+                    | Some changeSet ->
+                        match selectCandidateGroup ep changeSet et with
+                        | Some gf ->
+                            cands.Add(buildCandidate ep changeSet gf)
+                            epWC <- epWC + 1
+                        | None -> ()
 
-        // Add terminal error if no eligible episodes
-        if elEp = 0 && errs.Count = 0 then
-            errs.Add EngineError.NoEligibleEpisodes
+        // Enforce exactly one candidate contract
+        if errs.Count = 0 then
+            match elEp, cands.Count with
+            | 1, 1 -> () // Success
+            | 0, _ -> errs.Add EngineError.NoEligibleEpisodes
+            | _, 0 ->
+                errs.Add(
+                    EngineError.CandidateGenerationFailed(
+                        "eligible episode produced no rule candidate"
+                    )
+                )
+            | _, count ->
+                errs.Add(
+                    EngineError.CandidateGenerationFailed(
+                        sprintf
+                            "production candidate count must be exactly one; actual=%d"
+                            count
+                    )
+                )
 
         { Candidates = cands |> Seq.toList
           EligibleEpisodes = elEp
