@@ -97,10 +97,31 @@ let private publishAndCaptureSnapshot
 let private assertCleanupFailure
     (expectedDetail: string)
     (cleanupPaths: ResizeArray<string>)
+    (outputRoot: string)
     outcome =
 
     Expect.hasLength cleanupPaths 1
         "cleanup must be called exactly once"
+
+    let observedPath = cleanupPaths.[0]
+
+    // P0: Prove staging-path geometry
+    // The cleanup path must be a child of the requested output root
+    Expect.equal
+        (Path.GetDirectoryName observedPath)
+        outputRoot
+        "cleanup must target a child of the requested output root"
+
+    // The cleanup path must be the generated staging directory
+    Expect.isTrue
+        (
+            Path.GetFileName(observedPath)
+                .StartsWith(
+                    ".staging.",
+                    StringComparison.Ordinal
+                )
+        )
+        "cleanup must target the generated staging directory"
 
     match outcome.CleanupFailure with
     | Some failure ->
@@ -111,7 +132,7 @@ let private assertCleanupFailure
 
         Expect.equal
             failure.Path
-            cleanupPaths.[0]
+            observedPath
             "cleanup failure must use the actual staging path"
 
         Expect.equal
@@ -374,7 +395,7 @@ let testC_validationRejectionAndCleanupFailure =
             | other -> failwithf "Expected SnapshotStagedValidationFailed, got %A" other
 
             // Prove: cleanup failure is present with typed payload
-            assertCleanupFailure "injected cleanup failure" cleanupPaths outcome
+            assertCleanupFailure "injected cleanup failure" cleanupPaths tempDir outcome
 
             // Prove: replacement phase count is zero
             Expect.equal outcome.ReplacementPhaseInvocationCount 0
@@ -462,7 +483,7 @@ let testD_mutationHookRejectionAndCleanupFailure =
                 failtestf "expected SnapshotMutationHookFailed, got %A" other
 
             // Prove: cleanup failure is present with typed payload
-            assertCleanupFailure "injected cleanup failure" cleanupPaths outcome
+            assertCleanupFailure "injected cleanup failure" cleanupPaths tempDir outcome
 
             // Prove: replacement phase count is zero
             Expect.equal outcome.ReplacementPhaseInvocationCount 0
