@@ -131,9 +131,11 @@ let private hasBothCanonicalAndAlias
     hasCanonical && hasAlias
 
 /// Type-aware string field lookup with alias support.
-/// Falls back to aliasName if primary name is not found.
-/// FAILS CLOSED: If both canonical and alias fields are present with different values,
-/// returns ConflictingSemanticFields error.
+/// FAILS CLOSED: If both canonical and alias fields are present, returns an error.
+/// - Both present with different values → ConflictingSemanticFields
+/// - Both present with same value → DuplicateSemanticField
+/// - Both present with one wrong type → WrongFieldType on the wrong-typed field
+/// - Only one present → uses that value
 let private lookupFieldStringWithAlias
     (fields: (string * JsonValue) list)
     (primaryName: string)
@@ -154,7 +156,22 @@ let private lookupFieldStringWithAlias
         Result.Error(
             VerificationEvidenceParseError.DuplicateSemanticField(
                 source, lineNumber, primaryName, aliasName))
-    | Present _, _ ->
+    | Present _, WrongType(e, a) ->
+        // Both present but alias has wrong type - reject
+        Result.Error(
+            VerificationEvidenceParseError.WrongFieldType(
+                source, lineNumber, aliasName, e, a))
+    | WrongType(e, a), Present _ ->
+        // Both present but canonical has wrong type - reject
+        Result.Error(
+            VerificationEvidenceParseError.WrongFieldType(
+                source, lineNumber, primaryName, e, a))
+    | WrongType(e1, a1), WrongType(e2, a2) ->
+        // Both present but both have wrong types - report canonical's wrong type
+        Result.Error(
+            VerificationEvidenceParseError.WrongFieldType(
+                source, lineNumber, primaryName, e1, a1))
+    | Present _, Missing ->
         Result.Ok canonicalResult
     | Missing, Present _ ->
         Result.Ok aliasResult
@@ -162,8 +179,10 @@ let private lookupFieldStringWithAlias
         Result.Ok Missing
     | Missing, WrongType(e, a) ->
         Result.Ok(WrongType(e, a))
-    | WrongType(e, a), _ ->
+    | WrongType(e, a), Missing ->
         Result.Ok(WrongType(e, a))
+    | _ ->
+        Result.Ok Missing
 
 /// Type-aware integer field lookup with strict validation.
 /// Workstream 2: Uses IntegerFieldLookup to separate JSON type from integer semantics.
@@ -174,15 +193,10 @@ type IntegerFieldLookup =
     | InvalidIntegerValue of renderedValue: string
     | Present of int
 
-/// Type-aware integer field lookup with alias support.
-/// Falls back to aliasName if primary name is not found.
-let private lookupFieldIntWithAlias
-    (fields: (string * JsonValue) list)
-    (primaryName: string)
-    (aliasName: string)
-    : IntegerFieldLookup =
-    match List.tryFind (fun (k, _) -> k = primaryName) fields with
-    | Some(_, JsonNumber n) ->
+/// Helper to parse integer from JsonValue with strict validation.
+let private parseIntFromJson (v: JsonValue) : IntegerFieldLookup =
+    match v with
+    | JsonNumber n ->
         let dec = decimal n
         let floor = System.Decimal.Floor(dec)
 
@@ -194,24 +208,45 @@ let private lookupFieldIntWithAlias
             InvalidIntegerValue(string dec)
         else
             Present(int dec)
-    | Some(_, v) -> WrongJsonType("integer", jsonTypeName v)
-    | None ->
-        // Fallback to alias
-        match List.tryFind (fun (k, _) -> k = aliasName) fields with
-        | Some(_, JsonNumber n) ->
-            let dec = decimal n
-            let floor = System.Decimal.Floor(dec)
+    | _ -> WrongJsonType("integer", jsonTypeName v)
 
-            if dec <> floor then
-                InvalidIntegerValue(string dec)
-            elif dec < (decimal System.Int32.MinValue) then
-                InvalidIntegerValue(string dec)
-            elif dec > (decimal System.Int32.MaxValue) then
-                InvalidIntegerValue(string dec)
-            else
-                Present(int dec)
-        | Some(_, v) -> WrongJsonType("integer", jsonTypeName v)
-        | None -> Missing
+/// Type-aware integer field lookup with alias support.
+/// FAILS CLOSED: If both canonical and alias fields are present, returns an error.
+/// - Both present with different values → InvalidIntegerValue (conflict)
+/// - Both present with same value → InvalidIntegerValue (duplicate)
+/// - Both present with one wrong type → WrongJsonType on the wrong-typed field
+/// - Only one present → uses that value
+let private lookupFieldIntWithAlias
+    (fields: (string * JsonValue) list)
+    (primaryName: string)
+    (aliasName: string)
+    : IntegerFieldLookup =
+    let canonicalOpt = List.tryFind (fun (k, _) -> k = primaryName) fields
+    let aliasOpt = List.tryFind (fun (k, _) -> k = aliasName) fields
+    match canonicalOpt, aliasOpt with
+    | Some(_, cv), Some(_, av) ->
+        // Both present - need to check values
+        let canonicalResult = parseIntFromJson cv
+        let aliasResult = parseIntFromJson av
+        match canonicalResult, aliasResult with
+        | Present cv, Present av when cv <> av ->
+            // Both present with different values - conflict
+            InvalidIntegerValue(sprintf "%d vs %d" cv av)
+        | Present cv, Present av when cv = av ->
+            // Both present with same value - duplicate
+            InvalidIntegerValue(string cv)
+        | Present _, WrongJsonType(e, a) -> WrongJsonType(e, a)
+        | WrongJsonType(e, a), Present _ -> WrongJsonType(e, a)
+        | WrongJsonType(e1, a1), WrongJsonType(e2, a2) -> WrongJsonType(e1, a1)
+        | Present cv, InvalidIntegerValue(v) -> InvalidIntegerValue(v)
+        | InvalidIntegerValue(v), Present _ -> InvalidIntegerValue(v)
+        | InvalidIntegerValue(v1), InvalidIntegerValue(v2) -> InvalidIntegerValue(v1)
+        | InvalidIntegerValue(v), WrongJsonType(e, a) -> WrongJsonType(e, a)
+        | WrongJsonType(e, a), InvalidIntegerValue(v) -> WrongJsonType(e, a)
+        | _ -> Missing // Should not reach here
+    | Some(_, v), None -> parseIntFromJson v
+    | None, Some(_, v) -> parseIntFromJson v
+    | None, None -> Missing
 
 /// Type-aware integer field lookup with strict validation.
 /// Workstream 2: All checks in Decimal before conversion.
