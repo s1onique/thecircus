@@ -89,7 +89,8 @@ type StagedSnapshotFailure =
     | CompatibilityParseFailed of detail: string
     | NonCanonicalWire of path: string
     | RecordValidationFailed of issues: RecordValidationIssue list
-    | AggregateMismatch of field: string * expected: string * actual: string
+    | AggregateSemanticHashMismatch of expected: string * actual: string
+    | AggregateFieldMismatch of difference: Validation.AggregateDifference
     | ArtifactHashMismatch of path: string * expected: string * actual: string
     | ArtifactLengthMismatch of path: string * expected: int64 * actual: int64
     | CompatibilitySemanticHashMismatch of expected: string * actual: string
@@ -115,8 +116,10 @@ let stagedSnapshotFailureToString (f: StagedSnapshotFailure) : string =
     | StagedSnapshotFailure.NonCanonicalWire p -> sprintf "non-canonical wire bytes in: %s" p
     | StagedSnapshotFailure.RecordValidationFailed issues ->
         sprintf "record validation failed: %s" (String.concat "; " (List.map recordValidationIssueToString issues))
-    | StagedSnapshotFailure.AggregateMismatch (field, expected, actual) ->
-        sprintf "aggregate field mismatch: %s expected=%s actual=%s" field expected actual
+    | StagedSnapshotFailure.AggregateSemanticHashMismatch (expected, actual) ->
+        sprintf "aggregate semantic hash mismatch: expected=%s actual=%s" expected actual
+    | StagedSnapshotFailure.AggregateFieldMismatch diff ->
+        sprintf "aggregate field difference: %s" (Validation.aggregateDifferenceToString diff)
     | StagedSnapshotFailure.ArtifactHashMismatch (path, expected, actual) ->
         sprintf "artifact hash mismatch for %s: expected=%s actual=%s" path expected actual
     | StagedSnapshotFailure.ArtifactLengthMismatch (path, expected, actual) ->
@@ -610,10 +613,7 @@ let private parseAndValidateRecordsJsonl
 let private parseAndValidateAggregateJson
     (aggregatePath: string)
     (aggregateBytes: byte array)
-    (expectedCommit: string)
-    (expectedTree: string)
-    (expectedRecordCount: int)
-    (expectedRecordIds: string list)
+    (expectedAggregate: CanonicalExecutionAggregate)
     : StagedSnapshotFailure list =
     let failures = ResizeArray()
     let aggregateText =
@@ -629,27 +629,22 @@ let private parseAndValidateAggregateJson
         | Result.Error errors ->
             failures.Add(StagedSnapshotFailure.AggregateParseFailed(errors))
         | Result.Ok aggregate ->
-            // Verify recomputed semantic hash matches
+            // Phase 1: Verify self-integrity (semantic hash recomputed from aggregate itself)
             let recomputedHash = computeAggregateSemanticHash aggregate
             if recomputedHash <> aggregate.SemanticSha256 then
-                failures.Add(StagedSnapshotFailure.AggregateMismatch(
-                    "semantic_sha256", recomputedHash, aggregate.SemanticSha256))
-            // Verify subject commit
-            if aggregate.SubjectCommitOid <> expectedCommit then
-                failures.Add(StagedSnapshotFailure.AggregateMismatch(
-                    "subject_commit_oid", expectedCommit, aggregate.SubjectCommitOid))
-            // Verify subject tree
-            if aggregate.SubjectTreeOid <> expectedTree then
-                failures.Add(StagedSnapshotFailure.AggregateMismatch(
-                    "subject_tree_oid", expectedTree, aggregate.SubjectTreeOid))
-            // Verify record count
-            if aggregate.RecordsTotal <> expectedRecordCount then
-                failures.Add(StagedSnapshotFailure.AggregateMismatch(
-                    "records_total", string expectedRecordCount, string aggregate.RecordsTotal))
-            // Verify sorted record IDs
-            if aggregate.RecordIds <> expectedRecordIds then
-                failures.Add(StagedSnapshotFailure.AggregateMismatch(
-                    "record_ids", String.concat "," expectedRecordIds, String.concat "," aggregate.RecordIds))
+                failures.Add(StagedSnapshotFailure.AggregateSemanticHashMismatch(
+                    recomputedHash, aggregate.SemanticSha256))
+
+            // Phase 2: Use production aggregate comparator for complete field-by-field comparison
+            // SemanticSha256 is excluded here because it's already handled in Phase 1 (self-integrity).
+            // This avoids dual reporting: one corrupted hash produces exactly one failure authority.
+            let diffs =
+                compareAggregate expectedAggregate aggregate
+                |> List.filter (function
+                    | AggregateDifference.SemanticSha256 _ -> false
+                    | _ -> true)
+            for diff in diffs do
+                failures.Add(StagedSnapshotFailure.AggregateFieldMismatch(diff))
     List.ofSeq failures
 
 /// Parse artifacts.jsonl from disk bytes with hash/length verification.
@@ -791,7 +786,7 @@ let private validateCompatibilityEvidence
                     failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
                         checkId, sprintf "unknown check in disk compatibility: %s" checkId))
                 | CompatibilityDifference.CheckDifference (checkId, checkDiff) ->
-                    let detail = 
+                    let detail =
                         match checkDiff with
                         | CompatibilityCheckDifference.Id (expected, actual) -> sprintf "id mismatch: expected=%s actual=%s" expected actual
                         | CompatibilityCheckDifference.CommandArgv (expected, actual) -> sprintf "command_argv mismatch"
@@ -809,7 +804,7 @@ let private validateCompatibilityEvidence
                 | CompatibilityDifference.DuplicateActualCheckId (checkId, count) ->
                     failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
                         checkId, sprintf "duplicate check id in disk: %s (count=%d)" checkId count))
-            
+
             // Phase 2: Cross-file consistency checks (aggregate vs compatibility)
             // Verify commit: use dedicated type to avoid misclassifying OIDs as hashes
             if diskCompat.TestedCommitOid <> aggregate.SubjectCommitOid then
@@ -944,30 +939,48 @@ let stageAndPublishSnapshot
                         allFailures.AddRange(recordFailures)
 
                     // Parse records for later validation (collect from previous step)
-                    let parsedRecords =
+                    // CRITICAL: If records parsing fails, do NOT derive aggregate from an empty list.
+                    // Aggregate derivation is SKIPPED when record parsing fails - this prevents
+                    // parse errors from silently creating false aggregate mismatches.
+                    let parsedRecordsResult =
                         match recordsDiskBytes with
                         | Result.Ok bytes ->
                             let text = strictUtf8.GetString bytes
                             let normalizedText = text.Replace("\r\n", "\n")
                             let lines = normalizedText.Split([|'\n'|], StringSplitOptions.None)
-                            [ for line in lines do
+                            let parsed = ResizeArray()
+                            let hadParseErrors = ref false
+                            for line in lines do
                                 if not (String.IsNullOrEmpty line) then
                                     match parseEvidenceWireJsonStrict line with
-                                    | Result.Ok r -> yield r
-                                    | Result.Error _ -> () ]
-                        | Result.Error _ -> []
+                                    | Result.Ok r -> parsed.Add(r)
+                                    | Result.Error _ -> hadParseErrors := true
+                            if !hadParseErrors then
+                                Error "record parsing had errors, skipping aggregate derivation"
+                            else
+                                Ok(List.ofSeq parsed)
+                        | Result.Error _ -> Error "record read failed, skipping aggregate derivation"
 
                     // Validate aggregate.json
+                    // Only derive aggregate if all records parsed successfully.
+                    // On parse failure, aggregate validation is SKIPPED - this is the correct
+                    // behavior: parse failures produce RecordParseFailed, not field mismatches.
                     match aggregateDiskBytes with
                     | Result.Error detail ->
                         allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
                     | Ok bytes ->
-                        let recordIds = List.map (fun (r: CanonicalExecutionEvidence) -> r.EvidenceId) parsedRecords |> List.sort
-                        let aggregateFailures =
-                            parseAndValidateAggregateJson "aggregate.json" bytes
-                                aggregate.SubjectCommitOid aggregate.SubjectTreeOid
-                                (List.length parsedRecords) recordIds
-                        allFailures.AddRange(aggregateFailures)
+                        match parsedRecordsResult with
+                        | Error _ ->
+                            // Records had parse errors - aggregate derivation is skipped.
+                            // The RecordParseFailed failures are already in allFailures.
+                            // We do NOT run aggregate comparison against an empty/incomplete record list.
+                            ()
+                        | Ok parsedRecords ->
+                            let recomputedAggregate =
+                                computeAggregate aggregate.SubjectCommitOid aggregate.SubjectTreeOid parsedRecords
+                                |> finalizeAggregate
+                            let aggregateFailures = parseAndValidateAggregateJson "aggregate.json" bytes recomputedAggregate
+                            allFailures.AddRange(aggregateFailures)
 
                     // Validate artifacts.jsonl
                     match artifactsDiskBytes, recordsDiskBytes, aggregateDiskBytes, compatDiskBytes with
@@ -987,12 +1000,18 @@ let stageAndPublishSnapshot
                         allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
 
                     // Validate compatibility evidence against records
+                    // Only validate if records parsed successfully
                     match compatDiskBytes with
                     | Result.Error detail ->
                         allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
                     | Ok bytes ->
-                        let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes compatibilityProjection parsedRecords aggregate
-                        allFailures.AddRange(compatFailures)
+                        match parsedRecordsResult with
+                        | Error _ ->
+                            // Records had parse errors - compatibility validation with records is skipped
+                            ()
+                        | Ok parsedRecords ->
+                            let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes compatibilityProjection parsedRecords aggregate
+                            allFailures.AddRange(compatFailures)
 
                     // Phase 9: Handle validation result
                     if allFailures.Count > 0 then
@@ -1056,30 +1075,48 @@ let stageAndPublishSnapshot
                     allFailures.AddRange(recordFailures)
 
                 // Parse records for later validation (collect from previous step)
-                let parsedRecords =
+                // CRITICAL: If records parsing fails, do NOT derive aggregate from an empty list.
+                // Aggregate derivation is SKIPPED when record parsing fails - this prevents
+                // parse errors from silently creating false aggregate mismatches.
+                let parsedRecordsResult =
                     match recordsDiskBytes with
                     | Result.Ok bytes ->
                         let text = strictUtf8.GetString bytes
                         let normalizedText = text.Replace("\r\n", "\n")
                         let lines = normalizedText.Split([|'\n'|], StringSplitOptions.None)
-                        [ for line in lines do
+                        let parsed = ResizeArray()
+                        let hadParseErrors = ref false
+                        for line in lines do
                             if not (String.IsNullOrEmpty line) then
                                 match parseEvidenceWireJsonStrict line with
-                                | Result.Ok r -> yield r
-                                | Result.Error _ -> () ]
-                    | Result.Error _ -> []
+                                | Result.Ok r -> parsed.Add(r)
+                                | Result.Error _ -> hadParseErrors := true
+                        if !hadParseErrors then
+                            Error "record parsing had errors, skipping aggregate derivation"
+                        else
+                            Ok(List.ofSeq parsed)
+                    | Result.Error _ -> Error "record read failed, skipping aggregate derivation"
 
                 // Validate aggregate.json
+                // Only derive aggregate if all records parsed successfully.
+                // On parse failure, aggregate validation is SKIPPED - this is the correct
+                // behavior: parse failures produce RecordParseFailed, not field mismatches.
                 match aggregateDiskBytes with
                 | Result.Error detail ->
                     allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
                 | Ok bytes ->
-                    let recordIds = List.map (fun (r: CanonicalExecutionEvidence) -> r.EvidenceId) parsedRecords |> List.sort
-                    let aggregateFailures =
-                        parseAndValidateAggregateJson "aggregate.json" bytes
-                            aggregate.SubjectCommitOid aggregate.SubjectTreeOid
-                            (List.length parsedRecords) recordIds
-                    allFailures.AddRange(aggregateFailures)
+                    match parsedRecordsResult with
+                    | Error _ ->
+                        // Records had parse errors - aggregate derivation is skipped.
+                        // The RecordParseFailed failures are already in allFailures.
+                        // We do NOT run aggregate comparison against an empty/incomplete record list.
+                        ()
+                    | Ok parsedRecords ->
+                        let recomputedAggregate =
+                            computeAggregate aggregate.SubjectCommitOid aggregate.SubjectTreeOid parsedRecords
+                            |> finalizeAggregate
+                        let aggregateFailures = parseAndValidateAggregateJson "aggregate.json" bytes recomputedAggregate
+                        allFailures.AddRange(aggregateFailures)
 
                 // Validate artifacts.jsonl
                 match artifactsDiskBytes, recordsDiskBytes, aggregateDiskBytes, compatDiskBytes with
@@ -1099,10 +1136,16 @@ let stageAndPublishSnapshot
                     allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
 
                 // Validate compatibility evidence against records
+                // Only validate if records parsed successfully
                 match compatDiskBytes with
-                    | Result.Error detail ->
-                        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
-                    | Ok bytes ->
+                | Result.Error detail ->
+                    allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
+                | Ok bytes ->
+                    match parsedRecordsResult with
+                    | Error _ ->
+                        // Records had parse errors - compatibility validation with records is skipped
+                        ()
+                    | Ok parsedRecords ->
                         let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes compatibilityProjection parsedRecords aggregate
                         allFailures.AddRange(compatFailures)
 
