@@ -85,6 +85,12 @@ let private hasRecordParseFailure (failures: StagedSnapshotFailure list) : bool 
         | StagedSnapshotFailure.RecordParseFailed _ -> true
         | _ -> false)
 
+/// Check that failures do NOT contain any RecordValidationFailed
+let private noRecordValidationFailure (failures: StagedSnapshotFailure list) : bool =
+    failures |> List.forall (function
+        | StagedSnapshotFailure.RecordValidationFailed _ -> false
+        | _ -> true)
+
 /// Read existing snapshot files (returns Map of filename -> bytes option)
 let private readSnapshotFiles (dir: string) : Map<string, byte array option> =
     let files = ["records.jsonl"; "aggregate.json"; "artifacts.jsonl"; "canonical-evidence.json"]
