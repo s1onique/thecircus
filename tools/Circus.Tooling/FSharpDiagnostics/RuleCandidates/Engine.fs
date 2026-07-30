@@ -96,41 +96,59 @@ let publishCandidates (repoRoot: string) (result: ExtractionResult) : bool =
         false
 
 // -----------------------------------------------------------------------------
-// Production loaders - integrate with existing repair-episodes engine
+// Single canonical input snapshot from episode engine
 // -----------------------------------------------------------------------------
 
-let private loadFromEpisodeEngine (repoRoot: string) : Result<EpisodeEngineResult, EngineError> =
+/// Single authoritative snapshot of all inputs from one episode engine execution.
+/// Prevents multiple expensive engine runs and ensures data consistency.
+type RuleCandidateInputs =
+    { Episodes: RepairEpisode list
+      Transitions: DiagnosticTransition list
+      ChangeSets: Map<string, GitChangeSet>
+      VerificationEvidence: Map<string, VerificationEvidence> }
+
+let private mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError =
+    match failure with
+    | EpisodeEngineFailure.VerificationEvidenceLoadFailed errors ->
+        EngineError.VerificationEvidenceLoadFailed (errors |> List.map string)
+    | EpisodeEngineFailure.DeclarationLoadFailed issues ->
+        EngineError.Internal (sprintf "Declaration load failed: %A" issues)
+    | EpisodeEngineFailure.PublicationFailed (_, msg) ->
+        EngineError.PublicationFailed msg
+    | EpisodeEngineFailure.InternalFailure (op, msg) ->
+        EngineError.Internal (sprintf "Internal failure in %s: %s" op msg)
+
+let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInputs, EngineError> =
     match runEpisodeEngine repoRoot defaultEngineOptions with
-    | EpisodeEngineExecution.Completed result -> Ok result
-    | EpisodeEngineExecution.Failed failure ->
-        let msg =
-            match failure with
-            | EpisodeEngineFailure.VerificationEvidenceLoadFailed errors ->
-                sprintf "Verification evidence load failed: %A" errors
-            | EpisodeEngineFailure.DeclarationLoadFailed issues ->
-                sprintf "Declaration load failed: %A" issues
-            | EpisodeEngineFailure.PublicationFailed (_, msg) ->
-                sprintf "Publication failed: %s" msg
-            | EpisodeEngineFailure.InternalFailure (op, msg) ->
-                sprintf "Internal failure in %s: %s" op msg
-        Error(EngineError.Internal msg)
+    | EpisodeEngineExecution.Failed failure -> Error(mapEpisodeEngineFailure failure)
+    | EpisodeEngineExecution.Completed result ->
+        Ok
+            { Episodes = result.RepairEpisodes
+              Transitions = result.Transitions
+              ChangeSets =
+                  result.ChangeSets
+                  |> List.map (fun cs -> cs.ChangeSetId, cs)
+                  |> Map.ofList
+              VerificationEvidence =
+                  result.Verification
+                  |> List.map (fun lv -> lv.Evidence.EvidenceId, lv.Evidence)
+                  |> Map.ofList }
+
+// Backward-compatible individual loaders that share one engine execution
+let loadAllInputs (repoRoot: string) : Result<RuleCandidateInputs, EngineError> =
+    loadFromEpisodeEngine repoRoot
 
 let loadRepairEpisodes (repoRoot: string) : Result<RepairEpisode list, EngineError> =
-    loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.RepairEpisodes)
+    loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.Episodes)
 
 let loadTransitions (repoRoot: string) : Result<DiagnosticTransition list, EngineError> =
     loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.Transitions)
 
 let loadChangeSets (repoRoot: string) : Result<Map<string, GitChangeSet>, EngineError> =
-    loadFromEpisodeEngine repoRoot
-    |> Result.map (fun r -> r.ChangeSets |> List.map (fun cs -> cs.ChangeSetId, cs) |> Map.ofList)
+    loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.ChangeSets)
 
 let loadVerificationEvidence (repoRoot: string) : Result<Map<string, VerificationEvidence>, EngineError> =
-    loadFromEpisodeEngine repoRoot
-    |> Result.map (fun r ->
-        r.Verification
-        |> List.map (fun lv -> lv.Evidence.EvidenceId, lv.Evidence)
-        |> Map.ofList)
+    loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.VerificationEvidence)
 
 // -----------------------------------------------------------------------------
 // Candidate building
@@ -197,6 +215,53 @@ let buildCandidate (ep: RepairEpisode) (cs: GitChangeSet) (gf: TransitionGroupFa
       Evidence = evid }
 
 // -----------------------------------------------------------------------------
+// Verification evidence binding
+// -----------------------------------------------------------------------------
+
+/// Validates that all referenced verification evidence records exist and are valid.
+/// Returns None if any binding fails, Some with error message otherwise.
+let validateVerificationBinding (ep: RepairEpisode) (verificationMap: Map<string, VerificationEvidence>) : string option =
+    let evidId = ep.VerificationEvidenceIds
+
+    if evidId.IsEmpty then
+        Some "Episode has no verification evidence references"
+
+    else
+        let mutable firstError = None
+
+        for evid in evidId do
+            match Map.tryFind evid verificationMap with
+            | None ->
+                firstError <- Some (sprintf "Verification evidence %s not found" evid)
+            | Some record ->
+                // Verify episode_id matches
+                if record.EpisodeId <> ep.EpisodeId then
+                    firstError <-
+                        Some (sprintf "Verification evidence %s has episode_id mismatch" evid)
+
+                // Verify status is pass
+                elif record.Status <> VerificationStatus.Pass then
+                    firstError <-
+                        Some (sprintf "Verification evidence %s has status %A (expected Pass)" evid record.Status)
+
+                // Verify exit code is 0
+                elif record.ExitCode <> 0 then
+                    firstError <-
+                        Some (sprintf "Verification evidence %s has exit_code %d (expected 0)" evid record.ExitCode)
+
+                // Verify tested commit matches after commit
+                elif record.TestedCommitOid <> ep.AfterCommitOid then
+                    firstError <-
+                        Some (sprintf "Verification evidence %s tested_commit_oid mismatch" evid)
+
+                // Verify tested tree matches after tree
+                elif record.TestedTreeOid <> ep.AfterTreeOid then
+                    firstError <-
+                        Some (sprintf "Verification evidence %s tested_tree_oid mismatch" evid)
+
+        firstError
+
+// -----------------------------------------------------------------------------
 // Extraction
 // -----------------------------------------------------------------------------
 
@@ -206,33 +271,40 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
     let mutable epWC = 0
     let errs = ResizeArray<EngineError>()
 
-    match loadRepairEpisodes repoRoot with
-    | Result.Error e -> errs.Add e
-    | Result.Ok eps ->
-        match loadTransitions repoRoot with
-        | Result.Error e -> errs.Add e
-        | Result.Ok trans ->
-            match loadChangeSets repoRoot with
-            | Result.Error e -> errs.Add e
-            | Result.Ok css ->
-                match loadVerificationEvidence repoRoot with
-                | Result.Error e -> errs.Add e
-                | Result.Ok _ ->
-                    for ep in eps do
-                        if isEpisodeEligible ep then
-                            elEp <- elEp + 1
-                            let et = trans |> List.filter (fun t -> t.EpisodeId = ep.EpisodeId)
+    match loadAllInputs repoRoot with
+    | Result.Error e ->
+        errs.Add e
+        { Candidates = []; EligibleEpisodes = 0; EpisodesWithCandidates = 0; Errors = errs |> Seq.toList }
 
-                            match selectCandidateGroup ep (Map.find ep.ChangeSetId css) et with
-                            | Some gf ->
-                                cands.Add(buildCandidate ep (Map.find ep.ChangeSetId css) gf)
-                                epWC <- epWC + 1
-                            | None -> ()
+    | Result.Ok inputs ->
+        for ep in inputs.Episodes do
+            // Check episode eligibility
+            if isEpisodeEligible ep then
+                // Verify all evidence bindings
+                match validateVerificationBinding ep inputs.VerificationEvidence with
+                | Some errMsg ->
+                    errs.Add(EngineError.CandidateGenerationFailed errMsg)
+                | None ->
+                    elEp <- elEp + 1
 
-    { Candidates = cands |> Seq.toList
-      EligibleEpisodes = elEp
-      EpisodesWithCandidates = epWC
-      Errors = errs |> Seq.toList }
+                    let et = inputs.Transitions |> List.filter (fun t -> t.EpisodeId = ep.EpisodeId)
+
+                    match
+                        selectCandidateGroup ep (Map.find ep.ChangeSetId inputs.ChangeSets) et
+                    with
+                    | Some gf ->
+                        cands.Add(buildCandidate ep (Map.find ep.ChangeSetId inputs.ChangeSets) gf)
+                        epWC <- epWC + 1
+                    | None -> ()
+
+        // Add terminal error if no eligible episodes
+        if elEp = 0 && errs.Count = 0 then
+            errs.Add EngineError.NoEligibleEpisodes
+
+        { Candidates = cands |> Seq.toList
+          EligibleEpisodes = elEp
+          EpisodesWithCandidates = epWC
+          Errors = errs |> Seq.toList }
 
 let runExtraction (repoRoot: string) : ExtractionResult =
     let result = extractCandidates repoRoot
