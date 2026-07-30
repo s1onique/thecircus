@@ -145,44 +145,43 @@ let private lookupFieldStringWithAlias
     : Result<FieldLookup<string>, VerificationEvidenceParseError> =
     let canonicalResult = lookupFieldString fields primaryName
     let aliasResult = lookupFieldString fields aliasName
+
     match canonicalResult, aliasResult with
-    | Present canonicalValue, Present aliasValue when canonicalValue <> aliasValue ->
-        // Both present with different values - conflict!
-        Result.Error(
-            VerificationEvidenceParseError.ConflictingSemanticFields(
-                source, lineNumber, primaryName, aliasName, canonicalValue, aliasValue))
-    | Present canonicalValue, Present aliasValue when canonicalValue = aliasValue ->
-        // Both present with same value - duplicate semantic field
-        Result.Error(
-            VerificationEvidenceParseError.DuplicateSemanticField(
-                source, lineNumber, primaryName, aliasName))
-    | Present _, WrongType(e, a) ->
-        // Both present but alias has wrong type - reject
-        Result.Error(
-            VerificationEvidenceParseError.WrongFieldType(
-                source, lineNumber, aliasName, e, a))
-    | WrongType(e, a), Present _ ->
-        // Both present but canonical has wrong type - reject
-        Result.Error(
-            VerificationEvidenceParseError.WrongFieldType(
-                source, lineNumber, primaryName, e, a))
-    | WrongType(e1, a1), WrongType(e2, a2) ->
-        // Both present but both have wrong types - report canonical's wrong type
-        Result.Error(
-            VerificationEvidenceParseError.WrongFieldType(
-                source, lineNumber, primaryName, e1, a1))
-    | Present _, Missing ->
-        Result.Ok canonicalResult
-    | Missing, Present _ ->
-        Result.Ok aliasResult
-    | Missing, Missing ->
-        Result.Ok Missing
-    | Missing, WrongType(e, a) ->
-        Result.Ok(WrongType(e, a))
-    | WrongType(e, a), Missing ->
-        Result.Ok(WrongType(e, a))
-    | _ ->
-        Result.Ok Missing
+    // Both present - check for conflicts
+    | FieldLookup.Present cv, FieldLookup.Present av ->
+        if cv = av then
+            Result.Error(
+                VerificationEvidenceParseError.DuplicateSemanticField(source, lineNumber, primaryName, aliasName)
+            )
+        else
+            Result.Error(
+                VerificationEvidenceParseError.ConflictingSemanticFields(
+                    source,
+                    lineNumber,
+                    primaryName,
+                    aliasName,
+                    cv,
+                    av
+                )
+            )
+    // One present, one wrong type
+    | FieldLookup.Present _, FieldLookup.WrongType(e, a) ->
+        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, aliasName, e, a))
+    | FieldLookup.WrongType(e, a), FieldLookup.Present _ ->
+        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, e, a))
+    // Both wrong type
+    | FieldLookup.WrongType(e1, _), FieldLookup.WrongType(e2, _) ->
+        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, e1, e2))
+    // Only canonical present
+    | FieldLookup.Present _, FieldLookup.Missing -> Result.Ok canonicalResult
+    // Only alias present
+    | FieldLookup.Missing, FieldLookup.Present _ -> Result.Ok aliasResult
+    // Neither present
+    | FieldLookup.Missing, FieldLookup.Missing -> Result.Ok FieldLookup.Missing
+    // Only alias wrong type
+    | FieldLookup.Missing, FieldLookup.WrongType(e, a) -> Result.Ok(FieldLookup.WrongType(e, a))
+    // Only canonical wrong type
+    | FieldLookup.WrongType(e, a), FieldLookup.Missing -> Result.Ok(FieldLookup.WrongType(e, a))
 
 /// Type-aware integer field lookup with strict validation.
 /// Workstream 2: Uses IntegerFieldLookup to separate JSON type from integer semantics.
@@ -210,49 +209,105 @@ let private parseIntFromJson (v: JsonValue) : IntegerFieldLookup =
             Present(int dec)
     | _ -> WrongJsonType("integer", jsonTypeName v)
 
+/// Resolve conflicts between two integer field lookup results when both canonical and alias fields are present.
+/// Returns appropriate error or Ok based on the combination of results.
+let private resolveIntFieldConflict
+    (canonicalResult: IntegerFieldLookup)
+    (aliasResult: IntegerFieldLookup)
+    (primaryName: string)
+    (aliasName: string)
+    (source: string)
+    (lineNumber: int)
+    : Result<IntegerFieldLookup, VerificationEvidenceParseError> =
+    match canonicalResult, aliasResult with
+    | IntegerFieldLookup.Present cv, IntegerFieldLookup.Present av ->
+        if cv <> av then
+            Result.Error(
+                VerificationEvidenceParseError.ConflictingSemanticFields(
+                    source,
+                    lineNumber,
+                    primaryName,
+                    aliasName,
+                    string cv,
+                    string av
+                )
+            )
+        else
+            Result.Error(
+                VerificationEvidenceParseError.DuplicateSemanticField(source, lineNumber, primaryName, aliasName)
+            )
+    | IntegerFieldLookup.Present _, IntegerFieldLookup.WrongJsonType(e, a) ->
+        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, aliasName, e, a))
+    | IntegerFieldLookup.WrongJsonType(e, a), IntegerFieldLookup.Present _ ->
+        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, e, a))
+    | IntegerFieldLookup.WrongJsonType(e1, _), IntegerFieldLookup.WrongJsonType(e2, _) ->
+        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, e1, e2))
+    | IntegerFieldLookup.Present _, IntegerFieldLookup.InvalidIntegerValue(v) ->
+        Result.Error(VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, v))
+    | IntegerFieldLookup.InvalidIntegerValue(v), IntegerFieldLookup.Present _ ->
+        Result.Error(VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, v))
+    | IntegerFieldLookup.InvalidIntegerValue(v1), IntegerFieldLookup.InvalidIntegerValue(v2) ->
+        Result.Error(VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, v1))
+    | IntegerFieldLookup.InvalidIntegerValue(v), IntegerFieldLookup.WrongJsonType(e, a) ->
+        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, aliasName, e, a))
+    | IntegerFieldLookup.WrongJsonType(e, a), IntegerFieldLookup.InvalidIntegerValue(v) ->
+        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, e, a))
+    | IntegerFieldLookup.Missing, IntegerFieldLookup.Present _ -> Result.Ok aliasResult
+    | IntegerFieldLookup.Present _, IntegerFieldLookup.Missing -> Result.Ok canonicalResult
+    | IntegerFieldLookup.Missing, IntegerFieldLookup.Missing -> Result.Ok IntegerFieldLookup.Missing
+    | IntegerFieldLookup.Missing, IntegerFieldLookup.WrongJsonType(e, a) ->
+        Result.Ok(IntegerFieldLookup.WrongJsonType(e, a))
+    | IntegerFieldLookup.WrongJsonType(e, a), IntegerFieldLookup.Missing ->
+        Result.Ok(IntegerFieldLookup.WrongJsonType(e, a))
+    | IntegerFieldLookup.Missing, IntegerFieldLookup.InvalidIntegerValue(v) ->
+        Result.Ok(IntegerFieldLookup.InvalidIntegerValue(v))
+    | IntegerFieldLookup.InvalidIntegerValue(v), IntegerFieldLookup.Missing ->
+        Result.Ok(IntegerFieldLookup.InvalidIntegerValue(v))
+
 /// Type-aware integer field lookup with alias support.
-/// FAILS CLOSED: If both canonical and alias fields are present, returns an error.
-/// - Both present with different values → InvalidIntegerValue (conflict)
-/// - Both present with same value → InvalidIntegerValue (duplicate)
-/// - Both present with one wrong type → WrongJsonType on the wrong-typed field
-/// - Only one present → uses that value
+/// FAILS CLOSED: If both canonical and alias fields are present, returns typed parse errors.
+/// - Both present with same valid value → DuplicateSemanticField
+/// - Both present with different valid values → ConflictingSemanticFields
+/// - Both present with one wrong type → WrongFieldType on the wrong-typed field
+/// - Only one present → uses that value (valid int or WrongJsonType)
+/// - Fractional or out-of-range → InvalidExitCode
 let private lookupFieldIntWithAlias
     (fields: (string * JsonValue) list)
     (primaryName: string)
     (aliasName: string)
-    : IntegerFieldLookup =
+    (source: string)
+    (lineNumber: int)
+    : Result<IntegerFieldLookup, VerificationEvidenceParseError> =
     let canonicalOpt = List.tryFind (fun (k, _) -> k = primaryName) fields
     let aliasOpt = List.tryFind (fun (k, _) -> k = aliasName) fields
+
     match canonicalOpt, aliasOpt with
     | Some(_, cv), Some(_, av) ->
         // Both present - need to check values
         let canonicalResult = parseIntFromJson cv
         let aliasResult = parseIntFromJson av
-        match canonicalResult, aliasResult with
-        | Present cv, Present av when cv <> av ->
-            // Both present with different values - conflict
-            InvalidIntegerValue(sprintf "%d vs %d" cv av)
-        | Present cv, Present av when cv = av ->
-            // Both present with same value - duplicate
-            InvalidIntegerValue(string cv)
-        | Present _, WrongJsonType(e, a) -> WrongJsonType(e, a)
-        | WrongJsonType(e, a), Present _ -> WrongJsonType(e, a)
-        | WrongJsonType(e1, a1), WrongJsonType(e2, a2) -> WrongJsonType(e1, a1)
-        | Present cv, InvalidIntegerValue(v) -> InvalidIntegerValue(v)
-        | InvalidIntegerValue(v), Present _ -> InvalidIntegerValue(v)
-        | InvalidIntegerValue(v1), InvalidIntegerValue(v2) -> InvalidIntegerValue(v1)
-        | InvalidIntegerValue(v), WrongJsonType(e, a) -> WrongJsonType(e, a)
-        | WrongJsonType(e, a), InvalidIntegerValue(v) -> WrongJsonType(e, a)
-        | _ -> Missing // Should not reach here
-    | Some(_, v), None -> parseIntFromJson v
-    | None, Some(_, v) -> parseIntFromJson v
-    | None, None -> Missing
+        resolveIntFieldConflict canonicalResult aliasResult primaryName aliasName source lineNumber
+    | Some(_, v), None ->
+        match parseIntFromJson v with
+        | IntegerFieldLookup.Present i -> Result.Ok(IntegerFieldLookup.Present i)
+        | IntegerFieldLookup.WrongJsonType(e, a) -> Result.Ok(IntegerFieldLookup.WrongJsonType(e, a))
+        | IntegerFieldLookup.InvalidIntegerValue(v) -> Result.Ok(IntegerFieldLookup.InvalidIntegerValue(v))
+        | IntegerFieldLookup.Missing -> Result.Ok IntegerFieldLookup.Missing
+    | None, Some(_, v) ->
+        match parseIntFromJson v with
+        | IntegerFieldLookup.Present i -> Result.Ok(IntegerFieldLookup.Present i)
+        | IntegerFieldLookup.WrongJsonType(e, a) -> Result.Ok(IntegerFieldLookup.WrongJsonType(e, a))
+        | IntegerFieldLookup.InvalidIntegerValue(v) -> Result.Ok(IntegerFieldLookup.InvalidIntegerValue(v))
+        | IntegerFieldLookup.Missing -> Result.Ok IntegerFieldLookup.Missing
+    | None, None -> Result.Ok IntegerFieldLookup.Missing
 
 /// Type-aware integer field lookup with strict validation.
 /// Workstream 2: All checks in Decimal before conversion.
 /// Rejects fractional numbers, values below Int32.MinValue, above Int32.MaxValue.
 let private lookupFieldInt (fields: (string * JsonValue) list) (name: string) : IntegerFieldLookup =
-    lookupFieldIntWithAlias fields name name
+    match List.tryFind (fun (k, _) -> k = name) fields with
+    | None -> IntegerFieldLookup.Missing
+    | Some(_, v) -> parseIntFromJson v
 
 
 // =============================================================================
@@ -548,9 +603,9 @@ let rec private parseVerificationEvidenceStrict
                 // 1. evidence_id (required, also accepts verification_evidence_id alias)
                 match lookupFieldStringWithAlias fields "evidence_id" "verification_evidence_id" source lineNumber with
                 | Result.Error e -> Result.Error e
-                | Result.Ok (FieldLookup.Missing) ->
+                | Result.Ok(FieldLookup.Missing) ->
                     Result.Error(VerificationEvidenceParseError.MissingField(source, lineNumber, "evidence_id"))
-                | Result.Ok (FieldLookup.WrongType(expected, actual)) ->
+                | Result.Ok(FieldLookup.WrongType(expected, actual)) ->
                     Result.Error(
                         VerificationEvidenceParseError.WrongFieldType(
                             source,
@@ -560,7 +615,7 @@ let rec private parseVerificationEvidenceStrict
                             actual
                         )
                     )
-                | Result.Ok (FieldLookup.Present evId) ->
+                | Result.Ok(FieldLookup.Present evId) ->
                     // Validate evidence ID format
                     if not (sha256Regex.IsMatch(evId)) then
                         Result.Error(VerificationEvidenceParseError.InvalidEvidenceId(source, lineNumber, evId))
@@ -585,9 +640,9 @@ let rec private parseVerificationEvidenceStrict
                             // 3. kind (required, also accepts verification_kind alias)
                             match lookupFieldStringWithAlias fields "kind" "verification_kind" source lineNumber with
                             | Result.Error e -> Result.Error e
-                            | Result.Ok (FieldLookup.Missing) ->
+                            | Result.Ok(FieldLookup.Missing) ->
                                 Result.Error(VerificationEvidenceParseError.MissingField(source, lineNumber, "kind"))
-                            | Result.Ok (FieldLookup.WrongType(expected, actual)) ->
+                            | Result.Ok(FieldLookup.WrongType(expected, actual)) ->
                                 Result.Error(
                                     VerificationEvidenceParseError.WrongFieldType(
                                         source,
@@ -597,7 +652,7 @@ let rec private parseVerificationEvidenceStrict
                                         actual
                                     )
                                 )
-                            | Result.Ok (FieldLookup.Present kindToken) ->
+                            | Result.Ok(FieldLookup.Present kindToken) ->
                                 match tryParseVerificationKind kindToken with
                                 | None ->
                                     Result.Error(
@@ -609,13 +664,20 @@ let rec private parseVerificationEvidenceStrict
                                     )
                                 | Some parsedKind ->
                                     // 4. command (required, also accepts verification_command alias)
-                                    match lookupFieldStringWithAlias fields "command" "verification_command" source lineNumber with
+                                    match
+                                        lookupFieldStringWithAlias
+                                            fields
+                                            "command"
+                                            "verification_command"
+                                            source
+                                            lineNumber
+                                    with
                                     | Result.Error e -> Result.Error e
-                                    | Result.Ok (FieldLookup.Missing) ->
+                                    | Result.Ok(FieldLookup.Missing) ->
                                         Result.Error(
                                             VerificationEvidenceParseError.MissingField(source, lineNumber, "command")
                                         )
-                                    | Result.Ok (FieldLookup.WrongType(expected, actual)) ->
+                                    | Result.Ok(FieldLookup.WrongType(expected, actual)) ->
                                         Result.Error(
                                             VerificationEvidenceParseError.WrongFieldType(
                                                 source,
@@ -625,11 +687,18 @@ let rec private parseVerificationEvidenceStrict
                                                 actual
                                             )
                                         )
-                                    | Result.Ok (FieldLookup.Present cmd) ->
+                                    | Result.Ok(FieldLookup.Present cmd) ->
                                         // 5. status (required, also accepts verification_result alias)
-                                        match lookupFieldStringWithAlias fields "status" "verification_result" source lineNumber with
+                                        match
+                                            lookupFieldStringWithAlias
+                                                fields
+                                                "status"
+                                                "verification_result"
+                                                source
+                                                lineNumber
+                                        with
                                         | Result.Error e -> Result.Error e
-                                        | Result.Ok (FieldLookup.Missing) ->
+                                        | Result.Ok(FieldLookup.Missing) ->
                                             Result.Error(
                                                 VerificationEvidenceParseError.MissingField(
                                                     source,
@@ -637,7 +706,7 @@ let rec private parseVerificationEvidenceStrict
                                                     "status"
                                                 )
                                             )
-                                        | Result.Ok (FieldLookup.WrongType(expected, actual)) ->
+                                        | Result.Ok(FieldLookup.WrongType(expected, actual)) ->
                                             Result.Error(
                                                 VerificationEvidenceParseError.WrongFieldType(
                                                     source,
@@ -647,7 +716,7 @@ let rec private parseVerificationEvidenceStrict
                                                     actual
                                                 )
                                             )
-                                        | Result.Ok (FieldLookup.Present statusToken) ->
+                                        | Result.Ok(FieldLookup.Present statusToken) ->
                                             match tryParseVerificationStatus statusToken with
                                             | None ->
                                                 Result.Error(
@@ -659,11 +728,16 @@ let rec private parseVerificationEvidenceStrict
                                                 )
                                             | Some parsedStatus ->
                                                 // 6. exit_code (required, non-negative integer, also accepts verification_exit_code alias)
-                                                // Workstream 2: Handle IntegerFieldLookup cases
                                                 match
-                                                    lookupFieldIntWithAlias fields "exit_code" "verification_exit_code"
+                                                    lookupFieldIntWithAlias
+                                                        fields
+                                                        "exit_code"
+                                                        "verification_exit_code"
+                                                        source
+                                                        lineNumber
                                                 with
-                                                | IntegerFieldLookup.Missing ->
+                                                | Result.Error e -> Result.Error e
+                                                | Result.Ok IntegerFieldLookup.Missing ->
                                                     Result.Error(
                                                         VerificationEvidenceParseError.MissingField(
                                                             source,
@@ -671,7 +745,7 @@ let rec private parseVerificationEvidenceStrict
                                                             "exit_code"
                                                         )
                                                     )
-                                                | IntegerFieldLookup.WrongJsonType(expected, actual) ->
+                                                | Result.Ok(IntegerFieldLookup.WrongJsonType(expected, actual)) ->
                                                     Result.Error(
                                                         VerificationEvidenceParseError.WrongFieldType(
                                                             source,
@@ -681,7 +755,7 @@ let rec private parseVerificationEvidenceStrict
                                                             actual
                                                         )
                                                     )
-                                                | IntegerFieldLookup.InvalidIntegerValue(rendered) ->
+                                                | Result.Ok(IntegerFieldLookup.InvalidIntegerValue(rendered)) ->
                                                     Result.Error(
                                                         VerificationEvidenceParseError.InvalidExitCode(
                                                             source,
@@ -689,7 +763,7 @@ let rec private parseVerificationEvidenceStrict
                                                             rendered
                                                         )
                                                     )
-                                                | IntegerFieldLookup.Present ec when ec < 0 ->
+                                                | Result.Ok(IntegerFieldLookup.Present ec) when ec < 0 ->
                                                     Result.Error(
                                                         VerificationEvidenceParseError.InvalidExitCode(
                                                             source,
@@ -697,7 +771,7 @@ let rec private parseVerificationEvidenceStrict
                                                             string ec
                                                         )
                                                     )
-                                                | IntegerFieldLookup.Present ec ->
+                                                | Result.Ok(IntegerFieldLookup.Present ec) ->
                                                     // 7. tested_commit_oid (optional, 40 or 64 hex chars)
                                                     match lookupFieldOptString fields "tested_commit_oid" with
                                                     | FieldLookup.Missing ->
