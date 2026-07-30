@@ -1153,18 +1153,17 @@ let stagedRecordDivergenceTests =
 
                 // Mutation: modify records.jsonl to add extra records without updating aggregate.json
                 // This simulates someone adding test results without incrementing the aggregate
-                let mutatedRecords = fixture.Records @ [
-                    // Add an extra record with different evidence_id
-                    { fixture.Records.Head with
-                        EvidenceId = String.replicate 64 "f"
-                        CheckId = "extra-check"
-                        TestsTotal = Some 5
-                        TestsPassed = Some 5
-                        TestsFailed = Some 0
-                        TestsIgnored = Some 0
-                        TestsErrored = Some 0
-                    }
-                ]
+                // CRITICAL: Use computeEvidenceId to create a valid record identity
+                let baseRec = fixture.Records.Head
+                let tempRecord = { baseRec with CheckId = "extra-check" }
+                let tempRecord2 = { tempRecord with TestsTotal = Some 5 }
+                let tempRecord3 = { tempRecord2 with TestsPassed = Some 5 }
+                let tempRecord4 = { tempRecord3 with TestsFailed = Some 0 }
+                let tempRecord5 = { tempRecord4 with TestsIgnored = Some 0 }
+                let tempRecord6 = { tempRecord5 with TestsErrored = Some 0 }
+                let computedId = computeEvidenceId tempRecord6
+                let extraRecord = { tempRecord6 with EvidenceId = computedId }
+                let mutatedRecords = fixture.Records @ [extraRecord]
 
                 let mutationFn (stagingDir: string) : Result<unit, string> =
                     try
@@ -1242,12 +1241,15 @@ let stagedRecordDivergenceTests =
                 let liveSnapshotBefore = readSnapshotFiles tempDir
 
                 // Mutation: change a record's status from pass to fail WITHOUT updating aggregate
+                // CRITICAL: Recompute EvidenceId since Result changed
                 let mutatedRecords =
                     match fixture.Records with
                     | [] -> []
                     | head :: tail ->
-                        // Change first record from pass to fail
-                        { head with Result = RecordFail } :: tail
+                        // Change first record from pass to fail and recompute identity
+                        let mutatedHead = { head with Result = RecordFail }
+                        let recomputedId = computeEvidenceId mutatedHead
+                        { mutatedHead with EvidenceId = recomputedId } :: tail
 
                 let mutationFn (stagingDir: string) : Result<unit, string> =
                     try
@@ -1427,6 +1429,17 @@ let malformedRecordIsolationTests =
                     let hasRecordParseFailure = hasRecordParseFailure failures
                     Expect.isTrue hasRecordParseFailure
                         (sprintf "RecordParseFailure should be present. Failures: %A" failures)
+
+                    // Should NOT have ANY AggregateFieldMismatch (parse failure means aggregate not recomputed)
+                    Expect.isTrue (noAggregateFieldMismatch failures)
+                        (sprintf "Should NOT have any AggregateFieldMismatch for malformed records. Failures: %A" failures)
+
+                    // Should NOT have AggregateSemanticHashMismatch
+                    let hasHashMismatch = failures |> List.exists (function
+                        | StagedSnapshotFailure.AggregateSemanticHashMismatch _ -> true
+                        | _ -> false)
+                    Expect.isFalse hasHashMismatch
+                        "Should NOT have AggregateSemanticHashMismatch for malformed records"
 
                     let liveSnapshotAfter = readSnapshotFiles tempDir
                     Expect.isTrue (verifyFilesPreserved liveSnapshotBefore liveSnapshotAfter)
