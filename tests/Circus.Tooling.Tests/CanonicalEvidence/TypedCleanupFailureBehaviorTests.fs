@@ -219,7 +219,7 @@ let outcomeFieldPreservationTests =
                 match outcome.CleanupFailure with
                 | Some cleanupFailure ->
                     Expect.isFalse (String.IsNullOrEmpty cleanupFailure.Path) "cleanup failure path should be set"
-                    Expect.isFalse (String.IsNullOrEmpty cleanupFailure.ExceptionType) "cleanup failure exception type should be set"
+                    Expect.isFalse (String.IsNullOrEmpty cleanupFailure.Detail) "cleanup failure exception type should be set"
                 | None ->
                     // No cleanup failure is acceptable (successful write)
                     ()

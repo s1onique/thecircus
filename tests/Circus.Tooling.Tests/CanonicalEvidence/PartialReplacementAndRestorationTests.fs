@@ -95,7 +95,7 @@ let liveSnapshotMayHaveChangedTests =
                 
                 let outcome = stageAndPublishSnapshot tempDir fixture.Records fixture.Aggregate fixture.CompatibilityProjection None
                 Expect.isTrue outcome.Success "staging should succeed"
-                Expect.isFalse outcome.LiveSnapshotMayHaveChanged "live snapshot may have changed should be false on success"
+                Expect.isFalse (liveSnapshotMayHaveChanged outcome.LiveSnapshotState) "live snapshot may have changed should be false on success"
             finally
                 if Directory.Exists tempDir then Directory.Delete(tempDir, true)
 
@@ -113,7 +113,7 @@ let liveSnapshotMayHaveChangedTests =
                 // LiveSnapshotMayHaveChanged should be false because we restore previous
                 let outcome2 = stageAndPublishSnapshot tempDir [] fixture.Aggregate fixture.CompatibilityProjection None
                 Expect.isFalse outcome2.Success "second staging should fail"
-                Expect.isFalse outcome2.LiveSnapshotMayHaveChanged "live snapshot may have changed should be false (restored)"
+                Expect.isFalse (liveSnapshotMayHaveChanged outcome2.LiveSnapshotState) "live snapshot may have changed should be false (restored)"
             finally
                 if Directory.Exists tempDir then Directory.Delete(tempDir, true)
     ]
