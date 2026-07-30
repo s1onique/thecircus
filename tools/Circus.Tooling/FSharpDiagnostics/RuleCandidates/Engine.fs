@@ -24,6 +24,11 @@ type InputIdentityKind =
     | ChangeSetIdentity
     | VerificationEvidenceIdentity
 
+/// Represents a single transition's identity: episode + exact fingerprint.
+/// Used for duplicate detection across multi-transition episodes.
+let transitionIdentity (t: DiagnosticTransition) : string =
+    t.EpisodeId + "\x1F" + t.ExactFingerprint
+
 type EngineError =
     | EpisodeLoadFailed of errors: string list
     | VerificationEvidenceLoadFailed of errors: string list
@@ -33,6 +38,7 @@ type EngineError =
     | CandidateGenerationFailed of details: string
     | PublicationFailed of details: string
     | DuplicateInputIdentities of kind: InputIdentityKind * identities: string list
+    | EmptyInputIdentity of kind: InputIdentityKind * itemIndex: int
     | Internal of message: string
 
 // -----------------------------------------------------------------------------
@@ -107,6 +113,7 @@ let publishCandidates (repoRoot: string) (result: ExtractionResult) : bool =
 // -----------------------------------------------------------------------------
 
 /// Fails with typed error if duplicate identities are found.
+/// Duplicate IDs are preserved as a sorted list without string serialization.
 let private checkForDuplicates
     (kind: InputIdentityKind)
     (identity: 'a -> string)
@@ -118,8 +125,12 @@ let private checkForDuplicates
         |> List.filter (fun (_, count) -> count > 1)
 
     if not duplicates.IsEmpty then
-        let dupList = duplicates |> List.map fst |> List.sort |> String.concat ", "
-        Error(DuplicateInputIdentities(kind, dupList.Split(',') |> Array.toList))
+        let dupIds =
+            duplicates
+            |> List.map fst
+            |> List.sortWith (fun a b -> String.Compare(a, b, StringComparison.Ordinal))
+
+        Error(DuplicateInputIdentities(kind, dupIds))
     else
         Ok()
 
@@ -168,8 +179,8 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
         match checkForDuplicates EpisodeIdentity (fun (ep: RepairEpisode) -> ep.EpisodeId) result.RepairEpisodes with
         | Error e -> Error e
         | Ok () ->
-            // Check transition duplicates by EpisodeId
-            match checkForDuplicates TransitionIdentity (fun (t: DiagnosticTransition) -> t.EpisodeId) result.Transitions with
+            // Check transition duplicates by (EpisodeId, ExactFingerprint)
+            match checkForDuplicates TransitionIdentity transitionIdentity result.Transitions with
             | Error e -> Error e
             | Ok () ->
                 // Build change-set map with duplicate detection
