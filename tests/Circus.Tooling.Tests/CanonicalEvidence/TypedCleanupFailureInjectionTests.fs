@@ -14,6 +14,7 @@ module Circus.Tooling.Tests.CanonicalEvidence.TypedCleanupFailureInjectionTests
 //   - Pre-replacement failures preserve the previous four-file snapshot byte-identically
 //   - Cleanup dependency failures and unexpected exceptions are converted into typed data
 //   - Active production entry points cannot bypass the typed cleanup boundary
+//   - Cleanup operation and staging path are normalized by the publication boundary
 //
 // Tests MUST call stageAndPublishSnapshotWithDependencies directly.
 // Tests MUST NOT duplicate production orchestration in test-local helpers.
@@ -88,6 +89,38 @@ let private publishAndCaptureSnapshot
         Expect.isTrue (File.Exists path) (sprintf "seeded snapshot is missing %s" name)
         name, Some(File.ReadAllBytes path))
     |> Map.ofList
+
+// -----------------------------------------------------------------------------
+// Shared assertion helper: verify typed cleanup failure payload
+// -----------------------------------------------------------------------------
+
+let private assertCleanupFailure
+    (expectedDetail: string)
+    (cleanupPaths: ResizeArray<string>)
+    outcome =
+
+    Expect.hasLength cleanupPaths 1
+        "cleanup must be called exactly once"
+
+    match outcome.CleanupFailure with
+    | Some failure ->
+        Expect.equal
+            failure.Operation
+            DeleteStagingDirectory
+            "cleanup operation must be exact"
+
+        Expect.equal
+            failure.Path
+            cleanupPaths.[0]
+            "cleanup failure must use the actual staging path"
+
+        Expect.equal
+            failure.Detail
+            expectedDetail
+            "cleanup detail must be preserved"
+
+    | None ->
+        failtest "expected cleanup failure"
 
 // -----------------------------------------------------------------------------
 // Test A — successful publication and successful cleanup
@@ -176,7 +209,7 @@ let testA_successfulPublicationAndSuccessfulCleanup =
 // Prove:
 //   - primary outcome remains Published
 //   - cleanup is CleanupFailed
-//   - normalized failure path equals actual staging path, not untrusted-path
+//   - normalized failure path equals actual staging path (NOT untrusted-path)
 //   - operation is DeleteStagingDirectory
 //   - detail is preserved
 //   - cleanup called once
@@ -227,10 +260,14 @@ let testB_successfulPublicationAndCleanupFailure =
             // Prove: cleanup failed
             match outcome.CleanupFailure with
             | Some cf ->
-                // Prove: cleanup failure path is whatever the dependency returned (may be untrusted)
-                // The implementation does NOT normalize the path - it passes through what the dependency returns
-                Expect.equal cf.Path untrustedPath
-                    "cleanup failure path should be the untrusted path returned by dependency"
+                // P0 FIX: The cleanup operation and staging path are normalized by the
+                // publication boundary, NOT by the injected dependency.
+                // This prevents untrusted paths from escaping the cleanup boundary.
+                Expect.notEqual cf.Path untrustedPath
+                    "dependency-controlled paths must not escape the cleanup boundary"
+
+                Expect.equal cf.Path cleanupPaths.[0]
+                    "cleanup failure must identify the actual staging path"
 
                 // Prove: operation is DeleteStagingDirectory
                 Expect.equal cf.Operation DeleteStagingDirectory
@@ -275,7 +312,8 @@ let testB_successfulPublicationAndCleanupFailure =
 //
 // Prove:
 //   - exact SnapshotStagedValidationFailed remains primary
-//   - cleanup failure remains independently present
+//   - cleanup failure carries typed DeleteStagingDirectory with actual staging path
+//   - cleanup detail is preserved
 //   - cleanup called once
 //   - replacement phase count is zero
 //   - live state is LiveSnapshotUnchanged
@@ -300,7 +338,7 @@ let testC_validationRejectionAndCleanupFailure =
                     DeleteDirectoryRecursively =
                         fun path ->
                             cleanupPaths.Add path
-                            // Return failure
+                            // Return failure with actual path (will be normalized)
                             Error {
                                 Operation = DeleteStagingDirectory
                                 Path = path
@@ -335,16 +373,11 @@ let testC_validationRejectionAndCleanupFailure =
             | Some (SnapshotStagedValidationFailed _) -> ()
             | other -> failwithf "Expected SnapshotStagedValidationFailed, got %A" other
 
-            // Prove: cleanup failure is present
-            Expect.isSome outcome.CleanupFailure
-                "cleanup failure should be present"
-
-            // Prove: cleanup called once
-            Expect.hasLength cleanupPaths 1
-                "cleanup dependency must be invoked exactly once"
+            // Prove: cleanup failure is present with typed payload
+            assertCleanupFailure "injected cleanup failure" cleanupPaths outcome
 
             // Prove: replacement phase count is zero
-            Expect.equal outcome.ReplacementInvocationCount 0
+            Expect.equal outcome.ReplacementPhaseInvocationCount 0
                 "replacement phase should not be invoked on validation failure"
 
             // Prove: live state is LiveSnapshotUnchanged
@@ -369,9 +402,9 @@ let testC_validationRejectionAndCleanupFailure =
 //   Some (fun _ -> Error "injected mutation rejection")
 //
 // Prove:
-//   - primary type is SnapshotMutationHookFailed
-//   - detail is exact
-//   - cleanup failure is present
+//   - primary type is SnapshotMutationHookFailed (NOT SnapshotStagingFailed)
+//   - detail is exact "injected mutation rejection"
+//   - cleanup failure is present with typed payload
 //   - cleanup called once
 //   - replacement phase count is zero
 //   - live state is LiveSnapshotUnchanged
@@ -416,23 +449,23 @@ let testD_mutationHookRejectionAndCleanupFailure =
                     fixture.CompatibilityProjection
                     (Some mutationHook)
 
-            // Prove: primary failure is SnapshotStagingFailed with mutation detail
+            // P0 FIX: Use SnapshotMutationHookFailed (not SnapshotStagingFailed)
+            // A mutation hook rejection is NOT a filesystem staging failure.
+            // Keeping these distinct is required for primary failure identification.
             match outcome.Failure with
-            | Some (SnapshotStagingFailed detail) ->
-                Expect.equal detail "injected mutation rejection"
-                    "mutation hook rejection detail should be preserved"
-            | other -> failwithf "Expected SnapshotStagingFailed, got %A" other
+            | Some (SnapshotMutationHookFailed detail) ->
+                Expect.equal
+                    detail
+                    "injected mutation rejection"
+                    "mutation rejection detail must be exact"
+            | other ->
+                failtestf "expected SnapshotMutationHookFailed, got %A" other
 
-            // Prove: cleanup failure is present
-            Expect.isSome outcome.CleanupFailure
-                "cleanup failure should be present"
-
-            // Prove: cleanup called once
-            Expect.hasLength cleanupPaths 1
-                "cleanup dependency must be invoked exactly once"
+            // Prove: cleanup failure is present with typed payload
+            assertCleanupFailure "injected cleanup failure" cleanupPaths outcome
 
             // Prove: replacement phase count is zero
-            Expect.equal outcome.ReplacementInvocationCount 0
+            Expect.equal outcome.ReplacementPhaseInvocationCount 0
                 "replacement phase should not be invoked when mutation hook fails"
 
             // Prove: live state is LiveSnapshotUnchanged
@@ -596,15 +629,14 @@ let testF_validationRejectionAndSuccessfulCleanup =
             if Directory.Exists tempDir then Directory.Delete(tempDir, true)
 
 // -----------------------------------------------------------------------------
-// Invariant tests
+// Invariant tests (nonvacuous)
 //
 // For every outcome produced by the cleanup suite:
-//   - Published_and_CleanupSucceeded: publicationSucceeded = true
-//   - all_other_combinations: publicationSucceeded = false
-//   - CleanupSucceeded: StagingState = StagingRemoved
-//   - CleanupFailed: StagingState = StagingMayRemain
-//   - Primary_Published: LiveSnapshotState = LiveSnapshotReplaced
-//   - pre_replacement_rejection: LiveSnapshotState = LiveSnapshotUnchanged
+//   - CleanupSucceeded: StagingState = StagingRemoved (nonvacuous)
+//   - CleanupFailed: StagingState = StagingMayRemain (nonvacuous)
+//   - Published and CleanupSucceeded: publicationSucceeded = true (nonvacuous)
+//   - Published and CleanupFailed: publicationSucceeded = false (nonvacuous)
+//   - Pre-replacement rejection: LiveSnapshotState = LiveSnapshotUnchanged (nonvacuous)
 // -----------------------------------------------------------------------------
 
 let invariantTests =
@@ -624,11 +656,12 @@ let invariantTests =
                         fixture.CompatibilityProjection
                         None
 
-                match outcome.CleanupFailure with
-                | None -> 
-                    Expect.equal outcome.StagingState StagingRemoved
-                        "CleanupSucceeded should imply StagingRemoved"
-                | Some _ -> ()
+                // Nonvacuous: first require the fixture produces CleanupSucceeded
+                Expect.isNone outcome.CleanupFailure
+                    "fixture must produce CleanupSucceeded"
+
+                Expect.equal outcome.StagingState StagingRemoved
+                    "CleanupSucceeded must imply StagingRemoved"
             finally
                 if Directory.Exists tempDir then Directory.Delete(tempDir, true)
 
@@ -656,11 +689,12 @@ let invariantTests =
                         fixture.CompatibilityProjection
                         None
 
-                match outcome.CleanupFailure with
-                | Some _ -> 
-                    Expect.equal outcome.StagingState StagingMayRemain
-                        "CleanupFailed should imply StagingMayRemain"
-                | None -> ()
+                // Nonvacuous: first require the fixture produces CleanupFailed
+                Expect.isSome outcome.CleanupFailure
+                    "fixture must produce CleanupFailed"
+
+                Expect.equal outcome.StagingState StagingMayRemain
+                    "CleanupFailed must imply StagingMayRemain"
             finally
                 if Directory.Exists tempDir then Directory.Delete(tempDir, true)
 
@@ -679,11 +713,15 @@ let invariantTests =
                         fixture.CompatibilityProjection
                         None
 
-                match outcome.Failure, outcome.CleanupFailure with
-                | None, None -> 
-                    Expect.isTrue (publicationSucceeded outcome)
-                        "Published and CleanupSucceeded should imply publicationSucceeded = true"
-                | _ -> ()
+                // Nonvacuous: first require the fixture produces Published and CleanupSucceeded
+                Expect.isNone outcome.Failure
+                    "fixture must produce a published primary outcome"
+
+                Expect.isNone outcome.CleanupFailure
+                    "fixture must produce successful cleanup"
+
+                Expect.isTrue (publicationSucceeded outcome)
+                    "Published plus CleanupSucceeded must be successful"
             finally
                 if Directory.Exists tempDir then Directory.Delete(tempDir, true)
 
@@ -711,11 +749,15 @@ let invariantTests =
                         fixture.CompatibilityProjection
                         None
 
-                match outcome.Failure, outcome.CleanupFailure with
-                | None, Some _ -> 
-                    Expect.isFalse (publicationSucceeded outcome)
-                        "Published and CleanupFailed should imply publicationSucceeded = false"
-                | _ -> ()
+                // Nonvacuous: first require the fixture produces Published and CleanupFailed
+                Expect.isNone outcome.Failure
+                    "fixture must produce Published (primary did not fail)"
+
+                Expect.isSome outcome.CleanupFailure
+                    "fixture must produce CleanupFailed"
+
+                Expect.isFalse (publicationSucceeded outcome)
+                    "Published plus CleanupFailed must imply publicationSucceeded = false"
             finally
                 if Directory.Exists tempDir then Directory.Delete(tempDir, true)
 
@@ -741,11 +783,12 @@ let invariantTests =
                         fixture.CompatibilityProjection
                         (Some mutationHook)
 
-                match outcome.Failure with
-                | Some _ ->
-                    Expect.equal outcome.LiveSnapshotState LiveSnapshotUnchanged
-                        "Pre-replacement rejection should imply LiveSnapshotUnchanged"
-                | None -> ()
+                // Nonvacuous: first require the fixture produces a rejection
+                Expect.isSome outcome.Failure
+                    "fixture must produce a rejection (pre-replacement failure)"
+
+                Expect.equal outcome.LiveSnapshotState LiveSnapshotUnchanged
+                    "Pre-replacement rejection must imply LiveSnapshotUnchanged"
             finally
                 if Directory.Exists tempDir then Directory.Delete(tempDir, true)
     ]

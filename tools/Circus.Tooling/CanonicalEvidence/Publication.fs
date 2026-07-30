@@ -148,6 +148,7 @@ type PublicationFailure =
     | SnapshotPreservationFailed of detail: string
     | SnapshotCleanupFailedAfterPublish of detail: string
     | SnapshotStagedValidationFailed of StagedSnapshotFailure list
+    | SnapshotMutationHookFailed of detail: string
 
 let publicationFailureToString (f: PublicationFailure) : string =
     match f with
@@ -161,6 +162,7 @@ let publicationFailureToString (f: PublicationFailure) : string =
     | SnapshotReplacementFailed d -> sprintf "atomic replacement failed: %s" d
     | SnapshotPreservationFailed d -> sprintf "previous snapshot preservation failed: %s" d
     | SnapshotCleanupFailedAfterPublish d -> sprintf "cleanup failed after publish: %s" d
+    | SnapshotMutationHookFailed d -> sprintf "mutation hook failed: %s" d
     | SnapshotStagedValidationFailed failures ->
         sprintf "staged validation failed: %s" (String.concat "; " (List.map stagedSnapshotFailureToString failures))
 
@@ -196,13 +198,27 @@ let defaultCleanupDependencies = {
 
 /// Invoke cleanup with exception safety: even if the dependency throws,
 /// the boundary returns a typed CleanupFailure and never propagates exceptions.
+/// The cleanup operation and staging path are normalized by the publication boundary,
+/// not by the injected dependency. This prevents untrusted paths from escaping.
 let invokeCleanup (deps: CleanupDependencies) (stagingPath: string) : CleanupFailure option =
     try
         match deps.DeleteDirectoryRecursively stagingPath with
-        | Ok () -> None
-        | Error cf -> Some cf
+        | Ok () ->
+            None
+        | Error failure ->
+            // Normalize: use the actual staging path from the publication boundary,
+            // not the potentially untrusted path from the dependency's Error.
+            Some {
+                Operation = DeleteStagingDirectory
+                Path = stagingPath
+                Detail = failure.Detail
+            }
     with ex ->
-        Some (mkCleanupFailure (stagingPath) (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)))
+        Some {
+            Operation = DeleteStagingDirectory
+            Path = stagingPath
+            Detail = sprintf "%s: %s" (ex.GetType().FullName) ex.Message
+        }
 
 /// Combine primary publication outcome with cleanup result into the final outcome.
 /// Uses LiveSnapshotState when replacement was attempted; otherwise LiveSnapshotUnchanged.
@@ -246,7 +262,7 @@ type PublicationOutcome = {
     /// Number of cleanup invocations (should be exactly 1 for correct behavior).
     CleanupInvocationCount: int
     /// Number of atomic replacement invocations (0 or 1).
-    ReplacementInvocationCount: int
+    ReplacementPhaseInvocationCount: int
 }
 
 /// Legacy field for backward compatibility: maps LiveSnapshotState to boolean.
@@ -432,7 +448,7 @@ let publishSnapshot (outputRoot: string) (records: CanonicalExecutionEvidence li
         Directory.Exists dir
 
     if not (ensureOutputDir outputRoot) then
-        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
+        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
     else
         let previousSnapshot = snapshotExistingFiles outputRoot snapshotFiles
         let guid = Guid.NewGuid().ToString("n")
@@ -466,7 +482,7 @@ let publishSnapshot (outputRoot: string) (records: CanonicalExecutionEvidence li
 
             if not validation.Valid then
                 safeDeleteDir stagingDir
-                { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotValidationFailed validation.Issues); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
+                { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotValidationFailed validation.Issues); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
             else
                 try
                     for f in snapshotFiles do
@@ -476,15 +492,15 @@ let publishSnapshot (outputRoot: string) (records: CanonicalExecutionEvidence li
                             if File.Exists dst then File.Delete dst
                             File.Move(src, dst)
                     safeDeleteDir stagingDir
-                    { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = None; CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 1 }
+                    { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = None; CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 1 }
                 with ex ->
                     let restored = restoreSnapshot outputRoot previousSnapshot
                     safeDeleteDir stagingDir
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 1 }
+                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 1 }
         with ex ->
             let restored = restoreSnapshot outputRoot previousSnapshot
             if Directory.Exists stagingDir then safeDeleteDir stagingDir
-            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
+            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
 
 /// Publish a canonical evidence snapshot using the exact provider-computed compatibility projection.
 /// This ensures single compatibility authority: the provider owns the projection bytes and
@@ -504,7 +520,7 @@ let publishSnapshotWithCompatibilityProjection
         Directory.Exists dir
 
     if not (ensureOutputDir outputRoot) then
-        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
+        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
     else
         let previousSnapshot = snapshotExistingFiles outputRoot snapshotFiles
         let guid = Guid.NewGuid().ToString("n")
@@ -551,15 +567,15 @@ let publishSnapshotWithCompatibilityProjection
             match parsedCompat with
             | Error detail ->
                 safeDeleteDir stagingDir
-                { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed detail); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
+                { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed detail); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
             | Ok parsed ->
                 // Verify commit/tree match aggregate
                 if parsed.TestedCommitOid <> aggregate.SubjectCommitOid then
                     safeDeleteDir stagingDir
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed(sprintf "commit mismatch: projection=%s aggregate=%s" parsed.TestedCommitOid aggregate.SubjectCommitOid)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
+                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed(sprintf "commit mismatch: projection=%s aggregate=%s" parsed.TestedCommitOid aggregate.SubjectCommitOid)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
                 elif parsed.TestedTreeOid <> aggregate.SubjectTreeOid then
                     safeDeleteDir stagingDir
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed(sprintf "tree mismatch: projection=%s aggregate=%s" parsed.TestedTreeOid aggregate.SubjectTreeOid)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
+                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed(sprintf "tree mismatch: projection=%s aggregate=%s" parsed.TestedTreeOid aggregate.SubjectTreeOid)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
                 else
                     // Validate snapshot
                     let snap = { Records = records; Aggregate = aggregate; Artifacts = []; Timestamp = "" }
@@ -567,7 +583,7 @@ let publishSnapshotWithCompatibilityProjection
 
                     if not validation.Valid then
                         safeDeleteDir stagingDir
-                        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotValidationFailed validation.Issues); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
+                        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotValidationFailed validation.Issues); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
                     else
                         try
                             for f in snapshotFiles do
@@ -577,17 +593,17 @@ let publishSnapshotWithCompatibilityProjection
                                     if File.Exists dst then File.Delete dst
                                     File.Move(src, dst)
                             safeDeleteDir stagingDir
-                            { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = None; CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 1 }
+                            { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = None; CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 1 }
                         with ex ->
                             let restored = restoreSnapshot outputRoot previousSnapshot
                             safeDeleteDir stagingDir
                             { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-                              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message))); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 1 }
+                              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message))); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 1 }
         with ex ->
             let restored = restoreSnapshot outputRoot previousSnapshot
             if Directory.Exists stagingDir then safeDeleteDir stagingDir
             { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message))); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
+              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message))); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
 
 // -----------------------------------------------------------------------------
 // Staged round-trip validation
@@ -951,7 +967,7 @@ let rec stageAndPublishSnapshotWithDependencies
         { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
           PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved;
           Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None;
-          CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
+          CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
     else
         // Create staging directory with unique name
         let guid = Guid.NewGuid().ToString("n")
@@ -997,8 +1013,8 @@ let rec stageAndPublishSnapshotWithDependencies
                     { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
                       PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
                       StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
-                      Failure = Some(SnapshotStagingFailed detail); CleanupFailure = cleanupFailure;
-                      CleanupInvocationCount = cleanupCallCount.Count; ReplacementInvocationCount = replacementCallCount.Count }
+                      Failure = Some(SnapshotMutationHookFailed detail); CleanupFailure = cleanupFailure;
+                      CleanupInvocationCount = cleanupCallCount.Count; ReplacementPhaseInvocationCount = replacementCallCount.Count }
                 | Result.Ok () ->
                     // Continue to validation phase
                     stageAndPublishValidationWithDeps dependencies stagingDir snapshotFiles recordsCount semanticSha
@@ -1016,7 +1032,7 @@ let rec stageAndPublishSnapshotWithDependencies
               StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
               Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)));
               CleanupFailure = cleanupFailure;
-              CleanupInvocationCount = cleanupCallCount.Count; ReplacementInvocationCount = replacementCallCount.Count }
+              CleanupInvocationCount = cleanupCallCount.Count; ReplacementPhaseInvocationCount = replacementCallCount.Count }
 
 /// Internal validation phase with dependency injection.
 /// Executes phases 3-10 with proper cleanup boundary.
@@ -1128,7 +1144,7 @@ and stageAndPublishValidationWithDeps
           StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
           Failure = Some(SnapshotStagedValidationFailed(List.ofSeq allFailures));
           CleanupFailure = cleanupFailure;
-          CleanupInvocationCount = cleanupCallCount.Count; ReplacementInvocationCount = replacementCallCount.Count }
+          CleanupInvocationCount = cleanupCallCount.Count; ReplacementPhaseInvocationCount = replacementCallCount.Count }
     else
         // Phase 10: Atomically replace live snapshot
         try
@@ -1155,7 +1171,7 @@ and stageAndPublishValidationWithDeps
               PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotReplaced;
               StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
               Failure = None; CleanupFailure = cleanupFailure;
-              CleanupInvocationCount = cleanupCallCount.Count; ReplacementInvocationCount = replacementCallCount.Count }
+              CleanupInvocationCount = cleanupCallCount.Count; ReplacementPhaseInvocationCount = replacementCallCount.Count }
         with ex ->
             // Rollback to previous snapshot
             let restored = restoreSnapshot outputRoot previousSnapshot
@@ -1167,7 +1183,7 @@ and stageAndPublishValidationWithDeps
               StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
               Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)));
               CleanupFailure = cleanupFailure;
-              CleanupInvocationCount = cleanupCallCount.Count; ReplacementInvocationCount = replacementCallCount.Count }
+              CleanupInvocationCount = cleanupCallCount.Count; ReplacementPhaseInvocationCount = replacementCallCount.Count }
 
 /// Publish a snapshot using the staged validation pipeline.
 /// This is the production entry point that uses staged round-trip validation
