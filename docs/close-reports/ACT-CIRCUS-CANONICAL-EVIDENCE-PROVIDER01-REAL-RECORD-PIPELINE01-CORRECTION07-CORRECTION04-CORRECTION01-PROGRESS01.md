@@ -32,7 +32,7 @@ StagedAggregateMutation
 ├── SubjectOidMutation           (2 tests)
 ├── DerivedFieldMutation         (14 tests) - Complete matrix
 ├── StagedRecordDivergence       (2 tests) - New, decisive
-├── MalformedRecordIsolation     (2 tests) - New, isolating
+├── MalformedRecordIsolation      (2 tests) - New, isolating
 └── SemanticHashSelfIntegrity   (1 test)
 ```
 
@@ -40,28 +40,60 @@ StagedAggregateMutation
 
 **Build Status**: ✅ SUCCESS
 ```
-dotnet build tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj
+dotnet build tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj -c Release
 Build succeeded.
     0 Warning(s)
     0 Error(s)
 ```
 
-### Test Execution Note
-
-Test execution encounters a testhost dependency issue with Expecto 11.1.0:
+**Test Execution**: ✅ ALL PASS (July 30, 2026 10:00 UTC+3)
 ```
-package: 'testhost', version: '18.3.0-release-26180-118'
-path: 'testhost.dll'
+dotnet tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests.dll --filter "StagedAggregateMutation"
+
+EXPECTO! 25 tests run in 00:00:00.5112255 for StagedAggregateMutation – 25 passed, 0 ignored, 0 failed, 0 errored. Success!
 ```
 
-This is an infrastructure issue, not a code issue. The code compiles correctly and the test logic is sound.
+**CanonicalEvidence Suite**: ✅ 61/61 PASS
+```
+dotnet tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests.dll --filter "CanonicalEvidence"
+
+EXPECTO! 61 tests run in 00:00:02.6789104 for CanonicalEvidence – 61 passed, 0 ignored, 0 failed, 0 errored. Success!
+```
+
+### Test Execution Method
+
+Tests are executed directly using the built DLL:
+```bash
+dotnet tests/Circus.Tooling.Tests/bin/Release/net10.0/Circus.Tooling.Tests.dll --filter "<TestGroup>"
+```
+
+This bypasses `dotnet test` and runs Expecto directly.
+
+### Patch Hygiene
+
+**git diff --check**: ✅ PASS
+```
+git diff --check b4389cb^..HEAD
+(no output - clean)
+```
 
 ### Files Changed
 
-- `tests/Circus.Tooling.Tests/CanonicalEvidence/StagedAggregateMutationTests.fs`
+- `tests/Circus.Tooling.Tests/CanonicalEvidence/StagedAggregateMutationTests.fs` (NEW)
+- `tests/Circus.Tooling.Tests/Circus.Tooling.Tests.fsproj` (updated for new test file)
+- `tools/Circus.Tooling/CanonicalEvidence/EvidenceRecords.fs` (added parseAggregateWithResult)
+- `tools/Circus.Tooling/CanonicalEvidence/Validation.fs` (malformed record isolation fix)
+- `tools/Circus.Tooling/Circus.Tooling.fsproj` (updated)
+- `tests/Circus.Tooling.Tests/CanonicalEvidence/AggregateStructuralEqualityTests.fs` (sorted record IDs)
+- `docs/close-reports/ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01-CORRECTION07-CORRECTION04-CORRECTION01-PROGRESS01.md` (this report)
+
+### Commits
+
+- `aa509e7` - fix(CanonicalEvidence): malformed record isolation + sorted record IDs
+- `4fa5c68` - chore: remove trailing whitespace from StagedAggregateMutationTests.fs
 
 ### ACT Classification
 
 - **Type**: Progress Report / Correction
 - **Authority**: ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01-CORRECTION07-CORRECTION04-CORRECTION01
-- **Status**: Code Complete, Awaiting Test Execution Infrastructure Fix
+- **Status**: Code Complete, Test Execution Verified
