@@ -107,6 +107,10 @@ let private renderEvidenceLoadErrors (errors: VerificationEvidenceLoadError list
                 sb.AppendLine(sprintf "  json_exception: %s:%d %s" src line msg) |> ignore
             | VerificationEvidenceParseError.WrongFieldType (src, line, field, expected, actual) ->
                 sb.AppendLine(sprintf "  wrong_field_type: %s:%d %s expected %s, got %s" src line field expected actual) |> ignore
+            | VerificationEvidenceParseError.ConflictingSemanticFields (src, line, primary, alias, val1, val2) ->
+                sb.AppendLine(sprintf "  conflicting_semantic_fields: %s:%d %s vs %s (values: %s vs %s)" src line primary alias val1 val2) |> ignore
+            | VerificationEvidenceParseError.DuplicateSemanticField (src, line, primary, alias) ->
+                sb.AppendLine(sprintf "  duplicate_semantic_field: %s:%d %s and %s" src line primary alias) |> ignore
     sb.ToString()
 
 /// Render engine failure in human-readable form for CLI output.

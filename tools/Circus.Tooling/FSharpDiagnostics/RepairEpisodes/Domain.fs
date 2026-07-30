@@ -340,6 +340,20 @@ type VerificationEvidenceParseError =
     | InvalidEvidenceId of source: string * lineNumber: int * value: string
     | PlaceholderEvidenceId of source: string * lineNumber: int * value: string
     | JsonException of source: string * lineNumber: int * message: string
+    /// Both canonical and alias fields are present with the same value.
+    | DuplicateSemanticField of
+        source: string *
+        lineNumber: int *
+        canonicalName: string *
+        aliasName: string
+    /// Both canonical and alias fields are present with different values.
+    | ConflictingSemanticFields of
+        source: string *
+        lineNumber: int *
+        canonicalName: string *
+        aliasName: string *
+        canonicalValue: string *
+        aliasValue: string
 
 /// Load errors for verification evidence files.
 type VerificationEvidenceLoadError =
