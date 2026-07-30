@@ -10,8 +10,11 @@ let categorizePath (declaration: ScopeDeclaration) path =
         RepositoryProtectedProductionAndMigrationRoots
         |> List.exists (fun pattern -> patternMatches pattern path)
 
-    if repositoryProtected
-       || declaration.GloballyProtected |> List.exists (fun pattern -> patternMatches pattern path) then
+    if
+        repositoryProtected
+        || declaration.GloballyProtected
+           |> List.exists (fun pattern -> patternMatches pattern path)
+    then
         GloballyProtected path
     elif declaration.ActOwned |> List.exists (fun pattern -> patternMatches pattern path) then
         ActOwned path

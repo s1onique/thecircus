@@ -24,40 +24,54 @@ let private qualificationsJson = "[]"
 let private declarationJson baseline globallyProtected actOwned rejectUndeclared protectProduction =
     "{"
     + "\"schema_version\":1,"
-    + "\"act_id\":" + JsonSerializer.Serialize actId + ","
+    + "\"act_id\":"
+    + JsonSerializer.Serialize actId
+    + ","
     + "\"act_classification\":\"P0\","
-    + "\"baseline_commit_oid\":" + JsonSerializer.Serialize baseline + ","
+    + "\"baseline_commit_oid\":"
+    + JsonSerializer.Serialize baseline
+    + ","
     + "\"purpose\":\"strict authority fixture\","
-    + "\"globally_protected\":" + stringArray globallyProtected + ","
-    + "\"act_owned\":" + stringArray actOwned + ","
-    + "\"prefix_qualifications\":" + qualificationsJson + ","
-    + "\"reject_undeclared_changes\":" + (if rejectUndeclared then "true" else "false") + ","
-    + "\"do_not_authorize_production_or_migration_paths\":" + (if protectProduction then "true" else "false")
+    + "\"globally_protected\":"
+    + stringArray globallyProtected
+    + ","
+    + "\"act_owned\":"
+    + stringArray actOwned
+    + ","
+    + "\"prefix_qualifications\":"
+    + qualificationsJson
+    + ","
+    + "\"reject_undeclared_changes\":"
+    + (if rejectUndeclared then "true" else "false")
+    + ","
+    + "\"do_not_authorize_production_or_migration_paths\":"
+    + (if protectProduction then "true" else "false")
     + "}\n"
 
 let private validDeclarationJson baseline owned =
-    declarationJson
-        baseline
-        RepositoryProtectedProductionAndMigrationRoots
-        owned
-        true
-        true
+    declarationJson baseline RepositoryProtectedProductionAndMigrationRoots owned true true
 
 let private pointerJson baseline declarationBlob declarationPath =
     "{"
     + "\"schema_version\":1,"
-    + "\"act_id\":" + JsonSerializer.Serialize actId + ","
-    + "\"declaration_path\":" + JsonSerializer.Serialize declarationPath + ","
-    + "\"declaration_blob_oid\":" + JsonSerializer.Serialize declarationBlob + ","
-    + "\"baseline_commit_oid\":" + JsonSerializer.Serialize baseline
+    + "\"act_id\":"
+    + JsonSerializer.Serialize actId
+    + ","
+    + "\"declaration_path\":"
+    + JsonSerializer.Serialize declarationPath
+    + ","
+    + "\"declaration_blob_oid\":"
+    + JsonSerializer.Serialize declarationBlob
+    + ","
+    + "\"baseline_commit_oid\":"
+    + JsonSerializer.Serialize baseline
     + "}\n"
 
-type private ScopeFixture = {
-    Repository: TempGitRepository
-    Baseline: string
-    Head: string
-    DeclarationBlob: string
-}
+type private ScopeFixture =
+    { Repository: TempGitRepository
+      Baseline: string
+      Head: string
+      DeclarationBlob: string }
 
 let private createFixture pointerTransform declarationTransform =
     let repository = new TempGitRepository("scope-authority")
@@ -65,8 +79,7 @@ let private createFixture pointerTransform declarationTransform =
     let baseline = repository.Commit("baseline")
     repository.Write("implementation.txt", "authority implementation\n")
 
-    let owned =
-        [ "implementation.txt"; scopePath; ActiveScopePointerPath ]
+    let owned = [ "implementation.txt"; scopePath; ActiveScopePointerPath ]
 
     let declaration = validDeclarationJson baseline owned |> declarationTransform
     repository.Write(scopePath, declaration)
@@ -103,23 +116,28 @@ let tests =
     testList
         "PostgresTestRunnerAuthorities.ScopeAuthorityProtectedScope"
         [ test "valid pointer and declaration bind to committed Git objects" {
-              withFixture
-                  id
-                  id
-                  (fun fixture ->
-                      match resolve fixture.Repository.Path fixture.Head None None with
-                      | Error error -> failtestf "valid scope failed: %s" (errorToString error)
-                      | Ok binding ->
-                          Expect.equal binding.EvaluatedCommitOid fixture.Head "H resolved exactly"
-                          Expect.equal binding.DeclarationBlobOid fixture.DeclarationBlob "declaration blob bound"
-                          Expect.equal binding.ActId actId "ACT IDs agree"
-                          Expect.equal binding.BaselineCommitOid fixture.Baseline "baseline bound"
-                          Expect.isTrue (binding.PointerBlobOid.Length = 40 || binding.PointerBlobOid.Length = 64) "pointer blob recorded")
+              withFixture id id (fun fixture ->
+                  match resolve fixture.Repository.Path fixture.Head None None with
+                  | Error error -> failtestf "valid scope failed: %s" (errorToString error)
+                  | Ok binding ->
+                      Expect.equal binding.EvaluatedCommitOid fixture.Head "H resolved exactly"
+                      Expect.equal binding.DeclarationBlobOid fixture.DeclarationBlob "declaration blob bound"
+                      Expect.equal binding.ActId actId "ACT IDs agree"
+                      Expect.equal binding.BaselineCommitOid fixture.Baseline "baseline bound"
+
+                      Expect.isTrue
+                          (binding.PointerBlobOid.Length = 40 || binding.PointerBlobOid.Length = 64)
+                          "pointer blob recorded")
           }
 
           test "wrong declaration blob fails closed" {
               withFixture
-                  (fun pointer -> pointer.Replace("\"declaration_blob_oid\":\"", "\"declaration_blob_oid\":\"0000000000000000000000000000000000000000" + "\",\"ignored\":\""))
+                  (fun pointer ->
+                      pointer.Replace(
+                          "\"declaration_blob_oid\":\"",
+                          "\"declaration_blob_oid\":\"0000000000000000000000000000000000000000"
+                          + "\",\"ignored\":\""
+                      ))
                   id
                   (fun fixture ->
                       // Use a syntactically valid pointer with a deliberately wrong OID.
@@ -161,24 +179,29 @@ let tests =
               expectError (resolve repository.Path head None None) "non-ancestor baseline"
           }
 
-          test "malformed JSON fails closed" {
-              expectError (parseActiveScopePointer "{not-json") "malformed pointer"
-          }
+          test "malformed JSON fails closed" { expectError (parseActiveScopePointer "{not-json") "malformed pointer" }
 
           test "duplicate JSON property fails closed" {
               let oid = String.replicate 40 "a"
+
               let raw =
                   "{\"schema_version\":1,\"schema_version\":1,\"act_id\":\"A\","
-                  + "\"declaration_path\":\"scope.json\",\"declaration_blob_oid\":\"" + oid
-                  + "\",\"baseline_commit_oid\":\"" + oid + "\"}"
+                  + "\"declaration_path\":\"scope.json\",\"declaration_blob_oid\":\""
+                  + oid
+                  + "\",\"baseline_commit_oid\":\""
+                  + oid
+                  + "\"}"
+
               expectError (parseActiveScopePointer raw) "duplicate property"
           }
 
           test "non-string array item fails closed" {
               let baseline = String.replicate 40 "a"
+
               let raw =
                   (validDeclarationJson baseline [ "scope.json" ])
                       .Replace("\"act_owned\":[\"scope.json\"]", "\"act_owned\":[\"scope.json\",7]")
+
               expectError (parseScopeDeclaration raw) "non-string array item"
           }
 
@@ -190,21 +213,19 @@ let tests =
 
           test "missing mandatory Boolean fails closed" {
               let baseline = String.replicate 40 "a"
+
               let raw =
-                  (validDeclarationJson baseline [ "scope.json" ])
-                      .Replace("\"reject_undeclared_changes\":true,", "")
+                  (validDeclarationJson baseline [ "scope.json" ]).Replace("\"reject_undeclared_changes\":true,", "")
+
               expectError (parseScopeDeclaration raw) "missing mandatory Boolean"
           }
 
           test "false mandatory Boolean fails closed" {
               let baseline = String.replicate 40 "a"
+
               let raw =
-                  declarationJson
-                      baseline
-                      RepositoryProtectedProductionAndMigrationRoots
-                      [ "scope.json" ]
-                      false
-                      true
+                  declarationJson baseline RepositoryProtectedProductionAndMigrationRoots [ "scope.json" ] false true
+
               expectError (parseScopeDeclaration raw) "false mandatory Boolean"
           }
 
@@ -231,7 +252,10 @@ let tests =
 
           test "production path cannot be authorized" {
               let baseline = String.replicate 40 "a"
-              let raw = validDeclarationJson baseline [ "src/Circus.Persistence.Postgres/JournalSql.fs" ]
+
+              let raw =
+                  validDeclarationJson baseline [ "src/Circus.Persistence.Postgres/JournalSql.fs" ]
+
               expectError (parseScopeDeclaration raw) "production ownership"
           }
 
@@ -242,13 +266,10 @@ let tests =
           }
 
           test "CLI and pointer declaration disagreement fails ambiguous" {
-              withFixture
-                  id
-                  id
-                  (fun fixture ->
-                      expectError
-                          (resolve fixture.Repository.Path fixture.Head (Some "different-scope.json") None)
-                          "CLI/pointer disagreement")
+              withFixture id id (fun fixture ->
+                  expectError
+                      (resolve fixture.Repository.Path fixture.Head (Some "different-scope.json") None)
+                      "CLI/pointer disagreement")
           }
 
           test "missing tracked active scope fails closed even with CLI declaration" {

@@ -137,6 +137,7 @@ let compareTransitionGroupFacts (a: TransitionGroupFacts) (b: TransitionGroupFac
                 | None, Some _ -> 1
                 | Some _, None -> -1
                 | Some xl, Some yl -> compare xl yl
+
             match cmpLine a.EarliestLine b.EarliestLine with
             | 0 ->
                 // 4. Path ordinal ascending
@@ -170,13 +171,7 @@ let deriveParserCascadeProse (episodeKey: string) (afterCommitOid: string) (gf: 
 // -----------------------------------------------------------------------------
 
 /// Closed set of parser-family diagnostic codes per ACT specification.
-let parserDiagnosticCodes =
-    Set.ofList [
-        "FS0010"
-        "FS0603"
-        "FS1156"
-        "FS3118"
-    ]
+let parserDiagnosticCodes = Set.ofList [ "FS0010"; "FS0603"; "FS1156"; "FS3118" ]
 
 let isParserDiagnostic (code: string) : bool = Set.contains code parserDiagnosticCodes
 

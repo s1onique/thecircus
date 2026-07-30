@@ -16,40 +16,50 @@ open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Paths
 // Capture loading and command-contract fingerprinting
 // =============================================================================
 
-type CaptureSummary = {
-    CaptureId: string
-    CaptureRelativeDir: string
-    Manifest: CaptureManifest
-    Occurrences: DiagnosticOccurrence list
-    BinlogReplayFailure: string option
-    LegacyParseResult: LegacyParseResult option
-    RawArtifactHashes: Map<string, string>
-}
+type CaptureSummary =
+    { CaptureId: string
+      CaptureRelativeDir: string
+      Manifest: CaptureManifest
+      Occurrences: DiagnosticOccurrence list
+      BinlogReplayFailure: string option
+      LegacyParseResult: LegacyParseResult option
+      RawArtifactHashes: Map<string, string> }
 
 /// Compute a deterministic command contract fingerprint from evidence-backed
 /// fields.  Unknown fields cause the contract to be ``unknown``.
 let commandContract (m: CaptureManifest) : string =
     let missing =
-        [
-            if m.Command.IsNone then yield "command"
-            if m.WorkingDirectory.IsNone then yield "working_directory"
-            if m.DotnetSdkVersion.IsNone then yield "dotnet_sdk_version"
-            if m.MsbuildVersion.IsNone then yield "msbuild_version"
-            if m.FsharpCompilerVersion.IsNone then yield "fsharp_compiler_version"
-            if m.OperatingSystem.IsNone then yield "operating_system"
-            if m.Architecture.IsNone then yield "architecture"
-            if m.Culture.IsNone then yield "culture"
-        ]
+        [ if m.Command.IsNone then
+              yield "command"
+          if m.WorkingDirectory.IsNone then
+              yield "working_directory"
+          if m.DotnetSdkVersion.IsNone then
+              yield "dotnet_sdk_version"
+          if m.MsbuildVersion.IsNone then
+              yield "msbuild_version"
+          if m.FsharpCompilerVersion.IsNone then
+              yield "fsharp_compiler_version"
+          if m.OperatingSystem.IsNone then
+              yield "operating_system"
+          if m.Architecture.IsNone then
+              yield "architecture"
+          if m.Culture.IsNone then
+              yield "culture" ]
+
     if not (List.isEmpty missing) then
         "unknown:" + (String.concat "," missing)
     else
         // The contract is constructed by hashing the normalised concatenation
         // of fields using length-prefixed framing.
         let sb = StringBuilder()
+
         let prefix (s: string) =
-            sb.Append(s.Length.ToString("x8", System.Globalization.CultureInfo.InvariantCulture)) |> ignore
+            sb.Append(s.Length.ToString("x8", System.Globalization.CultureInfo.InvariantCulture))
+            |> ignore
+
             sb.Append(':') |> ignore
             sb.Append s |> ignore
+
         prefix "command-contract-v1"
         prefix (Option.get m.Command)
         prefix (canonicalise (Option.get m.WorkingDirectory))
@@ -70,10 +80,13 @@ let private rawArtifactHashes
     : Map<string, string> =
     let captureFullDir = repoRelative repoRoot captureRelativeDir
     let dict = System.Collections.Generic.Dictionary<string, string>()
+
     for raw in m.RawArtifacts do
         let p = repoRelative repoRoot (captureRelativeDir + "/" + raw)
+
         if File.Exists p then
             dict.[raw] <- sha256OfFile p
+
     dict |> Seq.toList |> List.map (fun kv -> kv.Key, kv.Value) |> Map.ofList
 
 /// Load occurrence artifacts declared in the capture manifest.
@@ -85,12 +98,16 @@ let private loadCaptureOccurrences
     (manifest: CaptureManifest)
     : DiagnosticOccurrence list =
     let captureRelativeDir = rawSubdir + "/" + captureId
-    let mutable occurrences : DiagnosticOccurrence list = []
+    let mutable occurrences: DiagnosticOccurrence list = []
+
     for rawArtifact in manifest.RawArtifacts do
         // Look for occurrence artifacts by extension
         let fullPath = repoRelative repoRoot (captureRelativeDir + "/" + rawArtifact)
-        if rawArtifact.EndsWith("-occurrences.jsonl", System.StringComparison.OrdinalIgnoreCase)
-           && File.Exists fullPath then
+
+        if
+            rawArtifact.EndsWith("-occurrences.jsonl", System.StringComparison.OrdinalIgnoreCase)
+            && File.Exists fullPath
+        then
             match readOccurrences fullPath with
             | Result.Ok occs ->
                 // Filter to only occurrences for this capture
@@ -100,21 +117,22 @@ let private loadCaptureOccurrences
                 // If we can't read the occurrence file, continue without occurrences
                 // The failure will be caught by the binding layer
                 ()
+
     occurrences
 
 /// Load one capture manifest by its capture id.  Returns ``None`` when the
 /// capture directory or its manifest is absent.
-let tryLoadCapture
-    (repoRoot: string)
-    (captureId: string)
-    : CaptureSummary option =
+let tryLoadCapture (repoRoot: string) (captureId: string) : CaptureSummary option =
     let captureRelativeDir = rawSubdir + "/" + captureId
     let manifestPath = repoRelative repoRoot (captureRelativeDir + "/capture.json")
-    if not (File.Exists manifestPath) then None
+
+    if not (File.Exists manifestPath) then
+        None
     else
         let manifest = readCaptureManifest manifestPath
         let hashes = rawArtifactHashes repoRoot captureRelativeDir manifest
         let occurrences = loadCaptureOccurrences repoRoot captureId manifest
+
         Some
             { CaptureId = captureId
               CaptureRelativeDir = captureRelativeDir
@@ -128,20 +146,18 @@ let tryLoadCapture
 // Declaration IO
 // =============================================================================
 
-let private loadDeclarationsFromDir
-    (repoRoot: string)
-    (dir: string)
-    : (string * string) list =
+let private loadDeclarationsFromDir (repoRoot: string) (dir: string) : (string * string) list =
     let fullDir = repoRelative repoRoot dir
-    if not (Directory.Exists fullDir) then []
+
+    if not (Directory.Exists fullDir) then
+        []
     else
         Directory.EnumerateFiles(fullDir, "*.json", SearchOption.TopDirectoryOnly)
         |> Seq.toList
         |> List.map (fun p -> p, File.ReadAllText p)
 
 let enumerateDeclarationPaths (repoRoot: string) : string list =
-    Directory.EnumerateFiles(repoRelative repoRoot declarationDirCanonicalPath,
-                              "*.json", SearchOption.TopDirectoryOnly)
+    Directory.EnumerateFiles(repoRelative repoRoot declarationDirCanonicalPath, "*.json", SearchOption.TopDirectoryOnly)
     |> Seq.toList
     |> List.map (fun p ->
         p.Substring(repoRoot.Length).TrimStart('/', '\\')
@@ -149,8 +165,7 @@ let enumerateDeclarationPaths (repoRoot: string) : string list =
         |> Circus.Tooling.FSharpDiagnostics.Paths.canonicalise)
     |> List.sort
 
-let readDeclaration (path: string) : string =
-    File.ReadAllText path
+let readDeclaration (path: string) : string = File.ReadAllText path
 
 /// Compute the canonical episode identity SHA-256 over a length-prefixed
 /// encoding of the binding inputs (excluding notes, generation time, etc.).
@@ -162,10 +177,14 @@ let computeEpisodeId
     (changeSetId: string)
     : string =
     let sb = StringBuilder()
+
     let prefix (s: string) =
-        sb.Append(s.Length.ToString("x8", System.Globalization.CultureInfo.InvariantCulture)) |> ignore
+        sb.Append(s.Length.ToString("x8", System.Globalization.CultureInfo.InvariantCulture))
+        |> ignore
+
         sb.Append(':') |> ignore
         sb.Append s |> ignore
+
     prefix RepairEpisodeSchemaVersion
     prefix beforeCaptureId
     prefix afterCaptureId

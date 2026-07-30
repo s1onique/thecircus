@@ -1,8 +1,7 @@
 module Circus.Tooling.FSharpDiagnostics.Paths
 
 /// Convert any path separator to forward slash.
-let toPosix (path: string) : string =
-    path.Replace('\\', '/')
+let toPosix (path: string) : string = path.Replace('\\', '/')
 
 /// Extract the filename from a repository-relative posix path.
 let filenameOf (path: string) : string =
@@ -20,18 +19,23 @@ let extensionOf (path: string) : string =
 let canonicalise (relativePath: string) : string =
     let pieces =
         (toPosix relativePath).Split([| '/' |], System.StringSplitOptions.RemoveEmptyEntries)
+
     let stack = System.Collections.Generic.Stack<string>()
+
     for piece in pieces do
-        if piece = "." then ()
+        if piece = "." then
+            ()
         elif piece = ".." then
-            if stack.Count > 0 then stack.Pop() |> ignore
-        else stack.Push piece
+            if stack.Count > 0 then
+                stack.Pop() |> ignore
+        else
+            stack.Push piece
+
     let ordered = stack.ToArray() |> Array.rev
     String.concat "/" ordered
 
 /// True when the path is absolute (uses System.IO.Path.IsPathRooted).
-let isAbsolute (path: string) : bool =
-    System.IO.Path.IsPathRooted path
+let isAbsolute (path: string) : bool = System.IO.Path.IsPathRooted path
 
 /// Repository-relative root for the tracked F# diagnostics corpus.
 let canonicalRootRelative = "factory/evidence/fsharp-diagnostics"
@@ -116,21 +120,19 @@ let duplicatesCanonicalPath =
 let summaryFile = "corpus-summary-v1.json"
 
 /// Corpus-summary path relative to the canonical corpus root.
-let summaryCorpusRelativePath =
-    normalizedCorpusRelativeSubdir + "/" + summaryFile
+let summaryCorpusRelativePath = normalizedCorpusRelativeSubdir + "/" + summaryFile
 
 /// Corpus-summary canonical path relative to the repository root.
-let summaryCanonicalPath =
-    canonicalRootRelative + "/" + summaryCorpusRelativePath
+let summaryCanonicalPath = canonicalRootRelative + "/" + summaryCorpusRelativePath
 
 /// Combine repository root with a repository-relative posix path.
 let repoRelative (repoRoot: string) (relativePath: string) : string =
-    System.IO.Path.GetFullPath(
-        System.IO.Path.Combine(repoRoot, (toPosix relativePath).TrimStart('/')))
+    System.IO.Path.GetFullPath(System.IO.Path.Combine(repoRoot, (toPosix relativePath).TrimStart('/')))
 
 /// True when `relative` lives inside the canonical corpus root.
 let isUnderCanonicalCorpus (relative: string) : bool =
     let n = toPosix relative
+
     n = CanonicalCorpusRoot
     || n.StartsWith(CanonicalCorpusRoot + "/", System.StringComparison.Ordinal)
 
@@ -140,5 +142,6 @@ let FactoryScratchRoot = ".factory"
 /// True when `relative` lives inside the factory scratch root.
 let isUnderFactoryScratch (relative: string) : bool =
     let n = toPosix relative
+
     n = FactoryScratchRoot
     || n.StartsWith(FactoryScratchRoot + "/", System.StringComparison.Ordinal)

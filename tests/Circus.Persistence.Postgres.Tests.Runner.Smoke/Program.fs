@@ -34,4 +34,5 @@ let main (args: string[]) =
                 [ testSequenced PostgresTestRunnerExitCodeTests.exitCodeTests
                   testSequenced SourceInventory.runnerInventoryTests ]
         )
+
     PostgresTestRunner.runWith Tests.runTestsWithCLIArgs args allTests

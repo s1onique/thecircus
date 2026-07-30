@@ -10,8 +10,7 @@ type ExitClass =
 
 /// The host architecture we currently support. The F# program fails closed
 /// when the host reports anything else.
-type SupportedArchitecture =
-    | LinuxX64
+type SupportedArchitecture = | LinuxX64
 
 /// Linux distributions we treat as supported for the bootstrap cycle.
 type SupportedDistribution =
@@ -25,7 +24,7 @@ type Shell =
     | Bash
     | Zsh
 
-    member this.ShellName : string =
+    member this.ShellName: string =
         match this with
         | Bash -> "bash"
         | Zsh -> "zsh"
@@ -54,12 +53,10 @@ type ToolVersion = private { Value: string }
 
 module ToolVersion =
     let tryParse (raw: string) : ToolVersion option =
-        if System.Text.RegularExpressions.Regex.IsMatch(
-            raw,
-            "^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.\-]+)?$"
-          )
-        then Some { Value = raw }
-        else None
+        if System.Text.RegularExpressions.Regex.IsMatch(raw, "^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.\-]+)?$") then
+            Some { Value = raw }
+        else
+            None
 
     let unsafeParse (raw: string) : ToolVersion =
         match tryParse raw with
@@ -98,28 +95,25 @@ and DevHostFailure =
     | MissingAuthorityFile of string
     | MalformedAuthorityFile of string
     | MissingTool of Tool
-    | WrongToolVersion of Tool * expected:string * actual:string
-    | DownloadFailure of uri:string * detail:string
-    | IntegrityFailure of path:string * expected:string * actual:string
-    | ExtractionFailure of path:string * detail:string
-    | ProcessStartFailure of command:string * detail:string
-    | ProcessExitFailure of command:string * exitCode:int * stderr:string
+    | WrongToolVersion of Tool * expected: string * actual: string
+    | DownloadFailure of uri: string * detail: string
+    | IntegrityFailure of path: string * expected: string * actual: string
+    | ExtractionFailure of path: string * detail: string
+    | ProcessStartFailure of command: string * detail: string
+    | ProcessExitFailure of command: string * exitCode: int * stderr: string
     | DockerPermissionDenied
-    | ProfileUpdateFailure of path:string * detail:string
+    | ProfileUpdateFailure of path: string * detail: string
     | VerificationFailure of string
-    | LayoutWrong of path:string * detail:string
+    | LayoutWrong of path: string * detail: string
 
 /// Result of a single named check. Caller decides what detail to surface.
-type CheckResult = {
-    Name: string
-    Status: CheckStatus
-    Detail: string option
-}
+type CheckResult =
+    { Name: string
+      Status: CheckStatus
+      Detail: string option }
 
 /// Aggregate outcome of a list of checks. Used by both Doctor and Verify.
-type AggregateOutcome = {
-    Checks: CheckResult list
-}
+type AggregateOutcome = { Checks: CheckResult list }
 
 /// True when every check Passed or was intentionally Skipped.
 let aggregateIsPassing (checks: CheckResult list) : bool =
@@ -141,22 +135,17 @@ let renderFailure (f: DevHostFailure) : string =
     | MissingAuthorityFile p -> sprintf "missing authority file '%s'" p
     | MalformedAuthorityFile p -> sprintf "malformed authority file '%s'" p
     | MissingTool t -> sprintf "missing tool '%A'" t
-    | WrongToolVersion (t, expected, actual) ->
-        sprintf "tool '%A' wrong version: expected %s, got %s" t expected actual
-    | DownloadFailure (uri, detail) -> sprintf "download '%s' failed: %s" uri detail
-    | IntegrityFailure (path, expected, actual) ->
+    | WrongToolVersion(t, expected, actual) -> sprintf "tool '%A' wrong version: expected %s, got %s" t expected actual
+    | DownloadFailure(uri, detail) -> sprintf "download '%s' failed: %s" uri detail
+    | IntegrityFailure(path, expected, actual) ->
         sprintf "integrity mismatch for '%s': expected %s, got %s" path expected actual
-    | ExtractionFailure (path, detail) -> sprintf "extract '%s' failed: %s" path detail
-    | ProcessStartFailure (cmd, detail) ->
-        sprintf "cannot start process '%s': %s" cmd detail
-    | ProcessExitFailure (cmd, code, stderr) ->
-        sprintf "process '%s' exit %d: %s" cmd code stderr
+    | ExtractionFailure(path, detail) -> sprintf "extract '%s' failed: %s" path detail
+    | ProcessStartFailure(cmd, detail) -> sprintf "cannot start process '%s': %s" cmd detail
+    | ProcessExitFailure(cmd, code, stderr) -> sprintf "process '%s' exit %d: %s" cmd code stderr
     | DockerPermissionDenied -> "docker daemon not directly accessible"
-    | ProfileUpdateFailure (path, detail) ->
-        sprintf "profile '%s' update failed: %s" path detail
+    | ProfileUpdateFailure(path, detail) -> sprintf "profile '%s' update failed: %s" path detail
     | VerificationFailure detail -> sprintf "verification failed: %s" detail
-    | LayoutWrong (path, detail) ->
-        sprintf "unexpected layout at '%s': %s" path detail
+    | LayoutWrong(path, detail) -> sprintf "unexpected layout at '%s': %s" path detail
 
 /// Map an `AggregateOutcome` to its `ExitClass`.
 let classify (outcome: AggregateOutcome) : ExitClass =

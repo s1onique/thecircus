@@ -195,12 +195,14 @@ let private hermeticDependencies () : CanonicalEvidenceDependencies =
                 let path = defaultArg declarationPath "scope.json"
                 let pointerBlob = String.replicate 40 "a"
                 let declarationBlob = String.replicate 40 "b"
+
                 let pointer: ActiveScopePointer =
                     { SchemaVersion = 1
                       ActId = "ACT-TEST"
                       DeclarationPath = path
                       DeclarationBlobOid = declarationBlob
                       BaselineCommitOid = identity.CommitOid }
+
                 let declaration: ScopeDeclaration =
                     { SchemaVersion = 1
                       ActId = "ACT-TEST"

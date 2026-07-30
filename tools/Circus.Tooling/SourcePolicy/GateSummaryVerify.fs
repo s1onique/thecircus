@@ -28,50 +28,43 @@ open System.Text.RegularExpressions
 open Circus.Tooling.SourcePolicy.GateSummary
 
 let private requiredTopLevelFields =
-    [
-        "schema_version"
-        "generated_at"
-        "tool"
-        "overall_status"
-        "checks_total"
-        "checks_passed"
-        "checks_failed"
-        "violations_total"
-        "checks_skipped"
-        "checks_unavailable"
-        "checks"
-        "tested_tree_oid"
-    ]
+    [ "schema_version"
+      "generated_at"
+      "tool"
+      "overall_status"
+      "checks_total"
+      "checks_passed"
+      "checks_failed"
+      "violations_total"
+      "checks_skipped"
+      "checks_unavailable"
+      "checks"
+      "tested_tree_oid" ]
 
-let private requiredCheckFields =
-    [ "name"; "status"; "exit_code"; "command" ]
+let private requiredCheckFields = [ "name"; "status"; "exit_code"; "command" ]
 
-let private validOverallStatuses =
-    set [ "pass"; "fail"; "unavailable" ]
+let private validOverallStatuses = set [ "pass"; "fail"; "unavailable" ]
 
-let private validCheckStatuses =
-    set [ "pass"; "fail"; "skip"; "unavailable" ]
+let private validCheckStatuses = set [ "pass"; "fail"; "skip"; "unavailable" ]
 
-let private treeOidPattern =
-    Regex("^[0-9a-f]{40}$", RegexOptions.Compiled)
+let private treeOidPattern = Regex("^[0-9a-f]{40}$", RegexOptions.Compiled)
 
 /// Outcome of validating a single document.  Carries both the
 /// machine-readable verdict (for the gate runner) and the human-readable
 /// summary (for the operator).
-type VerifyResult = {
-    Path: string
-    SchemaVersion: int
-    OverallStatus: string
-    ChecksTotal: int
-    ChecksPassed: int
-    ChecksFailed: int
-    ViolationsTotal: int
-    ChecksSkipped: int
-    ChecksUnavailable: int
-    Checks: CheckStatus list
-    TestedTreeOid: string
-    FailureReasons: string list
-}
+type VerifyResult =
+    { Path: string
+      SchemaVersion: int
+      OverallStatus: string
+      ChecksTotal: int
+      ChecksPassed: int
+      ChecksFailed: int
+      ViolationsTotal: int
+      ChecksSkipped: int
+      ChecksUnavailable: int
+      Checks: CheckStatus list
+      TestedTreeOid: string
+      FailureReasons: string list }
 
 /// Result of a tree-binding check: either the artefact OID matches
 /// the committed tree, or the binding cannot be verified (git
@@ -87,14 +80,18 @@ let private parseJson (raw: string) : JsonDocument option =
     opts.AllowTrailingCommas <- false
     opts.CommentHandling <- JsonCommentHandling.Disallow
     opts.MaxDepth <- 64
-    try JsonDocument.Parse(raw, opts) |> Some
-    with _ -> None
+
+    try
+        JsonDocument.Parse(raw, opts) |> Some
+    with _ ->
+        None
 
 let private readInt (root: JsonElement) (name: string) (failures: ResizeArray<string>) : int option =
     if root.ValueKind <> JsonValueKind.Object then
         None
     else
         let mutable found = Unchecked.defaultof<JsonElement>
+
         if root.TryGetProperty(name, &found) then
             if found.ValueKind = JsonValueKind.Number then
                 try
@@ -114,8 +111,10 @@ let private readString (root: JsonElement) (name: string) (failures: ResizeArray
         None
     else
         let mutable found = Unchecked.defaultof<JsonElement>
+
         if root.TryGetProperty(name, &found) then
-            if found.ValueKind = JsonValueKind.String then Some(found.GetString())
+            if found.ValueKind = JsonValueKind.String then
+                Some(found.GetString())
             else
                 failures.Add(sprintf "field %s must be a string, got %s" name (found.ValueKind.ToString()))
                 None
@@ -124,11 +123,14 @@ let private readString (root: JsonElement) (name: string) (failures: ResizeArray
             None
 
 let private readArray (root: JsonElement) (name: string) (failures: ResizeArray<string>) : JsonElement option =
-    if root.ValueKind <> JsonValueKind.Object then None
+    if root.ValueKind <> JsonValueKind.Object then
+        None
     else
         let mutable found = Unchecked.defaultof<JsonElement>
+
         if root.TryGetProperty(name, &found) then
-            if found.ValueKind = JsonValueKind.Array then Some found
+            if found.ValueKind = JsonValueKind.Array then
+                Some found
             else
                 failures.Add(sprintf "field %s must be an array, got %s" name (found.ValueKind.ToString()))
                 None
@@ -137,7 +139,8 @@ let private readArray (root: JsonElement) (name: string) (failures: ResizeArray<
             None
 
 let private hasProperty (obj: JsonElement) (name: string) : bool =
-    if obj.ValueKind <> JsonValueKind.Object then false
+    if obj.ValueKind <> JsonValueKind.Object then
+        false
     else
         let mutable found = Unchecked.defaultof<JsonElement>
         obj.TryGetProperty(name, &found)
@@ -147,6 +150,7 @@ let private parseCheck (el: JsonElement) : Result<CheckStatus, string> =
         Error "checks[i] must be a JSON object"
     else
         let failures = ResizeArray<string>()
+
         for f in requiredCheckFields do
             if not (hasProperty el f) then
                 failures.Add(sprintf "check is missing required field: %s" f)
@@ -170,7 +174,11 @@ let private parseCheck (el: JsonElement) : Result<CheckStatus, string> =
                 else if String.IsNullOrWhiteSpace n then
                     Error "checks[i].name must be non-empty"
                 else
-                    Ok { Name = n; Status = s; ExitCode = x; Command = c }
+                    Ok
+                        { Name = n
+                          Status = s
+                          ExitCode = x
+                          Command = c }
             | _ -> Error "internal: failed to collect check fields"
 
 /// Parse and validate a gate-summary document.
@@ -179,16 +187,29 @@ let validate (path: string) : Result<VerifyResult, string> =
         Error(sprintf "gate-summary not found at %s" path)
     else
         let raw = File.ReadAllText path
+
         match parseJson raw with
         | None -> Error "gate-summary.json is not valid JSON"
         | Some d ->
             let root = d.RootElement
             let failures = ResizeArray<string>()
+
             if root.ValueKind <> JsonValueKind.Object then
                 failures.Add("root must be a JSON object")
             else
                 // Reject the PascalCase twin names outright.
-                for forbidden in [ "SchemaVersion"; "OverallStatus"; "ChecksTotal"; "ChecksPassed"; "ChecksFailed"; "ChecksSkipped"; "ChecksUnavailable"; "TestedTreeOid"; "GeneratedAt"; "Checks"; "ViolationsTotal" ] do
+                for forbidden in
+                    [ "SchemaVersion"
+                      "OverallStatus"
+                      "ChecksTotal"
+                      "ChecksPassed"
+                      "ChecksFailed"
+                      "ChecksSkipped"
+                      "ChecksUnavailable"
+                      "TestedTreeOid"
+                      "GeneratedAt"
+                      "Checks"
+                      "ViolationsTotal" ] do
                     if hasProperty root forbidden then
                         failures.Add(sprintf "root must not carry PascalCase field: %s (use snake_case)" forbidden)
 
@@ -224,6 +245,7 @@ let validate (path: string) : Result<VerifyResult, string> =
 
             // Check-array parsing
             let parsedChecks = ResizeArray<CheckStatus>()
+
             (match checksArr with
              | Some v ->
                  if v.GetArrayLength() = 0 then
@@ -239,44 +261,71 @@ let validate (path: string) : Result<VerifyResult, string> =
             // *checks*, not violations.  We additionally require
             // that ``violations_total`` is non-negative.
             (match total, passed, failed, skipped, unavail with
-             | Some total, Some p, Some f, Some s, Some u
-                 when (p + f + s + u) <> total ->
-                 failures.Add(sprintf "count inconsistency: total=%d, sum(passed+failed+skipped+unavailable)=%d"
-                    total (p + f + s + u))
+             | Some total, Some p, Some f, Some s, Some u when (p + f + s + u) <> total ->
+                 failures.Add(
+                     sprintf
+                         "count inconsistency: total=%d, sum(passed+failed+skipped+unavailable)=%d"
+                         total
+                         (p + f + s + u)
+                 )
              | _ -> ())
 
             (match total, checksArr with
              | Some total, Some v when v.GetArrayLength() <> total ->
-                 failures.Add(sprintf "checks_total=%d does not match checks array length=%d"
-                    total (v.GetArrayLength()))
+                 failures.Add(
+                     sprintf "checks_total=%d does not match checks array length=%d" total (v.GetArrayLength())
+                 )
              | _ -> ())
 
             (match overall, failed, unavail with
-             | Some "pass", Some f, _ when f > 0 ->
-                 failures.Add "overall_status=pass contradicts failed > 0"
-             | Some "pass", _, Some u when u > 0 ->
-                 failures.Add "overall_status=pass contradicts unavailable > 0"
+             | Some "pass", Some f, _ when f > 0 -> failures.Add "overall_status=pass contradicts failed > 0"
+             | Some "pass", _, Some u when u > 0 -> failures.Add "overall_status=pass contradicts unavailable > 0"
              | _ -> ())
 
             (match violations with
-             | Some v when v < 0 ->
-                 failures.Add(sprintf "violations_total must be >= 0, got %d" v)
+             | Some v when v < 0 -> failures.Add(sprintf "violations_total must be >= 0, got %d" v)
              | _ -> ())
 
-            let r = {
-                Path = path
-                SchemaVersion = (match schemaV with Some v -> v | _ -> -1)
-                OverallStatus = (match overall with Some v -> v | _ -> "")
-                ChecksTotal = (match total with Some v -> v | _ -> -1)
-                ChecksPassed = (match passed with Some v -> v | _ -> -1)
-                ChecksFailed = (match failed with Some v -> v | _ -> -1)
-                ViolationsTotal = (match violations with Some v -> v | _ -> 0)
-                ChecksSkipped = (match skipped with Some v -> v | _ -> -1)
-                ChecksUnavailable = (match unavail with Some v -> v | _ -> -1)
-                Checks = parsedChecks |> Seq.toList
-                TestedTreeOid = (match oid with Some v -> v | _ -> "")
-                FailureReasons = failures |> Seq.toList
-            }
+            let r =
+                { Path = path
+                  SchemaVersion =
+                    (match schemaV with
+                     | Some v -> v
+                     | _ -> -1)
+                  OverallStatus =
+                    (match overall with
+                     | Some v -> v
+                     | _ -> "")
+                  ChecksTotal =
+                    (match total with
+                     | Some v -> v
+                     | _ -> -1)
+                  ChecksPassed =
+                    (match passed with
+                     | Some v -> v
+                     | _ -> -1)
+                  ChecksFailed =
+                    (match failed with
+                     | Some v -> v
+                     | _ -> -1)
+                  ViolationsTotal =
+                    (match violations with
+                     | Some v -> v
+                     | _ -> 0)
+                  ChecksSkipped =
+                    (match skipped with
+                     | Some v -> v
+                     | _ -> -1)
+                  ChecksUnavailable =
+                    (match unavail with
+                     | Some v -> v
+                     | _ -> -1)
+                  Checks = parsedChecks |> Seq.toList
+                  TestedTreeOid =
+                    (match oid with
+                     | Some v -> v
+                     | _ -> "")
+                  FailureReasons = failures |> Seq.toList }
 
             if failures.Count > 0 then
                 Error(String.concat "; " failures)
@@ -292,14 +341,18 @@ let private runProcess (psi: ProcessStartInfo) : int * string * string =
     let stdout = StringBuilder()
     let stderr = StringBuilder()
     let mutable exitCode = -1
+
     try
         let proc = Process.Start(psi)
+
         proc.OutputDataReceived.Add(fun e ->
             if not (isNull e) && not (isNull e.Data) then
                 stdout.AppendLine(e.Data) |> ignore)
+
         proc.ErrorDataReceived.Add(fun e ->
             if not (isNull e) && not (isNull e.Data) then
                 stderr.AppendLine(e.Data) |> ignore)
+
         proc.BeginOutputReadLine()
         proc.BeginErrorReadLine()
         proc.WaitForExit()
@@ -308,6 +361,7 @@ let private runProcess (psi: ProcessStartInfo) : int * string * string =
     with ex ->
         stderr.AppendLine(sprintf "%s: %s" (ex.GetType().FullName) ex.Message) |> ignore
         exitCode <- -1
+
     exitCode, stdout.ToString(), stderr.ToString()
 
 /// Run ``git rev-parse HEAD^{tree}`` and return the trimmed OID when
@@ -316,7 +370,8 @@ let private runProcess (psi: ProcessStartInfo) : int * string * string =
 /// CLI-level exit code is decided by ``runVerify``; here we only
 /// report success/failure of the git invocation.
 let internal tryReadExpectedTreeOid (repoRoot: string) : string option =
-    if not (Directory.Exists repoRoot) then None
+    if not (Directory.Exists repoRoot) then
+        None
     else
         let psi = ProcessStartInfo()
         psi.FileName <- "git"
@@ -326,11 +381,12 @@ let internal tryReadExpectedTreeOid (repoRoot: string) : string option =
         psi.UseShellExecute <- false
         psi.CreateNoWindow <- true
         psi.WorkingDirectory <- repoRoot
+
         try
             let exitCode, stdout, _ = runProcess psi
-            if exitCode = 0 then Some (stdout.Trim())
-            else None
-        with _ -> None
+            if exitCode = 0 then Some(stdout.Trim()) else None
+        with _ ->
+            None
 
 /// Compare the ``tested_tree_oid`` field against the actual
 /// ``HEAD^{tree}`` of the repository.  Used to prove the artefact
@@ -339,11 +395,10 @@ let internal tryReadExpectedTreeOid (repoRoot: string) : string option =
 /// pass.
 let validateTreeBindingAgainst (result: VerifyResult) (repoRoot: string) : TreeBinding =
     match tryReadExpectedTreeOid repoRoot with
-    | None ->
-        BindingUnverifiable "git rev-parse HEAD^{tree} failed (git missing or repo not initialised)"
+    | None -> BindingUnverifiable "git rev-parse HEAD^{tree} failed (git missing or repo not initialised)"
     | Some expected ->
         if expected <> result.TestedTreeOid then
-            BindingMismatch (expected, result.TestedTreeOid)
+            BindingMismatch(expected, result.TestedTreeOid)
         else
             BindingMatch
 
@@ -373,15 +428,31 @@ let runVerify (path: string) (expectedOid: string option) : int =
             stderr.WriteLine(sprintf "  %s" msg)
             2
         | None ->
-            let failedChecks = r.Checks |> List.filter (fun c -> c.Status = "fail" || c.Status = "unavailable")
+            let failedChecks =
+                r.Checks |> List.filter (fun c -> c.Status = "fail" || c.Status = "unavailable")
+
             if failedChecks.Length > 0 then
-                stdout.WriteLine(sprintf "gate-summary verify: FAIL (checks=%d, failed=%d)"
-                    r.ChecksTotal failedChecks.Length)
+                stdout.WriteLine(
+                    sprintf "gate-summary verify: FAIL (checks=%d, failed=%d)" r.ChecksTotal failedChecks.Length
+                )
+
                 for c in failedChecks do
                     stdout.WriteLine(sprintf "  - %s: %s (exit=%d)" c.Name c.Status c.ExitCode)
+
                 1
             else
-                let prefix = if r.TestedTreeOid.Length >= 12 then r.TestedTreeOid.Substring(0, 12) else r.TestedTreeOid
-                stdout.WriteLine(sprintf "gate-summary verify: PASS (checks=%d, schema_version=%d, tree=%s)"
-                    r.ChecksTotal r.SchemaVersion prefix)
+                let prefix =
+                    if r.TestedTreeOid.Length >= 12 then
+                        r.TestedTreeOid.Substring(0, 12)
+                    else
+                        r.TestedTreeOid
+
+                stdout.WriteLine(
+                    sprintf
+                        "gate-summary verify: PASS (checks=%d, schema_version=%d, tree=%s)"
+                        r.ChecksTotal
+                        r.SchemaVersion
+                        prefix
+                )
+
                 0

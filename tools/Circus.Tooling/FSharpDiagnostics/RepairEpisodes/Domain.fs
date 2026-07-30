@@ -26,19 +26,18 @@ module Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 
 let RepairEpisodeDeclarationSchemaVersion = "repair-episode-declaration-v1"
 
-type RepairEpisodeDeclaration = {
-    SchemaVersion: string
-    EpisodeKey: string
-    BeforeCaptureId: string
-    AfterCaptureId: string
-    BeforeCommitOid: string
-    AfterCommitOid: string
-    ExpectedBeforeTreeOid: string option
-    ExpectedAfterTreeOid: string option
-    VerificationEvidenceIds: string list
-    DeclaredRelevantPaths: string list
-    Notes: string option
-}
+type RepairEpisodeDeclaration =
+    { SchemaVersion: string
+      EpisodeKey: string
+      BeforeCaptureId: string
+      AfterCaptureId: string
+      BeforeCommitOid: string
+      AfterCommitOid: string
+      ExpectedBeforeTreeOid: string option
+      ExpectedAfterTreeOid: string option
+      VerificationEvidenceIds: string list
+      DeclaredRelevantPaths: string list
+      Notes: string option }
 
 // -----------------------------------------------------------------------------
 // Git identity
@@ -66,14 +65,13 @@ let gitObjectFormatWidth (f: GitObjectFormat) : int =
 
 /// A successful Git identity resolution.  Both trees are derived from
 /// the commits using Git's ``^{tree}`` syntax.
-type GitIdentityResolution = {
-    BeforeCommitOid: string
-    BeforeTreeOid: string
-    AfterCommitOid: string
-    AfterTreeOid: string
-    CommitRange: string list
-    ObjectFormat: GitObjectFormat
-}
+type GitIdentityResolution =
+    { BeforeCommitOid: string
+      BeforeTreeOid: string
+      AfterCommitOid: string
+      AfterTreeOid: string
+      CommitRange: string list
+      ObjectFormat: GitObjectFormat }
 
 exception GitIdentityFailure of string
 
@@ -105,24 +103,22 @@ let tryParseGitChangeKind (token: string) : GitChangeKind option =
     | "type_changed" -> Some TypeChanged
     | _ -> None
 
-type GitChangeEntry = {
-    BeforeMode: string
-    AfterMode: string
-    BeforeBlobOid: string option
-    AfterBlobOid: string option
-    ChangeKind: GitChangeKind
-    CanonicalPath: string
-}
+type GitChangeEntry =
+    { BeforeMode: string
+      AfterMode: string
+      BeforeBlobOid: string option
+      AfterBlobOid: string option
+      ChangeKind: GitChangeKind
+      CanonicalPath: string }
 
-type GitChangeSet = {
-    SchemaVersion: string
-    ChangeSetId: string
-    ChangeSetVersion: string
-    BeforeTreeOid: string
-    AfterTreeOid: string
-    ObjectFormat: GitObjectFormat
-    Entries: GitChangeEntry list
-}
+type GitChangeSet =
+    { SchemaVersion: string
+      ChangeSetId: string
+      ChangeSetVersion: string
+      BeforeTreeOid: string
+      AfterTreeOid: string
+      ObjectFormat: GitObjectFormat
+      Entries: GitChangeEntry list }
 
 exception GitChangeParseFailure of string
 
@@ -148,36 +144,40 @@ let tryParseCompatibilityStatus (token: string) : CompatibilityStatus option =
     | "unknown" -> Some Unknown
     | _ -> None
 
-type Compatibility = {
-    Status: CompatibilityStatus
-    Reasons: string list
-    MissingFields: string list
-}
+type Compatibility =
+    { Status: CompatibilityStatus
+      Reasons: string list
+      MissingFields: string list }
 
-let compatible : Compatibility =
-    { Status = Compatible; Reasons = []; MissingFields = [] }
+let compatible: Compatibility =
+    { Status = Compatible
+      Reasons = []
+      MissingFields = [] }
 
 let incompatible reasons : Compatibility =
-    { Status = Incompatible; Reasons = reasons; MissingFields = [] }
+    { Status = Incompatible
+      Reasons = reasons
+      MissingFields = [] }
 
 let unknown missing : Compatibility =
-    { Status = Unknown; Reasons = []; MissingFields = missing }
+    { Status = Unknown
+      Reasons = []
+      MissingFields = missing }
 
-type CaptureBindingResult = {
-    CaptureId: string
-    CaptureExists: bool
-    ExtractionComplete: bool
-    CommitMatches: bool
-    TreeMatches: bool
-    RawArtifactHashesMatch: bool
-    OccurrencesValid: bool
-    UnparsedLines: int
-    UndeclaredAbsolutePaths: int
-    BinlogReplayFailures: int
-    CommandContract: string
-    Compatibility: Compatibility
-    CompatibleScope: bool
-}
+type CaptureBindingResult =
+    { CaptureId: string
+      CaptureExists: bool
+      ExtractionComplete: bool
+      CommitMatches: bool
+      TreeMatches: bool
+      RawArtifactHashesMatch: bool
+      OccurrencesValid: bool
+      UnparsedLines: int
+      UndeclaredAbsolutePaths: int
+      BinlogReplayFailures: int
+      CommandContract: string
+      Compatibility: Compatibility
+      CompatibleScope: bool }
 
 type CaptureBindingFailure =
     | MissingCapture
@@ -257,11 +257,10 @@ let tryParseSourceLinkKind (token: string) : SourceLinkKind option =
     | "ambiguous_path_evidence" -> Some(AmbiguousPathEvidence [])
     | _ -> None
 
-type SourceLink = {
-    Kind: SourceLinkKind
-    Paths: string list
-    Reasons: string list
-}
+type SourceLink =
+    { Kind: SourceLinkKind
+      Paths: string list
+      Reasons: string list }
 
 type TransitionAssessment =
     | ExactPersistence
@@ -299,23 +298,22 @@ let tryParseTransitionAssessment (token: string) : TransitionAssessment option =
     | "ambiguous" -> Some Ambiguous
     | _ -> None
 
-type DiagnosticTransition = {
-    SchemaVersion: string
-    EpisodeId: string
-    ExactFingerprint: string
-    TransitionKind: ExactTransitionKind
-    BeforeOccurrenceCount: int
-    AfterOccurrenceCount: int
-    Severity: Circus.Tooling.FSharpDiagnostics.Domain.DiagnosticSeverity
-    Code: string option
-    MessageNormalized: string
-    SourcePath: string option
-    ProjectPath: string option
-    Span: Circus.Tooling.FSharpDiagnostics.Domain.SourceSpan
-    Compatibility: Compatibility
-    SourceLink: SourceLink
-    Assessment: TransitionAssessment
-}
+type DiagnosticTransition =
+    { SchemaVersion: string
+      EpisodeId: string
+      ExactFingerprint: string
+      TransitionKind: ExactTransitionKind
+      BeforeOccurrenceCount: int
+      AfterOccurrenceCount: int
+      Severity: Circus.Tooling.FSharpDiagnostics.Domain.DiagnosticSeverity
+      Code: string option
+      MessageNormalized: string
+      SourcePath: string option
+      ProjectPath: string option
+      Span: Circus.Tooling.FSharpDiagnostics.Domain.SourceSpan
+      Compatibility: Compatibility
+      SourceLink: SourceLink
+      Assessment: TransitionAssessment }
 
 // -----------------------------------------------------------------------------
 // Verification
@@ -341,11 +339,7 @@ type VerificationEvidenceParseError =
     | PlaceholderEvidenceId of source: string * lineNumber: int * value: string
     | JsonException of source: string * lineNumber: int * message: string
     /// Both canonical and alias fields are present with the same value.
-    | DuplicateSemanticField of
-        source: string *
-        lineNumber: int *
-        canonicalName: string *
-        aliasName: string
+    | DuplicateSemanticField of source: string * lineNumber: int * canonicalName: string * aliasName: string
     /// Both canonical and alias fields are present with different values.
     | ConflictingSemanticFields of
         source: string *
@@ -406,21 +400,20 @@ let tryParseVerificationStatus (token: string) : VerificationStatus option =
     | "missing_logs" -> Some MissingLogs
     | _ -> None
 
-type VerificationEvidence = {
-    SchemaVersion: string
-    EvidenceId: string
-    EpisodeId: string
-    Kind: VerificationKind
-    Command: string
-    WorkingDirectory: string
-    TestedCommitOid: string
-    TestedTreeOid: string
-    ExitCode: int
-    StdoutSha256: string option
-    StderrSha256: string option
-    CombinedLogPath: string option
-    Status: VerificationStatus
-}
+type VerificationEvidence =
+    { SchemaVersion: string
+      EvidenceId: string
+      EpisodeId: string
+      Kind: VerificationKind
+      Command: string
+      WorkingDirectory: string
+      TestedCommitOid: string
+      TestedTreeOid: string
+      ExitCode: int
+      StdoutSha256: string option
+      StderrSha256: string option
+      CombinedLogPath: string option
+      Status: VerificationStatus }
 
 // -----------------------------------------------------------------------------
 // Engine errors (fail-closed)
@@ -495,42 +488,39 @@ let tryParseEpisodeQualificationStatus (token: string) : EpisodeQualificationSta
     | "rejected" -> Some Rejected
     | _ -> None
 
-type EpisodeQualification = {
-    Status: EpisodeQualificationStatus
-    Reasons: string list
-}
+type EpisodeQualification =
+    { Status: EpisodeQualificationStatus
+      Reasons: string list }
 
-type TransitionCounts = {
-    PersistedSameCount: int
-    PersistedCountDecreased: int
-    PersistedCountIncreased: int
-    EliminatedAfter: int
-    IntroducedAfter: int
-    ResolutionCandidates: int
-    RegressionCandidates: int
-    Unassessable: int
-}
+type TransitionCounts =
+    { PersistedSameCount: int
+      PersistedCountDecreased: int
+      PersistedCountIncreased: int
+      EliminatedAfter: int
+      IntroducedAfter: int
+      ResolutionCandidates: int
+      RegressionCandidates: int
+      Unassessable: int }
 
-type RepairEpisode = {
-    SchemaVersion: string
-    EpisodeId: string
-    EpisodeKey: string
-    BeforeCaptureId: string
-    AfterCaptureId: string
-    BeforeCommitOid: string
-    BeforeTreeOid: string
-    AfterCommitOid: string
-    AfterTreeOid: string
-    CommitRange: string list
-    ChangeSetId: string
-    CommandContractBefore: string
-    CommandContractAfter: string
-    Compatibility: Compatibility
-    TransitionCounts: TransitionCounts
-    VerificationLevel: VerificationLevel
-    VerificationEvidenceIds: string list
-    Qualification: EpisodeQualification
-}
+type RepairEpisode =
+    { SchemaVersion: string
+      EpisodeId: string
+      EpisodeKey: string
+      BeforeCaptureId: string
+      AfterCaptureId: string
+      BeforeCommitOid: string
+      BeforeTreeOid: string
+      AfterCommitOid: string
+      AfterTreeOid: string
+      CommitRange: string list
+      ChangeSetId: string
+      CommandContractBefore: string
+      CommandContractAfter: string
+      Compatibility: Compatibility
+      TransitionCounts: TransitionCounts
+      VerificationLevel: VerificationLevel
+      VerificationEvidenceIds: string list
+      Qualification: EpisodeQualification }
 
 // -----------------------------------------------------------------------------
 // Episode summary (single JSON object)
@@ -538,32 +528,31 @@ type RepairEpisode = {
 
 let RepairEpisodeSummarySchemaVersion = "repair-episode-summary-v1"
 
-type RepairEpisodeSummary = {
-    SchemaVersion: string
-    DeclarationsTotal: int
-    ValidDeclarations: int
-    InvalidDeclarations: int
-    MissingCaptures: int
-    MissingGitObjects: int
-    DuplicateEpisodeKeys: int
-    DuplicateEpisodeIds: int
-    EpisodesTotal: int
-    EpisodesQualified: int
-    EpisodesQualifiedWithLimitations: int
-    EpisodesAmbiguous: int
-    EpisodesRejected: int
-    ChangeSetsTotal: int
-    TransitionsTotal: int
-    PersistedSameCount: int
-    PersistedCountDecreased: int
-    PersistedCountIncreased: int
-    EliminatedAfter: int
-    IntroducedAfter: int
-    ResolutionCandidates: int
-    RegressionCandidates: int
-    UnassessableTransitions: int
-    VerificationEvidenceTotal: int
-}
+type RepairEpisodeSummary =
+    { SchemaVersion: string
+      DeclarationsTotal: int
+      ValidDeclarations: int
+      InvalidDeclarations: int
+      MissingCaptures: int
+      MissingGitObjects: int
+      DuplicateEpisodeKeys: int
+      DuplicateEpisodeIds: int
+      EpisodesTotal: int
+      EpisodesQualified: int
+      EpisodesQualifiedWithLimitations: int
+      EpisodesAmbiguous: int
+      EpisodesRejected: int
+      ChangeSetsTotal: int
+      TransitionsTotal: int
+      PersistedSameCount: int
+      PersistedCountDecreased: int
+      PersistedCountIncreased: int
+      EliminatedAfter: int
+      IntroducedAfter: int
+      ResolutionCandidates: int
+      RegressionCandidates: int
+      UnassessableTransitions: int
+      VerificationEvidenceTotal: int }
 
 // -----------------------------------------------------------------------------
 // Validation outcomes
@@ -581,14 +570,12 @@ type DeclarationIssue =
     | InvalidEpisodeKey
     | InvalidCaptureId
 
-type DeclarationValidation = {
-    Declaration: RepairEpisodeDeclaration option
-    Issues: DeclarationIssue list
-    Source: string option
-}
+type DeclarationValidation =
+    { Declaration: RepairEpisodeDeclaration option
+      Issues: DeclarationIssue list
+      Source: string option }
 
-type EpisodeValidation = {
-    EpisodeId: string option
-    Issues: string list
-    Episode: RepairEpisode option
-}
+type EpisodeValidation =
+    { EpisodeId: string option
+      Issues: string list
+      Episode: RepairEpisode option }

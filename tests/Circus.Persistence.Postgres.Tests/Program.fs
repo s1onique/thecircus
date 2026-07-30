@@ -65,4 +65,5 @@ let main (args: string[]) =
                   testSequenced (SemanticReplayTests.tests fixture)
                   testSequenced (ProjectionInvariantTests.tests) ]
         )
+
     PostgresTestRunner.runWith Tests.runTestsWithCLIArgs args allTests

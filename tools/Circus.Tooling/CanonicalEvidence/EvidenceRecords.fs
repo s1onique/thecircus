@@ -73,37 +73,36 @@ let tryParseRecordStatus (token: string) : RecordStatus option =
 // Evidence record
 // -----------------------------------------------------------------------------
 
-type CanonicalExecutionEvidence = {
-    SchemaVersion: int
-    EvidenceId: string
-    CheckId: string
-    Required: bool
-    ProviderId: string
-    ProviderVersion: string
-    Command: string
-    Arguments: string list
-    WorkingDirectory: string
-    StartedAt: string
-    DurationMs: int64
-    ExitCode: int option
-    Result: RecordStatus
-    TestsTotal: int option
-    TestsPassed: int option
-    TestsIgnored: int option
-    TestsFailed: int option
-    TestsErrored: int option
-    StdoutSha256: string option
-    StderrSha256: string option
-    StdoutByteLength: int64 option
-    StderrByteLength: int64 option
-    FailureKind: string option
-    TestedCommitOid: string
-    TestedTreeOid: string
-    WorkingTreeClean: bool
-    ProviderBinarySha256: string option
-    ToolingBinarySha256: string option
-    TestBinarySha256: string option
-}
+type CanonicalExecutionEvidence =
+    { SchemaVersion: int
+      EvidenceId: string
+      CheckId: string
+      Required: bool
+      ProviderId: string
+      ProviderVersion: string
+      Command: string
+      Arguments: string list
+      WorkingDirectory: string
+      StartedAt: string
+      DurationMs: int64
+      ExitCode: int option
+      Result: RecordStatus
+      TestsTotal: int option
+      TestsPassed: int option
+      TestsIgnored: int option
+      TestsFailed: int option
+      TestsErrored: int option
+      StdoutSha256: string option
+      StderrSha256: string option
+      StdoutByteLength: int64 option
+      StderrByteLength: int64 option
+      FailureKind: string option
+      TestedCommitOid: string
+      TestedTreeOid: string
+      WorkingTreeClean: bool
+      ProviderBinarySha256: string option
+      ToolingBinarySha256: string option
+      TestBinarySha256: string option }
 
 [<Literal>]
 let EvidenceSchemaVersion = 1
@@ -128,15 +127,23 @@ let ProviderVersionEvidence = "1.0.0"
 let internal escapeJsonString (s: string) : string =
     let sb = StringBuilder(s.Length + 2)
     sb.Append '"' |> ignore
+
     for c in s do
-        if c = '\\' then sb.Append("\\\\") |> ignore
-        elif c = '"' then sb.Append("\\\"") |> ignore
-        elif c = '\n' then sb.Append("\\n") |> ignore
-        elif c = '\r' then sb.Append("\\r") |> ignore
-        elif c = '\t' then sb.Append("\\t") |> ignore
+        if c = '\\' then
+            sb.Append("\\\\") |> ignore
+        elif c = '"' then
+            sb.Append("\\\"") |> ignore
+        elif c = '\n' then
+            sb.Append("\\n") |> ignore
+        elif c = '\r' then
+            sb.Append("\\r") |> ignore
+        elif c = '\t' then
+            sb.Append("\\t") |> ignore
         elif int c < 0x20 then
             sb.AppendFormat(CultureInfo.InvariantCulture, "\\u{0:x4}", int c) |> ignore
-        else sb.Append c |> ignore
+        else
+            sb.Append c |> ignore
+
     sb.Append '"' |> ignore
     sb.ToString()
 
@@ -153,8 +160,7 @@ let internal optInt64Str (v: int64 option) : string =
     | None -> "null"
     | Some n -> n.ToString(CultureInfo.InvariantCulture)
 
-let internal boolStr (v: bool) : string =
-    if v then "true" else "false"
+let internal boolStr (v: bool) : string = if v then "true" else "false"
 
 /// Canonical representation of FailureKind for wire format.
 /// When None, uses the unambiguous token "<NONE>".
@@ -204,13 +210,17 @@ let renderEvidenceCanonicalisationForm (e: CanonicalExecutionEvidence) : string 
     sb.Append ",\"tests_errored\":" |> ignore
     sb.Append(optIntStr e.TestsErrored) |> ignore
     sb.Append ",\"stdout_sha256\":" |> ignore
+
     match e.StdoutSha256 with
     | None -> sb.Append "null" |> ignore
     | Some h -> sb.Append(escapeJsonString h) |> ignore
+
     sb.Append ",\"stderr_sha256\":" |> ignore
+
     match e.StderrSha256 with
     | None -> sb.Append "null" |> ignore
     | Some h -> sb.Append(escapeJsonString h) |> ignore
+
     sb.Append ",\"stdout_byte_length\":" |> ignore
     sb.Append(optInt64Str e.StdoutByteLength) |> ignore
     sb.Append ",\"stderr_byte_length\":" |> ignore
@@ -259,37 +269,37 @@ let createEvidenceRecord
     (toolingBinarySha256: string option)
     (testBinarySha256: string option)
     : CanonicalExecutionEvidence =
-    let record = {
-        SchemaVersion = EvidenceSchemaVersion
-        EvidenceId = "" // Will be computed
-        CheckId = checkId
-        Required = required
-        ProviderId = ProviderIdValue
-        ProviderVersion = ProviderVersionEvidence
-        Command = command
-        Arguments = arguments
-        WorkingDirectory = workingDirectory
-        StartedAt = startedAt
-        DurationMs = durationMs
-        ExitCode = exitCode
-        Result = result
-        TestsTotal = testsTotal
-        TestsPassed = testsPassed
-        TestsIgnored = testsIgnored
-        TestsFailed = testsFailed
-        TestsErrored = testsErrored
-        StdoutSha256 = stdoutSha256
-        StderrSha256 = stderrSha256
-        StdoutByteLength = stdoutByteLength
-        StderrByteLength = stderrByteLength
-        FailureKind = failureKind
-        TestedCommitOid = testedCommitOid
-        TestedTreeOid = testedTreeOid
-        WorkingTreeClean = workingTreeClean
-        ProviderBinarySha256 = providerBinarySha256
-        ToolingBinarySha256 = toolingBinarySha256
-        TestBinarySha256 = testBinarySha256
-    }
+    let record =
+        { SchemaVersion = EvidenceSchemaVersion
+          EvidenceId = "" // Will be computed
+          CheckId = checkId
+          Required = required
+          ProviderId = ProviderIdValue
+          ProviderVersion = ProviderVersionEvidence
+          Command = command
+          Arguments = arguments
+          WorkingDirectory = workingDirectory
+          StartedAt = startedAt
+          DurationMs = durationMs
+          ExitCode = exitCode
+          Result = result
+          TestsTotal = testsTotal
+          TestsPassed = testsPassed
+          TestsIgnored = testsIgnored
+          TestsFailed = testsFailed
+          TestsErrored = testsErrored
+          StdoutSha256 = stdoutSha256
+          StderrSha256 = stderrSha256
+          StdoutByteLength = stdoutByteLength
+          StderrByteLength = stderrByteLength
+          FailureKind = failureKind
+          TestedCommitOid = testedCommitOid
+          TestedTreeOid = testedTreeOid
+          WorkingTreeClean = workingTreeClean
+          ProviderBinarySha256 = providerBinarySha256
+          ToolingBinarySha256 = toolingBinarySha256
+          TestBinarySha256 = testBinarySha256 }
+
     let evidenceId = computeEvidenceId record
     { record with EvidenceId = evidenceId }
 
@@ -297,26 +307,25 @@ let createEvidenceRecord
 // Aggregate
 // -----------------------------------------------------------------------------
 
-type CanonicalExecutionAggregate = {
-    SchemaVersion: int
-    SubjectCommitOid: string
-    SubjectTreeOid: string
-    RecordsTotal: int
-    RecordsPassed: int
-    RecordsFailed: int
-    RecordsUnavailable: int
-    TestsTotal: int
-    TestsPassed: int
-    TestsIgnored: int
-    TestsFailed: int
-    TestsErrored: int
-    RequiredChecksTotal: int
-    RequiredChecksPassed: int
-    RequiredChecksFailed: int
-    RecordIds: string list
-    OverallStatus: RecordStatus
-    SemanticSha256: string
-}
+type CanonicalExecutionAggregate =
+    { SchemaVersion: int
+      SubjectCommitOid: string
+      SubjectTreeOid: string
+      RecordsTotal: int
+      RecordsPassed: int
+      RecordsFailed: int
+      RecordsUnavailable: int
+      TestsTotal: int
+      TestsPassed: int
+      TestsIgnored: int
+      TestsFailed: int
+      TestsErrored: int
+      RequiredChecksTotal: int
+      RequiredChecksPassed: int
+      RequiredChecksFailed: int
+      RecordIds: string list
+      OverallStatus: RecordStatus
+      SemanticSha256: string }
 
 [<Literal>]
 let AggregateSchemaVersion = 1
@@ -328,9 +337,15 @@ let computeAggregate
     (records: CanonicalExecutionEvidence list)
     : CanonicalExecutionAggregate =
     let recordsTotal = List.length records
-    let recordsPassed = records |> List.filter (fun r -> r.Result = RecordPass) |> List.length
-    let recordsFailed = records |> List.filter (fun r -> r.Result = RecordFail) |> List.length
-    let recordsUnavailable = records |> List.filter (fun r -> r.Result = RecordUnavailable) |> List.length
+
+    let recordsPassed =
+        records |> List.filter (fun r -> r.Result = RecordPass) |> List.length
+
+    let recordsFailed =
+        records |> List.filter (fun r -> r.Result = RecordFail) |> List.length
+
+    let recordsUnavailable =
+        records |> List.filter (fun r -> r.Result = RecordUnavailable) |> List.length
 
     let testsTotal = records |> List.choose (fun r -> r.TestsTotal) |> List.sum
     let testsPassed = records |> List.choose (fun r -> r.TestsPassed) |> List.sum
@@ -341,7 +356,9 @@ let computeAggregate
     // Required checks only - filter to required=true records
     let requiredRecords = records |> List.filter (fun r -> r.Required)
     let requiredChecksTotal = List.length requiredRecords
-    let requiredChecksPassed = requiredRecords |> List.filter (fun r -> r.Result = RecordPass) |> List.length
+
+    let requiredChecksPassed =
+        requiredRecords |> List.filter (fun r -> r.Result = RecordPass) |> List.length
     // Required unavailable checks count as failures per ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01-CORRECTION01
     let requiredChecksFailed =
         requiredRecords
@@ -352,10 +369,14 @@ let computeAggregate
 
     // Overall status: any required failure or unavailability means overall fail
     let overallStatus =
-        if requiredChecksFailed > 0 then RecordFail
-        elif requiredChecksTotal > 0 && requiredChecksPassed = requiredChecksTotal then RecordPass
-        elif requiredChecksTotal = 0 then RecordPass  // No required checks
-        else RecordFail  // Some required checks unavailable = fail
+        if requiredChecksFailed > 0 then
+            RecordFail
+        elif requiredChecksTotal > 0 && requiredChecksPassed = requiredChecksTotal then
+            RecordPass
+        elif requiredChecksTotal = 0 then
+            RecordPass // No required checks
+        else
+            RecordFail // Some required checks unavailable = fail
 
     { SchemaVersion = AggregateSchemaVersion
       SubjectCommitOid = subjectCommitOid
@@ -405,16 +426,27 @@ let renderAggregateCanonicalisationForm (a: CanonicalExecutionAggregate) : strin
     sb.Append ",\"tests_errored\":" |> ignore
     sb.Append(a.TestsErrored.ToString(CultureInfo.InvariantCulture)) |> ignore
     sb.Append ",\"required_checks_total\":" |> ignore
-    sb.Append(a.RequiredChecksTotal.ToString(CultureInfo.InvariantCulture)) |> ignore
+
+    sb.Append(a.RequiredChecksTotal.ToString(CultureInfo.InvariantCulture))
+    |> ignore
+
     sb.Append ",\"required_checks_passed\":" |> ignore
-    sb.Append(a.RequiredChecksPassed.ToString(CultureInfo.InvariantCulture)) |> ignore
+
+    sb.Append(a.RequiredChecksPassed.ToString(CultureInfo.InvariantCulture))
+    |> ignore
+
     sb.Append ",\"required_checks_failed\":" |> ignore
-    sb.Append(a.RequiredChecksFailed.ToString(CultureInfo.InvariantCulture)) |> ignore
+
+    sb.Append(a.RequiredChecksFailed.ToString(CultureInfo.InvariantCulture))
+    |> ignore
+
     sb.Append ",\"record_ids\":[" |> ignore
     let mutable first = true
+
     for id in a.RecordIds do
         if first then first <- false else sb.Append "," |> ignore
         sb.Append(escapeJsonString id) |> ignore
+
     sb.Append "]" |> ignore
     sb.Append ",\"overall_status\":" |> ignore
     sb.Append(escapeJsonString (recordStatusToken a.OverallStatus)) |> ignore
@@ -477,13 +509,17 @@ let renderEvidenceWireJson (e: CanonicalExecutionEvidence) : string =
     sb.Append ",\"tests_errored\":" |> ignore
     sb.Append(optIntStr e.TestsErrored) |> ignore
     sb.Append ",\"stdout_sha256\":" |> ignore
+
     match e.StdoutSha256 with
     | None -> sb.Append "null" |> ignore
     | Some h -> sb.Append(escapeJsonString h) |> ignore
+
     sb.Append ",\"stderr_sha256\":" |> ignore
+
     match e.StderrSha256 with
     | None -> sb.Append "null" |> ignore
     | Some h -> sb.Append(escapeJsonString h) |> ignore
+
     sb.Append ",\"stdout_byte_length\":" |> ignore
     sb.Append(optInt64Str e.StdoutByteLength) |> ignore
     sb.Append ",\"stderr_byte_length\":" |> ignore
@@ -497,17 +533,23 @@ let renderEvidenceWireJson (e: CanonicalExecutionEvidence) : string =
     sb.Append ",\"working_tree_clean\":" |> ignore
     sb.Append(if e.WorkingTreeClean then "true" else "false") |> ignore
     sb.Append ",\"provider_binary_sha256\":" |> ignore
+
     match e.ProviderBinarySha256 with
     | None -> sb.Append "null" |> ignore
     | Some h -> sb.Append(escapeJsonString h) |> ignore
+
     sb.Append ",\"tooling_binary_sha256\":" |> ignore
+
     match e.ToolingBinarySha256 with
     | None -> sb.Append "null" |> ignore
     | Some h -> sb.Append(escapeJsonString h) |> ignore
+
     sb.Append ",\"test_binary_sha256\":" |> ignore
+
     match e.TestBinarySha256 with
     | None -> sb.Append "null" |> ignore
     | Some h -> sb.Append(escapeJsonString h) |> ignore
+
     sb.Append "}" |> ignore
     sb.ToString()
 
@@ -540,16 +582,27 @@ let renderAggregateWireJson (a: CanonicalExecutionAggregate) : string =
     sb.Append ",\"tests_errored\":" |> ignore
     sb.Append(a.TestsErrored.ToString(CultureInfo.InvariantCulture)) |> ignore
     sb.Append ",\"required_checks_total\":" |> ignore
-    sb.Append(a.RequiredChecksTotal.ToString(CultureInfo.InvariantCulture)) |> ignore
+
+    sb.Append(a.RequiredChecksTotal.ToString(CultureInfo.InvariantCulture))
+    |> ignore
+
     sb.Append ",\"required_checks_passed\":" |> ignore
-    sb.Append(a.RequiredChecksPassed.ToString(CultureInfo.InvariantCulture)) |> ignore
+
+    sb.Append(a.RequiredChecksPassed.ToString(CultureInfo.InvariantCulture))
+    |> ignore
+
     sb.Append ",\"required_checks_failed\":" |> ignore
-    sb.Append(a.RequiredChecksFailed.ToString(CultureInfo.InvariantCulture)) |> ignore
+
+    sb.Append(a.RequiredChecksFailed.ToString(CultureInfo.InvariantCulture))
+    |> ignore
+
     sb.Append ",\"record_ids\":[" |> ignore
     let mutable first = true
+
     for id in a.RecordIds do
         if first then first <- false else sb.Append "," |> ignore
         sb.Append(escapeJsonString id) |> ignore
+
     sb.Append "]," |> ignore
     sb.Append "\"overall_status\":" |> ignore
     sb.Append(escapeJsonString (recordStatusToken a.OverallStatus)) |> ignore
@@ -581,22 +634,21 @@ type EvidenceWireParseError =
     | TrailingContent
 
 /// Location info for evidence wire parse errors.
-type LocatedEvidenceWireError = {
-    SourcePath: string
-    Line: int
-    Error: EvidenceWireParseError
-}
+type LocatedEvidenceWireError =
+    { SourcePath: string
+      Line: int
+      Error: EvidenceWireParseError }
 
 let evidenceWireParseErrorToString (e: EvidenceWireParseError) : string =
     match e with
     | EvidenceWireParseError.InvalidJson d -> sprintf "invalid JSON: %s" d
     | EvidenceWireParseError.DuplicateProperty p -> sprintf "duplicate property: %s" p
     | EvidenceWireParseError.MissingField f -> sprintf "missing required field: %s" f
-    | EvidenceWireParseError.WrongFieldType (f, exp, act) -> sprintf "wrong type for %s: expected %s, got %s" f exp act
+    | EvidenceWireParseError.WrongFieldType(f, exp, act) -> sprintf "wrong type for %s: expected %s, got %s" f exp act
     | EvidenceWireParseError.UnsupportedSchemaVersion v -> sprintf "unsupported schema_version: %d" v
     | EvidenceWireParseError.UnknownResult v -> sprintf "unknown result value: %s" v
-    | EvidenceWireParseError.InvalidInteger (f, d) -> sprintf "invalid integer for %s: %s" f d
-    | EvidenceWireParseError.InvalidSha256 (f, v) -> sprintf "invalid SHA-256 for %s: %s" f v
+    | EvidenceWireParseError.InvalidInteger(f, d) -> sprintf "invalid integer for %s: %s" f d
+    | EvidenceWireParseError.InvalidSha256(f, v) -> sprintf "invalid SHA-256 for %s: %s" f v
     | EvidenceWireParseError.InvalidEvidenceId v -> sprintf "invalid evidence_id: %s" v
     | EvidenceWireParseError.InvalidTimestamp v -> sprintf "invalid timestamp: %s" v
     | EvidenceWireParseError.InconsistentTestCounts d -> sprintf "inconsistent test counts: %s" d
@@ -607,26 +659,46 @@ let locatedEvidenceWireErrorToString (e: LocatedEvidenceWireError) : string =
 
 /// Check if a string is a valid SHA-256 hex value (64 lowercase hex chars).
 let private isValidSha256 (s: string) : bool =
-    if isNull s || s.Length <> 64 then false
+    if isNull s || s.Length <> 64 then
+        false
     else
         let mutable ok = true
+
         for c in s do
-            if not ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) then ok <- false
+            if not ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) then
+                ok <- false
+
         ok
 
 /// Check if a string is a valid ISO 8601 timestamp.
 /// Accepts formats like: 2026-07-29T10:30:00Z, 2026-07-29T10:30:00.123Z, etc.
 let private isValidIso8601Timestamp (s: string) : bool =
-    if isNull s || s.Length < 10 then false
+    if isNull s || s.Length < 10 then
+        false
     else
         try
-            let styles = System.Globalization.DateTimeStyles.AssumeUniversal ||| System.Globalization.DateTimeStyles.AdjustToUniversal
-            System.DateTimeOffset.TryParseExact(s, [| "o"; "yyyy-MM-dd'T'HH:mm:ssZ"; "yyyy-MM-dd'T'HH:mm:ss.fffffffZ" |], CultureInfo.InvariantCulture, styles, ref (Unchecked.defaultof<_>))
-        with _ -> false
+            let styles =
+                System.Globalization.DateTimeStyles.AssumeUniversal
+                ||| System.Globalization.DateTimeStyles.AdjustToUniversal
+
+            System.DateTimeOffset.TryParseExact(
+                s,
+                [| "o"; "yyyy-MM-dd'T'HH:mm:ssZ"; "yyyy-MM-dd'T'HH:mm:ss.fffffffZ" |],
+                CultureInfo.InvariantCulture,
+                styles,
+                ref (Unchecked.defaultof<_>)
+            )
+        with _ ->
+            false
 
 /// Parse a JSON string value, reporting MissingField and WrongFieldType.
-let private parseRequiredJsonString (el: JsonElement) (name: string) (errors: ResizeArray<EvidenceWireParseError>) : string =
+let private parseRequiredJsonString
+    (el: JsonElement)
+    (name: string)
+    (errors: ResizeArray<EvidenceWireParseError>)
+    : string =
     let mutable found = Unchecked.defaultof<JsonElement>
+
     if el.TryGetProperty(name, &found) then
         if found.ValueKind = JsonValueKind.String then
             found.GetString()
@@ -641,11 +713,17 @@ let private parseRequiredJsonString (el: JsonElement) (name: string) (errors: Re
         ""
 
 /// Parse a JSON number value as int64, rejecting non-integers.
-let private parseRequiredJsonInt64 (el: JsonElement) (name: string) (errors: ResizeArray<EvidenceWireParseError>) : int64 =
+let private parseRequiredJsonInt64
+    (el: JsonElement)
+    (name: string)
+    (errors: ResizeArray<EvidenceWireParseError>)
+    : int64 =
     let mutable found = Unchecked.defaultof<JsonElement>
+
     if el.TryGetProperty(name, &found) then
         if found.ValueKind = JsonValueKind.Number then
             let mutable intValue = 0L
+
             if found.TryGetInt64(&intValue) then
                 intValue
             else
@@ -664,9 +742,11 @@ let private parseRequiredJsonInt64 (el: JsonElement) (name: string) (errors: Res
 /// Parse a JSON number value as int, rejecting non-integers and negative values.
 let private parseRequiredJsonInt (el: JsonElement) (name: string) (errors: ResizeArray<EvidenceWireParseError>) : int =
     let mutable found = Unchecked.defaultof<JsonElement>
+
     if el.TryGetProperty(name, &found) then
         if found.ValueKind = JsonValueKind.Number then
             let mutable intValue = 0
+
             if found.TryGetInt32(&intValue) then
                 intValue
             else
@@ -683,8 +763,13 @@ let private parseRequiredJsonInt (el: JsonElement) (name: string) (errors: Resiz
         0
 
 /// Parse a JSON bool value.
-let private parseRequiredJsonBool (el: JsonElement) (name: string) (errors: ResizeArray<EvidenceWireParseError>) : bool =
+let private parseRequiredJsonBool
+    (el: JsonElement)
+    (name: string)
+    (errors: ResizeArray<EvidenceWireParseError>)
+    : bool =
     let mutable found = Unchecked.defaultof<JsonElement>
+
     if el.TryGetProperty(name, &found) then
         if found.ValueKind = JsonValueKind.True || found.ValueKind = JsonValueKind.False then
             found.GetBoolean()
@@ -699,11 +784,17 @@ let private parseRequiredJsonBool (el: JsonElement) (name: string) (errors: Resi
         false
 
 /// Parse a JSON string array.
-let private parseRequiredJsonStringArray (el: JsonElement) (name: string) (errors: ResizeArray<EvidenceWireParseError>) : string list =
+let private parseRequiredJsonStringArray
+    (el: JsonElement)
+    (name: string)
+    (errors: ResizeArray<EvidenceWireParseError>)
+    : string list =
     let mutable found = Unchecked.defaultof<JsonElement>
+
     if el.TryGetProperty(name, &found) then
         if found.ValueKind = JsonValueKind.Array then
             let mutable items = []
+
             for item in found.EnumerateArray() do
                 if item.ValueKind = JsonValueKind.String then
                     items <- (item.GetString()) :: items
@@ -713,6 +804,7 @@ let private parseRequiredJsonStringArray (el: JsonElement) (name: string) (error
                 else
                     errors.Add(EvidenceWireParseError.WrongFieldType(name + "[*]", "string", string item.ValueKind))
                     items <- "" :: items
+
             List.rev items
         elif found.ValueKind = JsonValueKind.Null then
             errors.Add(EvidenceWireParseError.WrongFieldType(name, "array", "null"))
@@ -727,42 +819,60 @@ let private parseRequiredJsonStringArray (el: JsonElement) (name: string) (error
 /// Parse an optional JSON string that may be null.
 let private parseOptionalJsonString (el: JsonElement) (name: string) : string option =
     let mutable found = Unchecked.defaultof<JsonElement>
+
     if el.TryGetProperty(name, &found) then
-        if found.ValueKind = JsonValueKind.String then Some(found.GetString())
-        elif found.ValueKind = JsonValueKind.Null then None
-        else None
-    else None
+        if found.ValueKind = JsonValueKind.String then
+            Some(found.GetString())
+        elif found.ValueKind = JsonValueKind.Null then
+            None
+        else
+            None
+    else
+        None
 
 /// Parse an optional JSON integer that may be null.
 let private parseOptionalJsonInt (el: JsonElement) (name: string) : int option =
     let mutable found = Unchecked.defaultof<JsonElement>
+
     if el.TryGetProperty(name, &found) then
         if found.ValueKind = JsonValueKind.Number then
             let mutable v = 0
             if found.TryGetInt32(&v) then Some v else None
-        elif found.ValueKind = JsonValueKind.Null then None
-        else None
-    else None
+        elif found.ValueKind = JsonValueKind.Null then
+            None
+        else
+            None
+    else
+        None
 
 /// Parse an optional JSON int64 that may be null.
 let private parseOptionalJsonInt64 (el: JsonElement) (name: string) : int64 option =
     let mutable found = Unchecked.defaultof<JsonElement>
+
     if el.TryGetProperty(name, &found) then
         if found.ValueKind = JsonValueKind.Number then
             let mutable v = 0L
             if found.TryGetInt64(&v) then Some v else None
-        elif found.ValueKind = JsonValueKind.Null then None
-        else None
-    else None
+        elif found.ValueKind = JsonValueKind.Null then
+            None
+        else
+            None
+    else
+        None
 
 /// Check for duplicate properties in a JSON object.
-let private checkNoDuplicateProperties (el: JsonElement) (seen: System.Collections.Generic.Dictionary<string, bool>) : ResizeArray<EvidenceWireParseError> =
+let private checkNoDuplicateProperties
+    (el: JsonElement)
+    (seen: System.Collections.Generic.Dictionary<string, bool>)
+    : ResizeArray<EvidenceWireParseError> =
     let errors = ResizeArray()
+
     for prop in el.EnumerateObject() do
         if seen.ContainsKey(prop.Name) then
             errors.Add(EvidenceWireParseError.DuplicateProperty prop.Name)
         else
             seen.[prop.Name] <- true
+
     errors
 
 /// Parse one evidence record JSON object strictly.
@@ -807,22 +917,29 @@ let private parseEvidenceRecordObject (el: JsonElement) : EvidenceWireParseError
         errors.Add(EvidenceWireParseError.UnsupportedSchemaVersion schemaVersion)
 
     // Validate evidence_id format (64 hex chars)
-    if not (String.IsNullOrEmpty evidenceId) && not (System.Text.RegularExpressions.Regex.IsMatch(evidenceId, "^[0-9a-f]{64}$")) then
+    if
+        not (String.IsNullOrEmpty evidenceId)
+        && not (System.Text.RegularExpressions.Regex.IsMatch(evidenceId, "^[0-9a-f]{64}$"))
+    then
         errors.Add(EvidenceWireParseError.InvalidEvidenceId evidenceId)
 
     // Validate SHA-256 fields
     match stdoutSha256 with
     | Some v when not (isValidSha256 v) -> errors.Add(EvidenceWireParseError.InvalidSha256("stdout_sha256", v))
     | _ -> ()
+
     match stderrSha256 with
     | Some v when not (isValidSha256 v) -> errors.Add(EvidenceWireParseError.InvalidSha256("stderr_sha256", v))
     | _ -> ()
+
     match providerBinarySha256 with
     | Some v when not (isValidSha256 v) -> errors.Add(EvidenceWireParseError.InvalidSha256("provider_binary_sha256", v))
     | _ -> ()
+
     match toolingBinarySha256 with
     | Some v when not (isValidSha256 v) -> errors.Add(EvidenceWireParseError.InvalidSha256("tooling_binary_sha256", v))
     | _ -> ()
+
     match testBinarySha256 with
     | Some v when not (isValidSha256 v) -> errors.Add(EvidenceWireParseError.InvalidSha256("test_binary_sha256", v))
     | _ -> ()
@@ -841,30 +958,41 @@ let private parseEvidenceRecordObject (el: JsonElement) : EvidenceWireParseError
     let failureKind = Option.bind parseFailureKindCanonicalToken failureKindStr
 
     // Validate started_at as ISO 8601 timestamp
-    if not (isNull startedAt) && not (String.IsNullOrEmpty startedAt) && not (isValidIso8601Timestamp startedAt) then
+    if
+        not (isNull startedAt)
+        && not (String.IsNullOrEmpty startedAt)
+        && not (isValidIso8601Timestamp startedAt)
+    then
         errors.Add(EvidenceWireParseError.InvalidTimestamp startedAt)
 
     // Validate negative values
     if durationMs < 0L then
         errors.Add(EvidenceWireParseError.InvalidInteger("duration_ms", "negative value"))
+
     match stdoutByteLength with
     | Some v when v < 0L -> errors.Add(EvidenceWireParseError.InvalidInteger("stdout_byte_length", "negative value"))
     | _ -> ()
+
     match stderrByteLength with
     | Some v when v < 0L -> errors.Add(EvidenceWireParseError.InvalidInteger("stderr_byte_length", "negative value"))
     | _ -> ()
+
     match testsTotal with
     | Some v when v < 0 -> errors.Add(EvidenceWireParseError.InvalidInteger("tests_total", "negative value"))
     | _ -> ()
+
     match testsPassed with
     | Some v when v < 0 -> errors.Add(EvidenceWireParseError.InvalidInteger("tests_passed", "negative value"))
     | _ -> ()
+
     match testsIgnored with
     | Some v when v < 0 -> errors.Add(EvidenceWireParseError.InvalidInteger("tests_ignored", "negative value"))
     | _ -> ()
+
     match testsFailed with
     | Some v when v < 0 -> errors.Add(EvidenceWireParseError.InvalidInteger("tests_failed", "negative value"))
     | _ -> ()
+
     match testsErrored with
     | Some v when v < 0 -> errors.Add(EvidenceWireParseError.InvalidInteger("tests_errored", "negative value"))
     | _ -> ()
@@ -873,8 +1001,14 @@ let private parseEvidenceRecordObject (el: JsonElement) : EvidenceWireParseError
     match testsTotal, testsPassed, testsIgnored, testsFailed, testsErrored with
     | Some total, Some passed, Some ignored, Some failed, Some errored ->
         if total <> passed + ignored + failed + errored then
-            errors.Add(EvidenceWireParseError.InconsistentTestCounts(
-                sprintf "tests_total=%d but passed+ignored+failed+errored=%d" total (passed + ignored + failed + errored)))
+            errors.Add(
+                EvidenceWireParseError.InconsistentTestCounts(
+                    sprintf
+                        "tests_total=%d but passed+ignored+failed+errored=%d"
+                        total
+                        (passed + ignored + failed + errored)
+                )
+            )
     | _ -> ()
 
     List.ofSeq errors
@@ -884,10 +1018,12 @@ let parseEvidenceWireJsonStrict (source: string) : Result<CanonicalExecutionEvid
     try
         let doc = JsonDocument.Parse(source)
         let root = doc.RootElement
+
         if root.ValueKind <> JsonValueKind.Object then
             Result.Error [ EvidenceWireParseError.InvalidJson "root must be an object" ]
         else
             let errors = parseEvidenceRecordObject root
+
             if not (List.isEmpty errors) then
                 Result.Error errors
             else
@@ -898,19 +1034,23 @@ let parseEvidenceWireJsonStrict (source: string) : Result<CanonicalExecutionEvid
                 let providerId = root.GetProperty("provider_id").GetString()
                 let providerVersion = root.GetProperty("provider_version").GetString()
                 let command = root.GetProperty("command").GetString()
+
                 let arguments =
                     [ for a in root.GetProperty("arguments").EnumerateArray() -> a.GetString() ]
+
                 let workingDirectory = root.GetProperty("working_directory").GetString()
                 let startedAt = root.GetProperty("started_at").GetString()
                 let durationMs = root.GetProperty("duration_ms").GetInt64()
                 let exitCode = parseOptionalJsonInt root "exit_code"
                 let resultStr = root.GetProperty("result").GetString()
+
                 let result =
                     match resultStr with
                     | "pass" -> RecordPass
                     | "fail" -> RecordFail
                     | "unavailable" -> RecordUnavailable
                     | _ -> RecordUnavailable
+
                 let testsTotal = parseOptionalJsonInt root "tests_total"
                 let testsPassed = parseOptionalJsonInt root "tests_passed"
                 let testsIgnored = parseOptionalJsonInt root "tests_ignored"
@@ -929,37 +1069,36 @@ let parseEvidenceWireJsonStrict (source: string) : Result<CanonicalExecutionEvid
                 let toolingBinarySha256 = parseOptionalJsonString root "tooling_binary_sha256"
                 let testBinarySha256 = parseOptionalJsonString root "test_binary_sha256"
 
-                Result.Ok {
-                    SchemaVersion = 1
-                    EvidenceId = evidenceId
-                    CheckId = checkId
-                    Required = required
-                    ProviderId = providerId
-                    ProviderVersion = providerVersion
-                    Command = command
-                    Arguments = arguments
-                    WorkingDirectory = workingDirectory
-                    StartedAt = startedAt
-                    DurationMs = durationMs
-                    ExitCode = exitCode
-                    Result = result
-                    TestsTotal = testsTotal
-                    TestsPassed = testsPassed
-                    TestsIgnored = testsIgnored
-                    TestsFailed = testsFailed
-                    TestsErrored = testsErrored
-                    StdoutSha256 = stdoutSha256
-                    StderrSha256 = stderrSha256
-                    StdoutByteLength = stdoutByteLength
-                    StderrByteLength = stderrByteLength
-                    FailureKind = failureKind
-                    TestedCommitOid = testedCommitOid
-                    TestedTreeOid = testedTreeOid
-                    WorkingTreeClean = workingTreeClean
-                    ProviderBinarySha256 = providerBinarySha256
-                    ToolingBinarySha256 = toolingBinarySha256
-                    TestBinarySha256 = testBinarySha256
-                }
+                Result.Ok
+                    { SchemaVersion = 1
+                      EvidenceId = evidenceId
+                      CheckId = checkId
+                      Required = required
+                      ProviderId = providerId
+                      ProviderVersion = providerVersion
+                      Command = command
+                      Arguments = arguments
+                      WorkingDirectory = workingDirectory
+                      StartedAt = startedAt
+                      DurationMs = durationMs
+                      ExitCode = exitCode
+                      Result = result
+                      TestsTotal = testsTotal
+                      TestsPassed = testsPassed
+                      TestsIgnored = testsIgnored
+                      TestsFailed = testsFailed
+                      TestsErrored = testsErrored
+                      StdoutSha256 = stdoutSha256
+                      StderrSha256 = stderrSha256
+                      StdoutByteLength = stdoutByteLength
+                      StderrByteLength = stderrByteLength
+                      FailureKind = failureKind
+                      TestedCommitOid = testedCommitOid
+                      TestedTreeOid = testedTreeOid
+                      WorkingTreeClean = workingTreeClean
+                      ProviderBinarySha256 = providerBinarySha256
+                      ToolingBinarySha256 = toolingBinarySha256
+                      TestBinarySha256 = testBinarySha256 }
     with ex ->
         Result.Error [ EvidenceWireParseError.InvalidJson ex.Message ]
 
@@ -989,9 +1128,9 @@ let aggregateWireParseErrorToString (e: AggregateWireParseError) : string =
     | AggregateWireParseError.InvalidJson d -> sprintf "invalid JSON: %s" d
     | AggregateWireParseError.DuplicateProperty p -> sprintf "duplicate property: %s" p
     | AggregateWireParseError.MissingField f -> sprintf "missing required field: %s" f
-    | AggregateWireParseError.WrongFieldType (f, exp, act) -> sprintf "wrong type for %s: expected %s, got %s" f exp act
+    | AggregateWireParseError.WrongFieldType(f, exp, act) -> sprintf "wrong type for %s: expected %s, got %s" f exp act
     | AggregateWireParseError.UnsupportedSchemaVersion v -> sprintf "unsupported schema_version: %d" v
-    | AggregateWireParseError.InvalidInteger (f, d) -> sprintf "invalid integer for %s: %s" f d
+    | AggregateWireParseError.InvalidInteger(f, d) -> sprintf "invalid integer for %s: %s" f d
     | AggregateWireParseError.InvalidRecordIds d -> sprintf "invalid record_ids: %s" d
     | AggregateWireParseError.UnknownStatus v -> sprintf "unknown status: %s" v
     | AggregateWireParseError.InconsistentTotals d -> sprintf "inconsistent totals: %s" d
@@ -1005,11 +1144,13 @@ let parseAggregateWireJsonStrict (source: string) : Result<CanonicalExecutionAgg
     try
         let doc = JsonDocument.Parse(source)
         let root = doc.RootElement
+
         if root.ValueKind <> JsonValueKind.Object then
             Result.Error [ AggregateWireParseError.InvalidJson "root must be an object" ]
         else
             let errors = ResizeArray()
             let seen = System.Collections.Generic.Dictionary()
+
             for prop in root.EnumerateObject() do
                 if seen.ContainsKey(prop.Name) then
                     errors.Add(AggregateWireParseError.DuplicateProperty prop.Name)
@@ -1018,12 +1159,15 @@ let parseAggregateWireJsonStrict (source: string) : Result<CanonicalExecutionAgg
 
             let schemaVersion =
                 let mutable found = Unchecked.defaultof<JsonElement>
+
                 if root.TryGetProperty("schema_version", &found) then
                     if found.ValueKind = JsonValueKind.Number then
                         let mutable v = 0
                         if found.TryGetInt32(&v) then v else 0
-                    else 0
-                else 0
+                    else
+                        0
+                else
+                    0
 
             if schemaVersion <> AggregateSchemaVersion then
                 errors.Add(AggregateWireParseError.UnsupportedSchemaVersion schemaVersion)
@@ -1043,8 +1187,10 @@ let parseAggregateWireJsonStrict (source: string) : Result<CanonicalExecutionAgg
             let requiredChecksTotal = root.GetProperty("required_checks_total").GetInt32()
             let requiredChecksPassed = root.GetProperty("required_checks_passed").GetInt32()
             let requiredChecksFailed = root.GetProperty("required_checks_failed").GetInt32()
+
             let recordIds =
                 [ for id in root.GetProperty("record_ids").EnumerateArray() -> id.GetString() ]
+
             let overallStatusStr = root.GetProperty("overall_status").GetString()
             let semanticSha256 = root.GetProperty("semantic_sha256").GetString()
 
@@ -1064,49 +1210,63 @@ let parseAggregateWireJsonStrict (source: string) : Result<CanonicalExecutionAgg
 
             // Validate totals consistency
             if recordsTotal <> recordsPassed + recordsFailed + recordsUnavailable then
-                errors.Add(AggregateWireParseError.InconsistentTotals(
-                    sprintf "records_total=%d but passed+failed+unavailable=%d" recordsTotal (recordsPassed + recordsFailed + recordsUnavailable)))
+                errors.Add(
+                    AggregateWireParseError.InconsistentTotals(
+                        sprintf
+                            "records_total=%d but passed+failed+unavailable=%d"
+                            recordsTotal
+                            (recordsPassed + recordsFailed + recordsUnavailable)
+                    )
+                )
 
             if requiredChecksTotal <> requiredChecksPassed + requiredChecksFailed then
-                errors.Add(AggregateWireParseError.InconsistentTotals(
-                    sprintf "required_checks_total=%d but passed+failed=%d" requiredChecksTotal (requiredChecksPassed + requiredChecksFailed)))
+                errors.Add(
+                    AggregateWireParseError.InconsistentTotals(
+                        sprintf
+                            "required_checks_total=%d but passed+failed=%d"
+                            requiredChecksTotal
+                            (requiredChecksPassed + requiredChecksFailed)
+                    )
+                )
 
             // Validate record IDs are unique and sorted
             let seenIds = System.Collections.Generic.HashSet()
             let mutable prevId = ""
             let mutable idsOk = true
+
             for id in recordIds do
                 if not (seenIds.Add id) then
                     errors.Add(AggregateWireParseError.DuplicateRecordId id)
                     idsOk <- false
+
                 if id < prevId && idsOk then
                     errors.Add(AggregateWireParseError.UnsortedRecordIds)
                     idsOk <- false
+
                 prevId <- id
 
             if errors.Count > 0 then
-                Result.Error (List.ofSeq errors)
+                Result.Error(List.ofSeq errors)
             else
-                Result.Ok {
-                    SchemaVersion = 1
-                    SubjectCommitOid = subjectCommitOid
-                    SubjectTreeOid = subjectTreeOid
-                    RecordsTotal = recordsTotal
-                    RecordsPassed = recordsPassed
-                    RecordsFailed = recordsFailed
-                    RecordsUnavailable = recordsUnavailable
-                    TestsTotal = testsTotal
-                    TestsPassed = testsPassed
-                    TestsIgnored = testsIgnored
-                    TestsFailed = testsFailed
-                    TestsErrored = testsErrored
-                    RequiredChecksTotal = requiredChecksTotal
-                    RequiredChecksPassed = requiredChecksPassed
-                    RequiredChecksFailed = requiredChecksFailed
-                    RecordIds = recordIds
-                    OverallStatus = overallStatus
-                    SemanticSha256 = semanticSha256
-                }
+                Result.Ok
+                    { SchemaVersion = 1
+                      SubjectCommitOid = subjectCommitOid
+                      SubjectTreeOid = subjectTreeOid
+                      RecordsTotal = recordsTotal
+                      RecordsPassed = recordsPassed
+                      RecordsFailed = recordsFailed
+                      RecordsUnavailable = recordsUnavailable
+                      TestsTotal = testsTotal
+                      TestsPassed = testsPassed
+                      TestsIgnored = testsIgnored
+                      TestsFailed = testsFailed
+                      TestsErrored = testsErrored
+                      RequiredChecksTotal = requiredChecksTotal
+                      RequiredChecksPassed = requiredChecksPassed
+                      RequiredChecksFailed = requiredChecksFailed
+                      RecordIds = recordIds
+                      OverallStatus = overallStatus
+                      SemanticSha256 = semanticSha256 }
     with ex ->
         Result.Error [ AggregateWireParseError.InvalidJson ex.Message ]
 
@@ -1115,11 +1275,10 @@ let parseAggregateWireJsonStrict (source: string) : Result<CanonicalExecutionAgg
 // -----------------------------------------------------------------------------
 
 /// Artifact manifest entry.
-type SnapshotArtifactEntry = {
-    Path: string
-    Sha256: string
-    ByteLength: int64
-}
+type SnapshotArtifactEntry =
+    { Path: string
+      Sha256: string
+      ByteLength: int64 }
 
 // -----------------------------------------------------------------------------
 // Record validation issues
@@ -1146,16 +1305,18 @@ let recordValidationIssueToString (i: RecordValidationIssue) : string =
     match i with
     | RecordValidationIssue.RecordsEmpty -> "record list is empty"
     | RecordValidationIssue.EvidenceIdEmpty id -> sprintf "empty evidence ID for check: %s" id
-    | RecordValidationIssue.EvidenceIdMismatch (id, expected, actual) ->
+    | RecordValidationIssue.EvidenceIdMismatch(id, expected, actual) ->
         sprintf "evidence ID mismatch for %s: expected=%s actual=%s" id expected actual
     | RecordValidationIssue.DuplicateEvidenceId id -> sprintf "duplicate evidence ID: %s" id
     | RecordValidationIssue.DuplicateCheckId id -> sprintf "duplicate check ID: %s" id
-    | RecordValidationIssue.SubjectMismatch (id, expected, actual) ->
+    | RecordValidationIssue.SubjectMismatch(id, expected, actual) ->
         sprintf "subject commit mismatch for %s: expected=%s actual=%s" id expected actual
-    | RecordValidationIssue.TreeMismatch (id, expected, actual) ->
+    | RecordValidationIssue.TreeMismatch(id, expected, actual) ->
         sprintf "tree OID mismatch for %s: expected=%s actual=%s" id expected actual
-    | RecordValidationIssue.RecordIdMismatch (expected, actual) -> sprintf "record_id mismatch: expected=%s actual=%s" expected actual
-    | RecordValidationIssue.CheckIdMismatch (expected, actual) -> sprintf "check_id mismatch: expected=%s actual=%s" expected actual
+    | RecordValidationIssue.RecordIdMismatch(expected, actual) ->
+        sprintf "record_id mismatch: expected=%s actual=%s" expected actual
+    | RecordValidationIssue.CheckIdMismatch(expected, actual) ->
+        sprintf "check_id mismatch: expected=%s actual=%s" expected actual
     | RecordValidationIssue.InvalidSubjectCommit c -> sprintf "invalid subject commit: %s" c
     | RecordValidationIssue.InvalidSubjectTree t -> sprintf "invalid subject tree: %s" t
     | RecordValidationIssue.RequiredCheckUnavailable id -> sprintf "required check unavailable: %s" id
@@ -1190,21 +1351,25 @@ let artifactManifestParseErrorToString (e: ArtifactManifestParseError) : string 
     | ArtifactManifestParseError.MissingRequiredPath p -> sprintf "missing required path: %s" p
 
 /// Parse artifact manifest JSONL strictly.
-let parseArtifactManifestJsonlStrict (source: string) : Result<SnapshotArtifactEntry list, ArtifactManifestParseError list> =
+let parseArtifactManifestJsonlStrict
+    (source: string)
+    : Result<SnapshotArtifactEntry list, ArtifactManifestParseError list> =
     try
-        let lines = source.Split([|'\n'|], StringSplitOptions.None)
+        let lines = source.Split([| '\n' |], StringSplitOptions.None)
         let entries = ResizeArray()
         let errors = ResizeArray()
         let seenPaths = System.Collections.Generic.HashSet()
 
         // Check for trailing content (non-JSON after last LF)
-        let trimmedSource = source.TrimEnd([|'\n'|])
+        let trimmedSource = source.TrimEnd([| '\n' |])
+
         if not (String.IsNullOrEmpty source) && not (source.EndsWith("\n")) then
             errors.Add(ArtifactManifestParseError.InvalidJson "no trailing LF")
 
         for i, line in Array.indexed lines do
             let lineNum = i + 1
-            let trimmedLine = line.TrimEnd([|'\r'|])
+            let trimmedLine = line.TrimEnd([| '\r' |])
+
             if isNull trimmedLine || trimmedLine.Length = 0 then
                 if i < lines.Length - 1 then
                     errors.Add(ArtifactManifestParseError.BlankInteriorLine)
@@ -1212,6 +1377,7 @@ let parseArtifactManifestJsonlStrict (source: string) : Result<SnapshotArtifactE
                 try
                     let doc = JsonDocument.Parse(trimmedLine)
                     let root = doc.RootElement
+
                     if root.ValueKind <> JsonValueKind.Object then
                         errors.Add(ArtifactManifestParseError.InvalidJson "entry must be an object")
                     else
@@ -1239,23 +1405,33 @@ let parseArtifactManifestJsonlStrict (source: string) : Result<SnapshotArtifactE
                         if byteLength < 0L then
                             errors.Add(ArtifactManifestParseError.NegativeByteLength byteLength)
 
-                        entries.Add({ Path = path; Sha256 = sha256; ByteLength = byteLength })
+                        entries.Add(
+                            { Path = path
+                              Sha256 = sha256
+                              ByteLength = byteLength }
+                        )
                 with ex ->
                     errors.Add(ArtifactManifestParseError.InvalidJson ex.Message)
 
         // Validate exact inventory: must have exactly records.jsonl, aggregate.json, canonical-evidence.json
-        let requiredPaths = set [ "records.jsonl"; "aggregate.json"; "canonical-evidence.json" ]
+        let requiredPaths =
+            set [ "records.jsonl"; "aggregate.json"; "canonical-evidence.json" ]
+
         let foundPaths = entries |> Seq.map (fun e -> e.Path) |> Set.ofSeq
         let missingPaths = Set.difference requiredPaths foundPaths
         let unknownPaths = Set.difference foundPaths requiredPaths
+
         if not missingPaths.IsEmpty then
-            missingPaths |> Seq.iter (fun p -> errors.Add(ArtifactManifestParseError.MissingRequiredPath p))
+            missingPaths
+            |> Seq.iter (fun p -> errors.Add(ArtifactManifestParseError.MissingRequiredPath p))
+
         if not unknownPaths.IsEmpty then
-            unknownPaths |> Seq.iter (fun p -> errors.Add(ArtifactManifestParseError.UnknownPath p))
+            unknownPaths
+            |> Seq.iter (fun p -> errors.Add(ArtifactManifestParseError.UnknownPath p))
 
         if errors.Count > 0 then
-            Result.Error (List.ofSeq errors)
+            Result.Error(List.ofSeq errors)
         else
-            Result.Ok (List.ofSeq entries)
+            Result.Ok(List.ofSeq entries)
     with ex ->
         Result.Error [ ArtifactManifestParseError.InvalidJson ex.Message ]

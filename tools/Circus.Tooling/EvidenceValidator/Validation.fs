@@ -25,10 +25,9 @@ open Circus.Tooling.EvidenceValidator.Domain
 open Circus.Tooling.CanonicalEvidence.Serialization
 open Circus.Tooling.CanonicalEvidence.Validation
 
-type EvidenceDependencies = {
-    RunGit: string -> string list -> Result<int * byte array * byte array, string>
-    ReadWorkingBytes: string -> Result<byte array, string>
-}
+type EvidenceDependencies =
+    { RunGit: string -> string list -> Result<int * byte array * byte array, string>
+      ReadWorkingBytes: string -> Result<byte array, string> }
 
 let productionDependencies () =
     { RunGit =
@@ -49,8 +48,7 @@ let productionDependencies () =
 exception private PayloadException of Issue
 exception private OperationalException of string * string
 
-let private payloadFail issue =
-    raise (PayloadException issue)
+let private payloadFail issue = raise (PayloadException issue)
 
 let private operationalFail operation detail =
     raise (OperationalException(operation, detail))
@@ -59,10 +57,7 @@ let private isAsciiSha256 (value: string) =
     not (isNull value)
     && value.Length = 64
     && value
-       |> Seq.forall (fun c ->
-           (c >= '0' && c <= '9')
-           || (c >= 'a' && c <= 'f')
-           || (c >= 'A' && c <= 'F'))
+       |> Seq.forall (fun c -> (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
 
 let private equalOid left right =
     String.Equals(left, right, StringComparison.OrdinalIgnoreCase)
@@ -93,7 +88,11 @@ let rec private rejectDuplicates context (element: JsonElement) =
 
 let private tryProperty (element: JsonElement) (name: string) =
     let mutable value = Unchecked.defaultof<JsonElement>
-    if element.TryGetProperty(name, &value) then Some value else None
+
+    if element.TryGetProperty(name, &value) then
+        Some value
+    else
+        None
 
 let private requiredProperty (context: string) (name: string) (element: JsonElement) =
     match tryProperty element name with
@@ -157,7 +156,9 @@ let rec private renderValue (builder: StringBuilder) (element: JsonElement) =
         element.EnumerateObject()
         |> Seq.sortBy (fun property -> property.Name)
         |> Seq.iteri (fun index property ->
-            if index > 0 then builder.Append(',') |> ignore
+            if index > 0 then
+                builder.Append(',') |> ignore
+
             builder.Append(escapeJsonString property.Name).Append(':') |> ignore
             renderValue builder property.Value)
 
@@ -167,11 +168,13 @@ let rec private renderValue (builder: StringBuilder) (element: JsonElement) =
 
         element.EnumerateArray()
         |> Seq.iteri (fun index item ->
-            if index > 0 then builder.Append(',') |> ignore
+            if index > 0 then
+                builder.Append(',') |> ignore
+
             renderValue builder item)
 
         builder.Append(']') |> ignore
-    | JsonValueKind.String -> builder.Append(escapeJsonString(element.GetString())) |> ignore
+    | JsonValueKind.String -> builder.Append(escapeJsonString (element.GetString())) |> ignore
     | JsonValueKind.Number -> builder.Append(element.GetRawText()) |> ignore
     | JsonValueKind.True -> builder.Append("true") |> ignore
     | JsonValueKind.False -> builder.Append("false") |> ignore
@@ -185,7 +188,9 @@ let private renderActHashInput (root: JsonElement) =
     root.EnumerateObject()
     |> Seq.sortBy (fun property -> property.Name)
     |> Seq.iteri (fun index property ->
-        if index > 0 then builder.Append(',') |> ignore
+        if index > 0 then
+            builder.Append(',') |> ignore
+
         builder.Append(escapeJsonString property.Name).Append(':') |> ignore
 
         if property.Name = "evidence_payload_sha256" then
@@ -252,7 +257,9 @@ let private parseActEvidence (raw: string) (root: JsonElement) =
     let tree = requiredString "evidence" "tested_subject_tree_oid" root
     let generatedAfter = requiredBool "evidence" "evidence_generated_after_subject" root
     let payloadHash = requiredString "evidence" "evidence_payload_sha256" root
-    let placeholder = requiredString "evidence" "evidence_payload_sha256_input_placeholder" root
+
+    let placeholder =
+        requiredString "evidence" "evidence_payload_sha256_input_placeholder" root
 
     let issues = ResizeArray<Issue>()
 
@@ -292,6 +299,7 @@ let private parseCanonicalEvidence (raw: string) (root: JsonElement) =
     | Ok canonical ->
         let rawKeys = [ for property in root.EnumerateObject() -> property.Name ]
         let validation = validate rawKeys canonical
+
         let issues =
             if isValid validation then
                 []
@@ -337,11 +345,19 @@ let private runGit (deps: EvidenceDependencies) (repoRoot: string) (operation: s
     | Error detail -> operationalFail operation detail
     | Ok(exitCode, stdout, stderr) -> exitCode, stdout, stderr
 
-let private requiredGit (deps: EvidenceDependencies) (repoRoot: string) (operation: string) (missingDescription: string) (arguments: string list) =
+let private requiredGit
+    (deps: EvidenceDependencies)
+    (repoRoot: string)
+    (operation: string)
+    (missingDescription: string)
+    (arguments: string list)
+    =
     let exitCode, stdout, stderr = runGit deps repoRoot operation arguments
 
     if exitCode <> 0 then
-        operationalFail operation (sprintf "%s; exit=%d stderr=%s" missingDescription exitCode (Encoding.UTF8.GetString(stderr).Trim()))
+        operationalFail
+            operation
+            (sprintf "%s; exit=%d stderr=%s" missingDescription exitCode (Encoding.UTF8.GetString(stderr).Trim()))
 
     stdout
 
@@ -381,12 +397,7 @@ let private resolvePath deps repoRoot commitOid path =
     |> oidOutput ("resolve-path:" + path)
 
 let private catBlob deps repoRoot path blobOid =
-    requiredGit
-        deps
-        repoRoot
-        ("cat-blob:" + path)
-        ("blob does not exist: " + blobOid)
-        [ "cat-file"; "blob"; blobOid ]
+    requiredGit deps repoRoot ("cat-blob:" + path) ("blob does not exist: " + blobOid) [ "cat-file"; "blob"; blobOid ]
 
 let private stripAnsi text =
     Regex.Replace(text, "\\x1B\\[[0-?]*[ -/]*[@-~]", "")
@@ -394,6 +405,7 @@ let private stripAnsi text =
 let parseTranscriptSummary (bytes: byte array) =
     try
         let text = UTF8Encoding(false, true).GetString bytes |> stripAnsi
+
         let summary =
             Regex.Match(
                 text,
@@ -404,7 +416,8 @@ let parseTranscriptSummary (bytes: byte array) =
         if not summary.Success then
             Error(TranscriptSummaryMalformed "Expecto aggregate line not found")
         else
-            let exitMatch = Regex.Match(text, "process exit code:\\s*(-?\\d+)", RegexOptions.CultureInvariant)
+            let exitMatch =
+                Regex.Match(text, "process exit code:\\s*(-?\\d+)", RegexOptions.CultureInvariant)
 
             if not exitMatch.Success then
                 Error(TranscriptSummaryMalformed "process exit code marker not found")
@@ -418,7 +431,10 @@ let parseTranscriptSummary (bytes: byte array) =
                       "arbitrary non-zero runner returns its exact value (37)"
                       "exactly one production runWith definition exists" ]
 
-                match requiredNames |> List.tryFind (fun name -> not (text.Contains(name, StringComparison.Ordinal))) with
+                match
+                    requiredNames
+                    |> List.tryFind (fun name -> not (text.Contains(name, StringComparison.Ordinal)))
+                with
                 | Some missing -> Error(TranscriptSummaryMalformed("missing smoke test name: " + missing))
                 | None ->
                     Ok
@@ -454,7 +470,8 @@ let private validateReferencedBlob
     (path: string)
     (expectedBlob: string)
     (expectedHash: string)
-    (issues: ResizeArray<Issue>) =
+    (issues: ResizeArray<Issue>)
+    =
     match validateRepositoryPath false path with
     | Error detail -> payloadFail (MalformedJson(sprintf "referenced path %s invalid: %s" path detail))
     | Ok() -> ()
@@ -509,9 +526,14 @@ let validateWithDependencies deps repoRoot path subjectCommitOid evidenceCommitO
             let evidenceCommit = resolveCommit deps repoRoot evidenceCommitOid
 
             if not (equalOid evidenceCommit evidenceCommitOid) then
-                operationalFail "resolve-evidence-commit" (sprintf "expected=%s actual=%s" evidenceCommitOid evidenceCommit)
+                operationalFail
+                    "resolve-evidence-commit"
+                    (sprintf "expected=%s actual=%s" evidenceCommitOid evidenceCommit)
 
-            proof <- { proof with EvidenceCommitExists = true }
+            proof <-
+                { proof with
+                    EvidenceCommitExists = true }
+
             let blobOid = resolvePath deps repoRoot evidenceCommit path
             evidenceBlob <- Some blobOid
             proof <- { proof with EvidencePathExists = true }
@@ -524,7 +546,10 @@ let validateWithDependencies deps repoRoot path subjectCommitOid evidenceCommitO
                 | Error detail -> operationalFail "read-working-evidence" detail
 
             let bytesEqual = workingBytes = committedBytes
-            proof <- { proof with WorkingBytesEqualEvidenceBlob = bytesEqual }
+
+            proof <-
+                { proof with
+                    WorkingBytesEqualEvidenceBlob = bytesEqual }
 
             if not bytesEqual then
                 issues.Add(WorkingBytesMismatch path)
@@ -543,9 +568,17 @@ let validateWithDependencies deps repoRoot path subjectCommitOid evidenceCommitO
 
             let hashMatches =
                 String.Equals(parsed.PayloadHash, computedPayloadHash, StringComparison.OrdinalIgnoreCase)
-                && not (parseIssues |> List.exists (function | PayloadHashMismatch _ | CanonicalPayloadInvalid _ -> true | _ -> false))
+                && not (
+                    parseIssues
+                    |> List.exists (function
+                        | PayloadHashMismatch _
+                        | CanonicalPayloadInvalid _ -> true
+                        | _ -> false)
+                )
 
-            proof <- { proof with PayloadHashMatches = hashMatches }
+            proof <-
+                { proof with
+                    PayloadHashMatches = hashMatches }
 
             if not (equalOid parsed.SubjectCommitOid subjectCommitOid) then
                 issues.Add(SubjectArgumentMismatch(parsed.SubjectCommitOid, subjectCommitOid))
@@ -553,31 +586,41 @@ let validateWithDependencies deps repoRoot path subjectCommitOid evidenceCommitO
             let subjectCommit = resolveCommit deps repoRoot subjectCommitOid
 
             if not (equalOid subjectCommit subjectCommitOid) then
-                operationalFail "resolve-subject-commit" (sprintf "expected=%s actual=%s" subjectCommitOid subjectCommit)
+                operationalFail
+                    "resolve-subject-commit"
+                    (sprintf "expected=%s actual=%s" subjectCommitOid subjectCommit)
 
-            proof <- { proof with SubjectCommitExists = true }
+            proof <-
+                { proof with
+                    SubjectCommitExists = true }
+
             let subjectTree = resolveTree deps repoRoot subjectCommit
             let treeMatches = equalOid parsed.SubjectTreeOid subjectTree
-            proof <- { proof with SubjectTreeMatches = treeMatches }
+
+            proof <-
+                { proof with
+                    SubjectTreeMatches = treeMatches }
 
             if not treeMatches then
                 issues.Add(SubjectTreeMismatch(parsed.SubjectTreeOid, subjectTree))
 
             let differs = not (equalOid subjectCommit evidenceCommit)
-            proof <- { proof with SubjectDiffersFromEvidence = differs }
+
+            proof <-
+                { proof with
+                    SubjectDiffersFromEvidence = differs }
 
             if not differs then
                 issues.Add(SubjectEqualsEvidenceCommit subjectCommit)
 
             let ancestryExit, _, ancestryStderr =
-                runGit
-                    deps
-                    repoRoot
-                    "subject-ancestry"
-                    [ "merge-base"; "--is-ancestor"; subjectCommit; evidenceCommit ]
+                runGit deps repoRoot "subject-ancestry" [ "merge-base"; "--is-ancestor"; subjectCommit; evidenceCommit ]
 
             match ancestryExit with
-            | 0 -> proof <- { proof with SubjectIsAncestorOfEvidence = true }
+            | 0 ->
+                proof <-
+                    { proof with
+                        SubjectIsAncestorOfEvidence = true }
             | 1 -> issues.Add(SubjectNotAncestor(subjectCommit, evidenceCommit))
             | code ->
                 operationalFail
@@ -623,19 +666,35 @@ let validateWithDependencies deps repoRoot path subjectCommitOid evidenceCommitO
 
                 match transcriptSummary with
                 | Some actual when actual = smoke.DeclaredSummary ->
-                    proof <- { proof with TranscriptSummaryMatches = Some true }
+                    proof <-
+                        { proof with
+                            TranscriptSummaryMatches = Some true }
                 | Some actual ->
-                    proof <- { proof with TranscriptSummaryMatches = Some false }
+                    proof <-
+                        { proof with
+                            TranscriptSummaryMatches = Some false }
+
                     issues.Add(TranscriptSummaryMismatch(smoke.DeclaredSummary, actual))
-                | None -> proof <- { proof with TranscriptSummaryMatches = Some false }
+                | None ->
+                    proof <-
+                        { proof with
+                            TranscriptSummaryMatches = Some false }
 
                 match transcriptSummary, scanSummary with
                 | Some transcriptValue, Some scanValue when transcriptValue = scanValue ->
-                    proof <- { proof with TranscriptAndScanMatch = Some true }
+                    proof <-
+                        { proof with
+                            TranscriptAndScanMatch = Some true }
                 | Some transcriptValue, Some scanValue ->
-                    proof <- { proof with TranscriptAndScanMatch = Some false }
+                    proof <-
+                        { proof with
+                            TranscriptAndScanMatch = Some false }
+
                     issues.Add(TranscriptScanMismatch(transcriptValue, scanValue))
-                | _ -> proof <- { proof with TranscriptAndScanMatch = Some false }
+                | _ ->
+                    proof <-
+                        { proof with
+                            TranscriptAndScanMatch = Some false }
 
             finish None
         with
@@ -643,12 +702,11 @@ let validateWithDependencies deps repoRoot path subjectCommitOid evidenceCommitO
             issues.Add issue
             finish None
         | OperationalException(operation, detail) ->
-            finish (Some { Operation = operation; Detail = detail })
+            finish (
+                Some
+                    { Operation = operation
+                      Detail = detail }
+            )
 
 let validate repoRoot path subjectCommitOid evidenceCommitOid =
-    validateWithDependencies
-        (productionDependencies ())
-        repoRoot
-        path
-        subjectCommitOid
-        evidenceCommitOid
+    validateWithDependencies (productionDependencies ()) repoRoot path subjectCommitOid evidenceCommitOid

@@ -30,26 +30,29 @@ let private renderOptString (v: string option) : string =
     match v with
     | Some s ->
         let sb = StringBuilder()
+
         for c in s do
             if c = '\n' || c = '\r' then
                 sb.Append '\x1F' |> ignore
             else
                 sb.Append c |> ignore
+
         sb.ToString()
     | None -> nullToken
 
 /// Canonical encoding of the fingerprint input.  Field order is fixed.
-let private canonicalEncoding (severity: string)
-                              (subcategory: string option)
-                              (code: string option)
-                              (sourcePath: string option)
-                              (projectPath: string option)
-                              (startLine: int option)
-                              (startColumn: int option)
-                              (endLine: int option)
-                              (endColumn: int option)
-                              (messageNormalized: string)
-                              : string =
+let private canonicalEncoding
+    (severity: string)
+    (subcategory: string option)
+    (code: string option)
+    (sourcePath: string option)
+    (projectPath: string option)
+    (startLine: int option)
+    (startColumn: int option)
+    (endLine: int option)
+    (endColumn: int option)
+    (messageNormalized: string)
+    : string =
     let sb = StringBuilder()
     sb.Append "fingerprint_version=" |> ignore
     sb.Append ExactFingerprintVersion |> ignore
@@ -91,6 +94,7 @@ let private canonicalEncoding (severity: string)
 /// extractor_execution_time, and build-context IDs.
 let fingerprintFor (occ: DiagnosticOccurrence) : string =
     let severity = severityToken occ.Severity
+
     let encoding =
         canonicalEncoding
             severity
@@ -103,6 +107,7 @@ let fingerprintFor (occ: DiagnosticOccurrence) : string =
             occ.Span.EndLine
             occ.Span.EndColumn
             occ.MessageNormalized
+
     sha256OfUtf8 encoding
 
 /// Aggregate occurrence list into exact fingerprints.  Ordering of the input
@@ -110,12 +115,16 @@ let fingerprintFor (occ: DiagnosticOccurrence) : string =
 /// sorted by sha256 ascending (ordinal) with occurrence counts.
 let aggregateFingerprints (occurrences: DiagnosticOccurrence list) : ExactFingerprint list =
     let dict = System.Collections.Generic.Dictionary<string, ExactFingerprint>()
+
     for occ in occurrences do
         let fp = fingerprintFor occ
         let severity = severityToken occ.Severity
+
         match dict.TryGetValue fp with
         | true, existing ->
-            dict.[fp] <- { existing with OccurrenceCount = existing.OccurrenceCount + 1 }
+            dict.[fp] <-
+                { existing with
+                    OccurrenceCount = existing.OccurrenceCount + 1 }
         | false, _ ->
             dict.[fp] <-
                 { FingerprintVersion = ExactFingerprintVersion
@@ -131,15 +140,15 @@ let aggregateFingerprints (occurrences: DiagnosticOccurrence list) : ExactFinger
                   MessageNormalized = occ.MessageNormalized
                   Sha256 = fp
                   OccurrenceCount = 1 }
-    dict.Values
-    |> Seq.sortBy (fun fp -> fp.Sha256)
-    |> Seq.toList
+
+    dict.Values |> Seq.sortBy (fun fp -> fp.Sha256) |> Seq.toList
 
 /// Compute the canonical encoding for one occurrence for test inspection.
 /// Not used in production code paths; tests use this to assert canonical
 /// encoding changes when fields change.
 let debugEncoding (occ: DiagnosticOccurrence) : string =
     let severity = severityToken occ.Severity
+
     canonicalEncoding
         severity
         occ.Subcategory

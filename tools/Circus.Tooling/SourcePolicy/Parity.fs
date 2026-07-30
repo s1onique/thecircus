@@ -11,7 +11,7 @@ open System.Text.RegularExpressions
 
 open Circus.Tooling.SourcePolicy.ContainerPolicy
 
-let RequiredHeader : string list =
+let RequiredHeader: string list =
     [ "legacy_check_id"
       "legacy_behavior"
       "fsharp_check_id"
@@ -20,7 +20,7 @@ let RequiredHeader : string list =
       "negative_mutation_test"
       "status" ]
 
-let ValidStatuses : string list = [ "complete" ]
+let ValidStatuses: string list = [ "complete" ]
 
 /// P1-1: Concrete check identity grammar pattern.
 /// Valid format: CP-XX_suffix (e.g., CP-01_required_files, CP-10_trusted_runner)
@@ -33,47 +33,49 @@ let parseConcreteId (id: string) : string option =
 
 /// P1-1: Reason for malformed identity.
 let malformedReason (id: string) : string =
-    if id.Length = 0 then "empty identity"
-    elif String.IsNullOrWhiteSpace(id) then "whitespace-only identity"
-    elif id <> id.Trim() then sprintf "identity has leading/trailing whitespace: '%s'" id
-    elif id <> id.ToUpperInvariant() && id.StartsWith("CP-", System.StringComparison.OrdinalIgnoreCase) then
+    if id.Length = 0 then
+        "empty identity"
+    elif String.IsNullOrWhiteSpace(id) then
+        "whitespace-only identity"
+    elif id <> id.Trim() then
+        sprintf "identity has leading/trailing whitespace: '%s'" id
+    elif
+        id <> id.ToUpperInvariant()
+        && id.StartsWith("CP-", System.StringComparison.OrdinalIgnoreCase)
+    then
         sprintf "identity has incorrect case: '%s' (expected uppercase)" id
-    else sprintf "identity '%s' is not a valid CP-NN_suffix format" id
+    else
+        sprintf "identity '%s' is not a valid CP-NN_suffix format" id
 
-type ParityRow = {
-    LegacyCheckId: string
-    LegacyBehavior: string
-    FsharpCheckId: string
-    ImplementationLocation: string
-    PositiveTest: string
-    NegativeMutationTest: string
-    Status: string
-}
+type ParityRow =
+    { LegacyCheckId: string
+      LegacyBehavior: string
+      FsharpCheckId: string
+      ImplementationLocation: string
+      PositiveTest: string
+      NegativeMutationTest: string
+      Status: string }
 
-type RowError = {
-    LineNumber: int
-    Reason: string
-}
+type RowError = { LineNumber: int; Reason: string }
 
-type ValidationReport = {
-    Rows: ParityRow list
-    ProductionRuleCount: int
-    ParityRowCount: int
-    ExactMatches: int
-    MissingIdentities: string list
-    UnknownIdentities: string list
-    DuplicateIdentities: string list
-    DuplicateProductionIds: string list
-    FieldMismatches: (string * string * string) list
-    IdentityPathMismatches: (string * string * string) list
-    IdentityPathFunctionMismatches: (string * string) list
-    InvalidStatusRows: (int * string) list
-    RowParseFailures: RowError list
-    HeaderOk: bool
-    HeaderFailures: string list
-    MalformedIdentities: string list
-    MalformedIdentityReasons: (string * string) list
-}
+type ValidationReport =
+    { Rows: ParityRow list
+      ProductionRuleCount: int
+      ParityRowCount: int
+      ExactMatches: int
+      MissingIdentities: string list
+      UnknownIdentities: string list
+      DuplicateIdentities: string list
+      DuplicateProductionIds: string list
+      FieldMismatches: (string * string * string) list
+      IdentityPathMismatches: (string * string * string) list
+      IdentityPathFunctionMismatches: (string * string) list
+      InvalidStatusRows: (int * string) list
+      RowParseFailures: RowError list
+      HeaderOk: bool
+      HeaderFailures: string list
+      MalformedIdentities: string list
+      MalformedIdentityReasons: (string * string) list }
 
 type ValidationOutcome =
     | Ok of ValidationReport
@@ -86,9 +88,11 @@ let private parseRow (line: string) : Result<string list, string> =
     let mutable inQuotes = false
     let mutable i = 0
     let len = line.Length
-    let mutable reason : string option = None
+    let mutable reason: string option = None
+
     while i < len && reason.IsNone do
         let c = line.[i]
+
         if inQuotes then
             if c = '"' then
                 if i + 1 < len && line.[i + 1] = '"' then
@@ -100,76 +104,109 @@ let private parseRow (line: string) : Result<string list, string> =
             else
                 sb.Append c |> ignore
                 i <- i + 1
+        else if c = ',' then
+            cells.Add(sb.ToString())
+            sb.Clear() |> ignore
+            i <- i + 1
+        elif c = '"' && sb.Length = 0 then
+            inQuotes <- true
+            i <- i + 1
+        elif c = ' ' then
+            i <- i + 1
         else
-            if c = ',' then
-                cells.Add(sb.ToString())
-                sb.Clear() |> ignore
-                i <- i + 1
-            elif c = '"' && sb.Length = 0 then
-                inQuotes <- true
-                i <- i + 1
-            elif c = ' ' then
-                i <- i + 1
-            else
-                reason <- Some (sprintf "unquoted character '%c' at column %d" c (i + 1))
-    if reason.IsSome then Result.Error reason.Value
-    elif inQuotes then Result.Error "unbalanced quoting"
+            reason <- Some(sprintf "unquoted character '%c' at column %d" c (i + 1))
+
+    if reason.IsSome then
+        Result.Error reason.Value
+    elif inQuotes then
+        Result.Error "unbalanced quoting"
     else
         cells.Add(sb.ToString())
-        Result.Ok (List.ofSeq cells)
+        Result.Ok(List.ofSeq cells)
 
 let parse (path: string) : Result<ParityRow list, string> =
     if not (File.Exists path) then
-        Result.Error (sprintf "parity CSV not found: %s" path)
+        Result.Error(sprintf "parity CSV not found: %s" path)
     else
         try
             let raw = File.ReadAllText path
+
             let lines =
                 raw.Split('\n')
                 |> Array.map (fun l -> l.TrimEnd('\r'))
                 |> Array.filter (fun l -> not (String.IsNullOrWhiteSpace l))
                 |> Array.toList
+
             match lines with
             | [] -> Result.Error "parity CSV is empty"
             | header :: dataRows ->
                 let headers = parseRow header
+
                 match headers with
-                | Result.Error e -> Result.Error (sprintf "header parse failed: %s" e)
+                | Result.Error e -> Result.Error(sprintf "header parse failed: %s" e)
                 | Result.Ok headers ->
                     if headers <> RequiredHeader then
-                        let extras = headers |> List.filter (fun h -> not (List.contains h RequiredHeader)) |> List.sort
-                        let missing = RequiredHeader |> List.filter (fun h -> not (List.contains h headers)) |> List.sort
+                        let extras =
+                            headers
+                            |> List.filter (fun h -> not (List.contains h RequiredHeader))
+                            |> List.sort
+
+                        let missing =
+                            RequiredHeader
+                            |> List.filter (fun h -> not (List.contains h headers))
+                            |> List.sort
+
                         let orderDiff =
-                            if List.length headers = List.length RequiredHeader &&
-                               List.zip headers RequiredHeader |> List.exists (fun (a, b) -> a <> b)
-                            then [ "header column order does not match required order" ]
-                            else []
+                            if
+                                List.length headers = List.length RequiredHeader
+                                && List.zip headers RequiredHeader |> List.exists (fun (a, b) -> a <> b)
+                            then
+                                [ "header column order does not match required order" ]
+                            else
+                                []
+
                         let msgs =
-                            (if not (List.isEmpty extras) then [ sprintf "extra header columns: %s" (String.concat "," extras) ] else [])
-                            @ (if not (List.isEmpty missing) then [ sprintf "missing header columns: %s" (String.concat "," missing) ] else [])
+                            (if not (List.isEmpty extras) then
+                                 [ sprintf "extra header columns: %s" (String.concat "," extras) ]
+                             else
+                                 [])
+                            @ (if not (List.isEmpty missing) then
+                                   [ sprintf "missing header columns: %s" (String.concat "," missing) ]
+                               else
+                                   [])
                             @ orderDiff
+
                         Result.Error(String.concat "; " msgs)
                     else
-                        let mutable rows : ParityRow list = []
-                        let mutable errors : string list = []
+                        let mutable rows: ParityRow list = []
+                        let mutable errors: string list = []
                         let mutable lineNo = 1
-                        let mutable parseFailures : RowError list = []
+                        let mutable parseFailures: RowError list = []
+
                         for line in dataRows do
                             lineNo <- lineNo + 1
+
                             match parseRow line with
                             | Result.Error e ->
                                 parseFailures <- { LineNumber = lineNo; Reason = e } :: parseFailures
                                 errors <- sprintf "line %d: %s" lineNo e :: errors
                             | Result.Ok cells ->
                                 if List.length cells <> List.length RequiredHeader then
-                                    errors <- sprintf "line %d: expected %d fields, got %d"
-                                                lineNo (List.length RequiredHeader) (List.length cells) :: errors
+                                    errors <-
+                                        sprintf
+                                            "line %d: expected %d fields, got %d"
+                                            lineNo
+                                            (List.length RequiredHeader)
+                                            (List.length cells)
+                                        :: errors
                                 else
                                     let fields = List.zip RequiredHeader cells
+
                                     let lookup key =
                                         fields
                                         |> List.tryPick (fun (k, v) -> if k = key then Some v else None)
                                         |> Option.defaultValue ""
+
                                     let id = lookup "legacy_check_id"
                                     let status = lookup "status"
                                     let pos = lookup "positive_test"
@@ -177,31 +214,44 @@ let parse (path: string) : Result<ParityRow list, string> =
                                     let legacyBehavior = lookup "legacy_behavior"
                                     let fsId = lookup "fsharp_check_id"
                                     let implLoc = lookup "implementation_location"
+
                                     if String.IsNullOrWhiteSpace id then
                                         errors <- sprintf "line %d: missing identity" lineNo :: errors
+
                                     if String.IsNullOrWhiteSpace legacyBehavior then
                                         errors <- sprintf "line %d: blank legacy_behavior" lineNo :: errors
+
                                     if not (List.contains status ValidStatuses) then
-                                        errors <- sprintf "line %d: invalid status '%s' (must be 'complete')" lineNo status :: errors
+                                        errors <-
+                                            sprintf "line %d: invalid status '%s' (must be 'complete')" lineNo status
+                                            :: errors
+
                                     if String.IsNullOrWhiteSpace pos then
                                         errors <- sprintf "line %d: blank positive_test" lineNo :: errors
+
                                     if String.IsNullOrWhiteSpace neg then
                                         errors <- sprintf "line %d: blank negative_mutation_test" lineNo :: errors
+
                                     if String.IsNullOrWhiteSpace fsId then
                                         errors <- sprintf "line %d: blank fsharp_check_id" lineNo :: errors
+
                                     if String.IsNullOrWhiteSpace implLoc then
                                         errors <- sprintf "line %d: blank implementation_location" lineNo :: errors
-                                    rows <- { LegacyCheckId = id
-                                              LegacyBehavior = legacyBehavior
-                                              FsharpCheckId = fsId
-                                              ImplementationLocation = implLoc
-                                              PositiveTest = pos
-                                              NegativeMutationTest = neg
-                                              Status = status } :: rows
+
+                                    rows <-
+                                        { LegacyCheckId = id
+                                          LegacyBehavior = legacyBehavior
+                                          FsharpCheckId = fsId
+                                          ImplementationLocation = implLoc
+                                          PositiveTest = pos
+                                          NegativeMutationTest = neg
+                                          Status = status }
+                                        :: rows
+
                         if not (List.isEmpty errors) then
                             Result.Error(String.concat "; " (List.rev errors))
                         else
-                            Result.Ok (List.rev rows)
+                            Result.Ok(List.rev rows)
         with ex ->
             Result.Error(sprintf "parity CSV read failed: %s: %s" (ex.GetType().FullName) ex.Message)
 
@@ -215,18 +265,12 @@ let private extractFunctionName (implLoc: string) : string option =
 let duplicateIds (identities: string list) : string list =
     identities
     |> List.groupBy id
-    |> List.choose (fun (identity, occurrences) ->
-        if List.length occurrences > 1 then
-            Some identity
-        else
-            None)
+    |> List.choose (fun (identity, occurrences) -> if List.length occurrences > 1 then Some identity else None)
 
 /// P1-1: Authoritative metadata map from ContainerPolicy.CheckMetadataEntries.
 /// Key: exact concrete check ID, Value: CheckMetadataEntry record.
-let private metadataByExactId : Map<string, CheckMetadataEntry> =
-    CheckMetadataEntries
-    |> List.map (fun m -> m.CheckId, m)
-    |> Map.ofList
+let private metadataByExactId: Map<string, CheckMetadataEntry> =
+    CheckMetadataEntries |> List.map (fun m -> m.CheckId, m) |> Map.ofList
 
 /// P1-1: Exact identity validation using CheckMetadataEntries as single authority.
 let validate (rows: ParityRow list) : ValidationOutcome =
@@ -243,34 +287,45 @@ let validate (rows: ParityRow list) : ValidationOutcome =
     let csvFsharpIds = rows |> List.map (fun r -> r.FsharpCheckId)
 
     // P1-1: Partition into valid (grammar OK) and invalid (grammar fail)
-    let parsedLegacy =
-        csvLegacyIds
-        |> List.map (fun id -> id, parseConcreteId id)
-    let validLegacy, invalidLegacy = parsedLegacy |> List.partition (fun (_, p) -> p.IsSome)
+    let parsedLegacy = csvLegacyIds |> List.map (fun id -> id, parseConcreteId id)
 
-    let parsedFsharp =
-        csvFsharpIds
-        |> List.map (fun id -> id, parseConcreteId id)
-    let validFsharp, invalidFsharp = parsedFsharp |> List.partition (fun (_, p) -> p.IsSome)
+    let validLegacy, invalidLegacy =
+        parsedLegacy |> List.partition (fun (_, p) -> p.IsSome)
+
+    let parsedFsharp = csvFsharpIds |> List.map (fun id -> id, parseConcreteId id)
+
+    let validFsharp, invalidFsharp =
+        parsedFsharp |> List.partition (fun (_, p) -> p.IsSome)
 
     // P1-1: Malformed identities from invalid partitions
     let malformedLegacyIds = invalidLegacy |> List.map fst |> List.sort |> List.distinct
-    let malformedLegacyReasons = invalidLegacy |> List.map (fun (id, _) -> id, malformedReason id) |> List.sortBy fst
+
+    let malformedLegacyReasons =
+        invalidLegacy
+        |> List.map (fun (id, _) -> id, malformedReason id)
+        |> List.sortBy fst
+
     let malformedFsharpIds = invalidFsharp |> List.map fst |> List.sort |> List.distinct
-    let malformedFsharpReasons = invalidFsharp |> List.map (fun (id, _) -> id, malformedReason id) |> List.sortBy fst
-    let allMalformed = (malformedLegacyIds @ malformedFsharpIds) |> List.sort |> List.distinct
-    let allMalformedReasons = (malformedLegacyReasons @ malformedFsharpReasons) |> List.sortBy fst |> List.distinctBy fst
+
+    let malformedFsharpReasons =
+        invalidFsharp
+        |> List.map (fun (id, _) -> id, malformedReason id)
+        |> List.sortBy fst
+
+    let allMalformed =
+        (malformedLegacyIds @ malformedFsharpIds) |> List.sort |> List.distinct
+
+    let allMalformedReasons =
+        (malformedLegacyReasons @ malformedFsharpReasons)
+        |> List.sortBy fst
+        |> List.distinctBy fst
 
     // P1-1: Duplicate parity IDs from original list (before Set.ofList)
-    let dupCsvIds =
-        csvLegacyIds
-        |> duplicateIds
+    let dupCsvIds = csvLegacyIds |> duplicateIds
 
     // P1-1: Duplicate production IDs from original metadata list (before Set.ofList)
     let productionIds = productionMetadata |> List.map (fun m -> m.CheckId)
-    let dupProductionIds =
-        productionIds
-        |> duplicateIds
+    let dupProductionIds = productionIds |> duplicateIds
 
     // P1-1: Known IDs from valid legacy partition
     let validLegacyIds = validLegacy |> List.map fst
@@ -280,25 +335,27 @@ let validate (rows: ParityRow list) : ValidationOutcome =
     let unknownLegacy =
         validLegacyIds
         |> List.filter (fun id -> not (Set.contains id knownIds))
-        |> List.sort |> List.distinct
+        |> List.sort
+        |> List.distinct
 
     // P1-1: Unknown FsharpCheckId identities (valid grammar but absent from metadata)
     let unknownFsharp =
         validFsharpIds
         |> List.filter (fun id -> not (Set.contains id knownIds))
-        |> List.sort |> List.distinct
+        |> List.sort
+        |> List.distinct
 
     // P1-1: Combined unknown identities from both columns
     let unknownIdentities =
-        (unknownLegacy @ unknownFsharp)
-        |> List.sort |> List.distinct
+        (unknownLegacy @ unknownFsharp) |> List.sort |> List.distinct
 
     // P1-1: Missing identities (in production but not in parity)
     let missing =
         knownIds
         |> Set.toList
         |> List.filter (fun id -> not (List.contains id csvLegacyIds))
-        |> List.sort |> List.distinct
+        |> List.sort
+        |> List.distinct
 
     // P1-1: Field mismatches
     let fieldMismatches =
@@ -321,7 +378,14 @@ let validate (rows: ParityRow list) : ValidationOutcome =
             | Some metadata ->
                 match extractFunctionName r.ImplementationLocation with
                 | Some actual when actual = metadata.ImplementationFunctionName -> None
-                | actual -> Some (r.LegacyCheckId, sprintf "expected %s; got %s" metadata.ImplementationFunctionName (defaultArg actual "<missing>"))
+                | actual ->
+                    Some(
+                        r.LegacyCheckId,
+                        sprintf
+                            "expected %s; got %s"
+                            metadata.ImplementationFunctionName
+                            (defaultArg actual "<missing>")
+                    )
             | None -> None)
 
     // P1-1: Invalid status rows
@@ -335,82 +399,104 @@ let validate (rows: ParityRow list) : ValidationOutcome =
     let exactMatches =
         rows
         |> List.filter (fun r ->
-            Set.contains r.LegacyCheckId knownIds &&
-            Set.contains r.FsharpCheckId knownIds &&
-            r.LegacyCheckId = r.FsharpCheckId)
+            Set.contains r.LegacyCheckId knownIds
+            && Set.contains r.FsharpCheckId knownIds
+            && r.LegacyCheckId = r.FsharpCheckId)
         |> List.length
 
-    let report = {
-        Rows = rows
-        ProductionRuleCount = productionRuleCount
-        ParityRowCount = parityRowCount
-        ExactMatches = exactMatches
-        MissingIdentities = missing
-        UnknownIdentities = unknownIdentities  // P1-1: Combined from both legacy and fsharp columns
-        DuplicateIdentities = dupCsvIds
-        DuplicateProductionIds = dupProductionIds
-        FieldMismatches = fieldMismatches
-        IdentityPathMismatches = identityPathMismatches
-        IdentityPathFunctionMismatches = identityPathFunctionMismatches
-        InvalidStatusRows = invalidStatusRows
-        RowParseFailures = []
-        HeaderOk = true
-        HeaderFailures = []
-        MalformedIdentities = allMalformed
-        MalformedIdentityReasons = allMalformedReasons
-    }
+    let report =
+        { Rows = rows
+          ProductionRuleCount = productionRuleCount
+          ParityRowCount = parityRowCount
+          ExactMatches = exactMatches
+          MissingIdentities = missing
+          UnknownIdentities = unknownIdentities // P1-1: Combined from both legacy and fsharp columns
+          DuplicateIdentities = dupCsvIds
+          DuplicateProductionIds = dupProductionIds
+          FieldMismatches = fieldMismatches
+          IdentityPathMismatches = identityPathMismatches
+          IdentityPathFunctionMismatches = identityPathFunctionMismatches
+          InvalidStatusRows = invalidStatusRows
+          RowParseFailures = []
+          HeaderOk = true
+          HeaderFailures = []
+          MalformedIdentities = allMalformed
+          MalformedIdentityReasons = allMalformedReasons }
 
     // P1-1: Build failure list (use combined unknownIdentities)
     let failures =
         []
-        |> List.append (if productionRuleCount <> parityRowCount then
-                           [sprintf "production_rule_count (%d) != parity_row_count (%d)" productionRuleCount parityRowCount]
-                        else [])
-        |> List.append (if parityRowCount <> exactMatches then
-                           [sprintf "parity_row_count (%d) != exact_matches (%d)" parityRowCount exactMatches]
-                        else [])
+        |> List.append (
+            if productionRuleCount <> parityRowCount then
+                [ sprintf "production_rule_count (%d) != parity_row_count (%d)" productionRuleCount parityRowCount ]
+            else
+                []
+        )
+        |> List.append (
+            if parityRowCount <> exactMatches then
+                [ sprintf "parity_row_count (%d) != exact_matches (%d)" parityRowCount exactMatches ]
+            else
+                []
+        )
         |> List.append (List.map (sprintf "malformed identity: %s") allMalformed)
         |> List.append (List.map (fun (id, reason) -> sprintf "malformed '%s': %s" id reason) allMalformedReasons)
-        |> List.append (List.map (sprintf "unknown identity: %s") unknownIdentities)  // P1-1: Combined from both columns
+        |> List.append (List.map (sprintf "unknown identity: %s") unknownIdentities) // P1-1: Combined from both columns
         |> List.append (List.map (sprintf "missing identity: %s") missing)
         |> List.append (List.map (sprintf "duplicate parity identity: %s") dupCsvIds)
         |> List.append (List.map (sprintf "duplicate production identity: %s") dupProductionIds)
-        |> List.append (List.map (fun (csv, fs, reason) -> sprintf "field mismatch: csv=%s fsharp=%s (%s)" csv fs reason) fieldMismatches)
-        |> List.append (List.map (fun (id, csv, reg) -> sprintf "path mismatch: %s csv=%s registry=%s" id csv reg) identityPathMismatches)
-        |> List.append (List.map (fun (id, msg) -> sprintf "function mismatch: %s (%s)" id msg) identityPathFunctionMismatches)
-        |> List.append (List.map (fun (line, status) -> sprintf "line %d: invalid status '%s'" line status) invalidStatusRows)
+        |> List.append (
+            List.map
+                (fun (csv, fs, reason) -> sprintf "field mismatch: csv=%s fsharp=%s (%s)" csv fs reason)
+                fieldMismatches
+        )
+        |> List.append (
+            List.map
+                (fun (id, csv, reg) -> sprintf "path mismatch: %s csv=%s registry=%s" id csv reg)
+                identityPathMismatches
+        )
+        |> List.append (
+            List.map (fun (id, msg) -> sprintf "function mismatch: %s (%s)" id msg) identityPathFunctionMismatches
+        )
+        |> List.append (
+            List.map (fun (line, status) -> sprintf "line %d: invalid status '%s'" line status) invalidStatusRows
+        )
 
-    if List.isEmpty failures then Ok report
-    else Failed (report, failures)
+    if List.isEmpty failures then
+        Ok report
+    else
+        Failed(report, failures)
 
 let validateFile (path: string) : ValidationOutcome =
     match parse path with
     | Result.Error e ->
-        Failed ({ Rows = []
-                  ProductionRuleCount = 0
-                  ParityRowCount = 0
-                  ExactMatches = 0
-                  MissingIdentities = []
-                  UnknownIdentities = []
-                  DuplicateIdentities = []
-                  DuplicateProductionIds = []
-                  FieldMismatches = []
-                  IdentityPathMismatches = []
-                  IdentityPathFunctionMismatches = []
-                  InvalidStatusRows = []
-                  RowParseFailures = []
-                  HeaderOk = false
-                  HeaderFailures = [ e ]
-                  MalformedIdentities = []
-                  MalformedIdentityReasons = [] },
-               [ e ])
+        Failed(
+            { Rows = []
+              ProductionRuleCount = 0
+              ParityRowCount = 0
+              ExactMatches = 0
+              MissingIdentities = []
+              UnknownIdentities = []
+              DuplicateIdentities = []
+              DuplicateProductionIds = []
+              FieldMismatches = []
+              IdentityPathMismatches = []
+              IdentityPathFunctionMismatches = []
+              InvalidStatusRows = []
+              RowParseFailures = []
+              HeaderOk = false
+              HeaderFailures = [ e ]
+              MalformedIdentities = []
+              MalformedIdentityReasons = [] },
+            [ e ]
+        )
     | Result.Ok rows -> validate rows
 
 /// P1-1: Enhanced summary with stored mechanical accounting.
 let renderSummary (outcome: ValidationOutcome) : string =
     match outcome with
     | Ok r ->
-        sprintf "parity: PASS (production_rules=%d, parity_rows=%d, exact_matches=%d, missing=%d, unknown=%d, duplicates=%d, malformed=%d)"
+        sprintf
+            "parity: PASS (production_rules=%d, parity_rows=%d, exact_matches=%d, missing=%d, unknown=%d, duplicates=%d, malformed=%d)"
             r.ProductionRuleCount
             r.ParityRowCount
             r.ExactMatches
@@ -418,8 +504,9 @@ let renderSummary (outcome: ValidationOutcome) : string =
             (List.length r.UnknownIdentities)
             (List.length r.DuplicateIdentities)
             (List.length r.MalformedIdentities)
-    | Failed (r, fs) ->
-        sprintf "parity: FAIL (production_rules=%d, parity_rows=%d, exact_matches=%d, missing=%d, unknown=%d, duplicates=%d, malformed=%d, reasons=%s)"
+    | Failed(r, fs) ->
+        sprintf
+            "parity: FAIL (production_rules=%d, parity_rows=%d, exact_matches=%d, missing=%d, unknown=%d, duplicates=%d, malformed=%d, reasons=%s)"
             r.ProductionRuleCount
             r.ParityRowCount
             r.ExactMatches

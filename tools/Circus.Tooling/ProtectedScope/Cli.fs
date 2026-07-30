@@ -65,7 +65,8 @@ let private parse argv =
             | "--repo-root" :: values -> assign "--repo-root" (fun value -> repoRoot <- Some value) values
             | "--declaration" :: values -> assign "--declaration" (fun value -> declaration <- Some value) values
             | "--baseline-commit" :: values -> assign "--baseline-commit" (fun value -> baseline <- Some value) values
-            | "--evaluated-commit" :: values -> assign "--evaluated-commit" (fun value -> evaluated <- Some value) values
+            | "--evaluated-commit" :: values ->
+                assign "--evaluated-commit" (fun value -> evaluated <- Some value) values
             | unknown :: _ -> failure <- Some(sprintf "unrecognised argument: %s" unknown)
             | [] -> ()
 
@@ -80,15 +81,10 @@ let private changedPaths repoRoot baseline evaluated =
         runGitTyped
             repoRoot
             defaultGitRunOptions
-            [ "diff"
-              "--name-only"
-              "--no-renames"
-              "-z"
-              baseline + ".." + evaluated ]
+            [ "diff"; "--name-only"; "--no-renames"; "-z"; baseline + ".." + evaluated ]
     with
     | Error error -> Error(sprintf "bounded Git diff failed: %A" error)
-    | Ok result when result.ExitCode <> 0 ->
-        Error(sprintf "Git diff exit=%d stderr=%s" result.ExitCode result.Stderr)
+    | Ok result when result.ExitCode <> 0 -> Error(sprintf "Git diff exit=%d stderr=%s" result.ExitCode result.Stderr)
     | Ok result ->
         let paths =
             result.Stdout.Split([| '\u0000' |], StringSplitOptions.RemoveEmptyEntries)
@@ -169,8 +165,7 @@ let run argv =
     | Ok HelpCmd ->
         stdout.WriteLine(helpText ())
         ExitCode.pass
-    | Ok(CheckCmd(repoRoot, declaration, baseline, evaluated)) ->
-        runCheck repoRoot declaration baseline evaluated
+    | Ok(CheckCmd(repoRoot, declaration, baseline, evaluated)) -> runCheck repoRoot declaration baseline evaluated
     | Error detail ->
         stderr.WriteLine("error: " + detail)
         stderr.WriteLine(helpText ())

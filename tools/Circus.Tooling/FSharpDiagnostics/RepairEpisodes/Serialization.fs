@@ -20,29 +20,42 @@ open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 let private escapeJsonString (s: string) : string =
     let sb = StringBuilder(s.Length + 2)
     sb.Append '"' |> ignore
+
     for c in s do
-        if c = '\\' then sb.Append("\\\\") |> ignore
-        elif c = '"' then sb.Append("\\\"") |> ignore
-        elif c = '\n' then sb.Append("\\n") |> ignore
-        elif c = '\r' then sb.Append("\\r") |> ignore
-        elif c = '\t' then sb.Append("\\t") |> ignore
-        elif c = '\b' then sb.Append("\\b") |> ignore
-        elif c = '\x0c' then sb.Append("\\f") |> ignore
+        if c = '\\' then
+            sb.Append("\\\\") |> ignore
+        elif c = '"' then
+            sb.Append("\\\"") |> ignore
+        elif c = '\n' then
+            sb.Append("\\n") |> ignore
+        elif c = '\r' then
+            sb.Append("\\r") |> ignore
+        elif c = '\t' then
+            sb.Append("\\t") |> ignore
+        elif c = '\b' then
+            sb.Append("\\b") |> ignore
+        elif c = '\x0c' then
+            sb.Append("\\f") |> ignore
         elif int c < 0x20 then
             sb.AppendFormat(CultureInfo.InvariantCulture, "\\u{0:x4}", int c) |> ignore
         elif c = '\uFEFF' then
             sb.Append("\\ufeff") |> ignore
-        else sb.Append c |> ignore
+        else
+            sb.Append c |> ignore
+
     sb.Append '"' |> ignore
     sb.ToString()
 
 let private str (v: string) : string = escapeJsonString v
+
 let private optStr (v: string option) : string =
     match v with
     | None -> "null"
     | Some s -> escapeJsonString s
+
 let private intStr (v: int) : string =
     v.ToString(CultureInfo.InvariantCulture)
+
 let private strList (xs: string list) : string =
     "[" + (xs |> List.map escapeJsonString |> String.concat ",") + "]"
 
@@ -195,6 +208,7 @@ let renderGitChangeSet (cs: GitChangeSet) : string =
             + str e.CanonicalPath
             + "}")
         |> String.concat ","
+
     "{\"schema_version\":"
     + str cs.SchemaVersion
     + ",\"change_set_id\":"
@@ -299,13 +313,13 @@ let renderRepairEpisodeSummary (s: RepairEpisodeSummary) : string =
 // File writers (UTF-8 without BOM, exactly one terminal LF)
 // -----------------------------------------------------------------------------
 
-let private utf8NoBom : Encoding = new UTF8Encoding(false)
+let private utf8NoBom: Encoding = new UTF8Encoding(false)
 
 let writeLineOriented (path: string) (text: string) : unit =
     let dir = Path.GetDirectoryName path
+
     if not (System.String.IsNullOrEmpty dir) && not (Directory.Exists dir) then
         Directory.CreateDirectory dir |> ignore
-    let body =
-        if text.EndsWith "\n" then text
-        else text + "\n"
+
+    let body = if text.EndsWith "\n" then text else text + "\n"
     File.WriteAllText(path, body, utf8NoBom)

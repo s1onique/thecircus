@@ -73,21 +73,20 @@ let statusToken (s: ArtifactStatus) : string =
 // =============================================================================
 
 /// One entry in the canonical artifact manifest (artifacts-v1.jsonl).
-type ArtifactManifestEntry = {
-    SchemaVersion: string
-    CanonicalPath: string
-    OriginalPath: string
-    ArtifactClass: string
-    Authority: string
-    Status: string
-    MediaType: string
-    ByteLength: int64
-    Sha256: string
-    CaptureId: string option
-    Supersedes: string option
-    SupersededBy: string option
-    MetadataGaps: string list
-}
+type ArtifactManifestEntry =
+    { SchemaVersion: string
+      CanonicalPath: string
+      OriginalPath: string
+      ArtifactClass: string
+      Authority: string
+      Status: string
+      MediaType: string
+      ByteLength: int64
+      Sha256: string
+      CaptureId: string option
+      Supersedes: string option
+      SupersededBy: string option
+      MetadataGaps: string list }
 
 /// Top-level artifact manifest header value (used for the jsonl envelope).
 let ArtifactManifestSchemaVersion = "artifact-manifest-v1"
@@ -117,33 +116,31 @@ let tryParseCaptureKind (token: string) : CaptureKind option =
 
 /// Source-root alias declaration: an absolute path under which the historical
 /// capture lived is mapped to the canonical repository-relative path.
-type SourceRootAlias = {
-    AbsoluteRoot: string
-    CanonicalRoot: string
-}
+type SourceRootAlias =
+    { AbsoluteRoot: string
+      CanonicalRoot: string }
 
-type CaptureManifest = {
-    SchemaVersion: string
-    CaptureId: string
-    CaptureKind: string
-    RawArtifacts: string list
-    Command: string option
-    WorkingDirectory: string option
-    RepositoryCommitOid: string option
-    RepositoryTreeOid: string option
-    WorkingTreeState: string option
-    SourceRootAliases: SourceRootAlias list
-    DotnetSdkVersion: string option
-    MsbuildVersion: string option
-    FsharpCompilerVersion: string option
-    OperatingSystem: string option
-    Architecture: string option
-    Culture: string option
-    StartedAt: string option
-    CompletedAt: string option
-    ExitCode: int option
-    MetadataGaps: string list
-}
+type CaptureManifest =
+    { SchemaVersion: string
+      CaptureId: string
+      CaptureKind: string
+      RawArtifacts: string list
+      Command: string option
+      WorkingDirectory: string option
+      RepositoryCommitOid: string option
+      RepositoryTreeOid: string option
+      WorkingTreeState: string option
+      SourceRootAliases: SourceRootAlias list
+      DotnetSdkVersion: string option
+      MsbuildVersion: string option
+      FsharpCompilerVersion: string option
+      OperatingSystem: string option
+      Architecture: string option
+      Culture: string option
+      StartedAt: string option
+      CompletedAt: string option
+      ExitCode: int option
+      MetadataGaps: string list }
 
 let CaptureManifestSchemaVersion = "capture-manifest-v1"
 
@@ -199,26 +196,27 @@ let tryParseLocationKind (token: string) : DiagnosticLocationKind option =
     | "tool" -> Some Tool
     | _ -> None
 
-type SourceSpan = {
-    StartLine: int option
-    StartColumn: int option
-    EndLine: int option
-    EndColumn: int option
-}
+type SourceSpan =
+    { StartLine: int option
+      StartColumn: int option
+      EndLine: int option
+      EndColumn: int option }
 
-let emptySpan : SourceSpan =
-    { StartLine = None; StartColumn = None; EndLine = None; EndColumn = None }
+let emptySpan: SourceSpan =
+    { StartLine = None
+      StartColumn = None
+      EndLine = None
+      EndColumn = None }
 
-type BuildContext = {
-    NodeId: int option
-    ProjectContextId: int option
-    TargetId: int option
-    TaskId: int option
-    EvaluationId: int option
-    SubmissionId: int option
-}
+type BuildContext =
+    { NodeId: int option
+      ProjectContextId: int option
+      TargetId: int option
+      TaskId: int option
+      EvaluationId: int option
+      SubmissionId: int option }
 
-let emptyBuildContext : BuildContext =
+let emptyBuildContext: BuildContext =
     { NodeId = None
       ProjectContextId = None
       TargetId = None
@@ -226,27 +224,26 @@ let emptyBuildContext : BuildContext =
       EvaluationId = None
       SubmissionId = None }
 
-type DiagnosticOccurrence = {
-    SchemaVersion: string
-    ExtractorVersion: string
-    CaptureId: string
-    SourceKind: DiagnosticSourceKind
-    EventOrdinal: int64
-    Severity: DiagnosticSeverity
-    Subcategory: string option
-    Code: string option
-    MessageRaw: string
-    MessageNormalized: string
-    LocationKind: DiagnosticLocationKind
-    SourcePath: string option
-    ProjectPath: string option
-    Span: SourceSpan
-    SenderName: string option
-    EventTimestamp: string option
-    BuildContext: BuildContext option
-    LegacySourceLineStart: int option
-    LegacySourceLineEnd: int option
-}
+type DiagnosticOccurrence =
+    { SchemaVersion: string
+      ExtractorVersion: string
+      CaptureId: string
+      SourceKind: DiagnosticSourceKind
+      EventOrdinal: int64
+      Severity: DiagnosticSeverity
+      Subcategory: string option
+      Code: string option
+      MessageRaw: string
+      MessageNormalized: string
+      LocationKind: DiagnosticLocationKind
+      SourcePath: string option
+      ProjectPath: string option
+      Span: SourceSpan
+      SenderName: string option
+      EventTimestamp: string option
+      BuildContext: BuildContext option
+      LegacySourceLineStart: int option
+      LegacySourceLineEnd: int option }
 
 let OccurrenceSchemaVersion = "diagnostic-occurrence-v1"
 
@@ -254,21 +251,20 @@ let OccurrenceSchemaVersion = "diagnostic-occurrence-v1"
 // Exact fingerprint v1
 // =============================================================================
 
-type ExactFingerprint = {
-    FingerprintVersion: string
-    Severity: string
-    Subcategory: string option
-    Code: string option
-    SourcePath: string option
-    ProjectPath: string option
-    StartLine: int option
-    StartColumn: int option
-    EndLine: int option
-    EndColumn: int option
-    MessageNormalized: string
-    Sha256: string
-    OccurrenceCount: int
-}
+type ExactFingerprint =
+    { FingerprintVersion: string
+      Severity: string
+      Subcategory: string option
+      Code: string option
+      SourcePath: string option
+      ProjectPath: string option
+      StartLine: int option
+      StartColumn: int option
+      EndLine: int option
+      EndColumn: int option
+      MessageNormalized: string
+      Sha256: string
+      OccurrenceCount: int }
 
 let ExactFingerprintVersion = "exact-fingerprint-v1"
 
@@ -276,26 +272,25 @@ let ExactFingerprintVersion = "exact-fingerprint-v1"
 // Corpus summary
 // =============================================================================
 
-type CorpusSummary = {
-    SchemaVersion: string
-    ExtractorVersion: string
-    ArtifactsTotal: int
-    RawArtifacts: int
-    NormalizedArtifacts: int
-    DerivedArtifacts: int
-    CorrectionArtifacts: int
-    SourceSnapshotArtifacts: int
-    ObsoleteRetainedArtifacts: int
-    UnclassifiedArtifacts: int
-    CapturesTotal: int
-    BinlogCaptures: int
-    LegacyTextCaptures: int
-    MixedCaptures: int
-    OccurrenceCount: int
-    UniqueExactFingerprintCount: int
-    DuplicateOccurrenceCount: int
-    DiagnosticLookingUnparsedLines: int
-    MetadataGaps: string list
-}
+type CorpusSummary =
+    { SchemaVersion: string
+      ExtractorVersion: string
+      ArtifactsTotal: int
+      RawArtifacts: int
+      NormalizedArtifacts: int
+      DerivedArtifacts: int
+      CorrectionArtifacts: int
+      SourceSnapshotArtifacts: int
+      ObsoleteRetainedArtifacts: int
+      UnclassifiedArtifacts: int
+      CapturesTotal: int
+      BinlogCaptures: int
+      LegacyTextCaptures: int
+      MixedCaptures: int
+      OccurrenceCount: int
+      UniqueExactFingerprintCount: int
+      DuplicateOccurrenceCount: int
+      DiagnosticLookingUnparsedLines: int
+      MetadataGaps: string list }
 
 let CorpusSummarySchemaVersion = "corpus-summary-v1"

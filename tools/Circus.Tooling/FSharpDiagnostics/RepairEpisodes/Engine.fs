@@ -169,9 +169,9 @@ let private lookupFieldStringWithAlias
         Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, aliasName, e, a))
     | FieldLookup.WrongType(e, a), FieldLookup.Present _ ->
         Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, e, a))
-    // Both wrong type
-    | FieldLookup.WrongType(e1, _), FieldLookup.WrongType(e2, _) ->
-        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, e1, e2))
+    // Both wrong type - report canonical's expected and actual types
+    | FieldLookup.WrongType(expected, actual), FieldLookup.WrongType _ ->
+        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, expected, actual))
     // Only canonical present
     | FieldLookup.Present _, FieldLookup.Missing -> Result.Ok canonicalResult
     // Only alias present
@@ -240,8 +240,11 @@ let private resolveIntFieldConflict
         Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, aliasName, e, a))
     | IntegerFieldLookup.WrongJsonType(e, a), IntegerFieldLookup.Present _ ->
         Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, e, a))
-    | IntegerFieldLookup.WrongJsonType(e1, _), IntegerFieldLookup.WrongJsonType(e2, _) ->
-        Result.Error(VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, e1, e2))
+    // Both wrong JSON type - report canonical's expected and actual types
+    | IntegerFieldLookup.WrongJsonType(_, canonicalActual), IntegerFieldLookup.WrongJsonType _ ->
+        Result.Error(
+            VerificationEvidenceParseError.WrongFieldType(source, lineNumber, primaryName, "integer", canonicalActual)
+        )
     | IntegerFieldLookup.Present _, IntegerFieldLookup.InvalidIntegerValue(v) ->
         Result.Error(VerificationEvidenceParseError.InvalidExitCode(source, lineNumber, v))
     | IntegerFieldLookup.InvalidIntegerValue(v), IntegerFieldLookup.Present _ ->

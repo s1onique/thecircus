@@ -63,7 +63,9 @@ type TempGitRepository(label: string) =
 
     member _.Delete(relativePath: string) =
         let absolutePath = Path.Combine(path, relativePath)
-        if File.Exists absolutePath then File.Delete absolutePath
+
+        if File.Exists absolutePath then
+            File.Delete absolutePath
 
     member _.Commit(message: string) =
         git path [ "add"; "-A" ] |> ignore
@@ -71,8 +73,13 @@ type TempGitRepository(label: string) =
         git path [ "rev-parse"; "HEAD^{commit}" ]
 
     member _.Head = git path [ "rev-parse"; "HEAD^{commit}" ]
-    member _.Tree(commit: string) = git path [ "rev-parse"; commit + "^{tree}" ]
-    member _.BlobOfWorkingFile(relativePath: string) = git path [ "hash-object"; "--"; relativePath ]
+
+    member _.Tree(commit: string) =
+        git path [ "rev-parse"; commit + "^{tree}" ]
+
+    member _.BlobOfWorkingFile(relativePath: string) =
+        git path [ "hash-object"; "--"; relativePath ]
+
     member _.Run(arguments: string list) = git path arguments
     member _.TryRun(arguments: string list) = runGit path arguments
 

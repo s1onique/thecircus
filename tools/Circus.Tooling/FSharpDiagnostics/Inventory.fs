@@ -6,40 +6,47 @@ open Circus.Tooling.FSharpDiagnostics.Hashing
 open Circus.Tooling.FSharpDiagnostics.Paths
 
 /// One discovered file together with classification metadata.
-type Discovered = {
-    RelativePath: string
-    FullPath: string
-    ByteLength: int64
-    Sha256: string
-}
+type Discovered =
+    { RelativePath: string
+      FullPath: string
+      ByteLength: int64
+      Sha256: string }
 
 /// Enumerate the canonical corpus root, returning only files (recursively).
 let enumerateFiles (repoRoot: string) (relativeRoot: string) : Discovered list =
     let root = repoRelative repoRoot relativeRoot
-    if not (Directory.Exists root) then []
+
+    if not (Directory.Exists root) then
+        []
     else
         let results = System.Collections.Generic.List<Discovered>()
         let stack = System.Collections.Generic.Stack<string>()
         stack.Push root
+
         while stack.Count > 0 do
             let dir = stack.Pop()
+
             for entry in Directory.EnumerateFiles dir do
                 let info = FileInfo entry
+
                 let rel =
                     info.FullName.Substring(repoRoot.Length).TrimStart('/', '\\')
                     |> toPosix
                     |> canonicalise
+
                 let sha = sha256OfFile info.FullName
+
                 results.Add(
                     { RelativePath = rel
                       FullPath = info.FullName
                       ByteLength = info.Length
-                      Sha256 = sha })
+                      Sha256 = sha }
+                )
+
             for sub in Directory.EnumerateDirectories dir do
                 stack.Push sub
-        results
-        |> Seq.sortBy (fun d -> d.RelativePath)
-        |> Seq.toList
+
+        results |> Seq.sortBy (fun d -> d.RelativePath) |> Seq.toList
 
 /// Enumerate the canonical corpus root.
 let enumerateCanonical (repoRoot: string) : Discovered list =
@@ -87,6 +94,7 @@ let classifyCanonicalPath (relativePath: string) : ArtifactClass =
     let underManifests = normalized.Contains("/corpus/manifests/")
     let underSchemas = normalized.Contains("/schemas/")
     let underFixtures = normalized.Contains("/fixtures/")
+
     if underSchemas then ArtifactClass.Derived
     elif underRaw then ArtifactClass.Raw
     elif underNormalized then ArtifactClass.Normalized
@@ -98,9 +106,12 @@ let classifyCanonicalPath (relativePath: string) : ArtifactClass =
 /// is canonical corpus authority; the .factory root is non-authoritative
 /// scratch; everything else is currently unclassified.
 let authorityFor (relativePath: string) : ArtifactAuthority =
-    if isUnderCanonicalCorpus relativePath then CanonicalCorpus
-    elif isUnderFactoryScratch relativePath then NonAuthoritativeScratch
-    else Unclassified
+    if isUnderCanonicalCorpus relativePath then
+        CanonicalCorpus
+    elif isUnderFactoryScratch relativePath then
+        NonAuthoritativeScratch
+    else
+        Unclassified
 
 /// True when `path` looks like a captured binlog artefact (binlog extension
 /// under the canonical raw directory or a "build.binlog" file name).
@@ -120,15 +131,16 @@ let isLegacyTextArtefact (path: string) : bool =
 /// contains a `capture.json` manifest.
 let discoverCaptures (repoRoot: string) : string list =
     let rawRoot = repoRelative repoRoot rawSubdir
-    if not (Directory.Exists rawRoot) then []
+
+    if not (Directory.Exists rawRoot) then
+        []
     else
         Directory.EnumerateDirectories rawRoot
         |> Seq.filter (fun d -> File.Exists(Path.Combine(d, "capture.json")))
         |> Seq.map (fun d ->
             let rel =
-                d.Substring(repoRoot.Length).TrimStart('/', '\\')
-                |> toPosix
-                |> canonicalise
+                d.Substring(repoRoot.Length).TrimStart('/', '\\') |> toPosix |> canonicalise
+
             rel)
         |> Seq.sortBy id
         |> Seq.toList

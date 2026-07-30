@@ -11,18 +11,17 @@ type PathCategory =
     | ActOwned of path: string
     | Undeclared of path: string
 
-type ScopeCheckOutcome = {
-    EvaluatedCommitOid: string
-    DeclarationPath: string
-    DeclarationBlobOid: string
-    PointerBlobOid: string
-    ActId: string
-    BaselineCommitOid: string
-    GloballyProtectedChanges: string list
-    ActOwnedChanges: string list
-    UndeclaredChanges: string list
-    Authorisations: bool
-}
+type ScopeCheckOutcome =
+    { EvaluatedCommitOid: string
+      DeclarationPath: string
+      DeclarationBlobOid: string
+      PointerBlobOid: string
+      ActId: string
+      BaselineCommitOid: string
+      GloballyProtectedChanges: string list
+      ActOwnedChanges: string list
+      UndeclaredChanges: string list
+      Authorisations: bool }
 
 let isPathAuthorized outcome =
     outcome.Authorisations

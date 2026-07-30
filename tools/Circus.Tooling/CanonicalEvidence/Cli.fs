@@ -52,15 +52,21 @@ let CanonicalEvidenceRoot = "factory/evidence/canonical-executions/v1"
 
 /// Try to create directory if it doesn't exist. Returns Error with message on failure.
 let private tryCreateDirectoryIfNeeded (path: string) : Result<unit, string> =
-    if Directory.Exists path then Ok ()
+    if Directory.Exists path then
+        Ok()
     else
         try
             Directory.CreateDirectory path |> ignore
-            Ok ()
-        with ex -> Error ex.Message
+            Ok()
+        with ex ->
+            Error ex.Message
 
 type Command =
-    | ProvideCmd of repoRoot: string * subjectOid: string * outputDirectory: string option * scopeDeclaration: string option
+    | ProvideCmd of
+        repoRoot: string *
+        subjectOid: string *
+        outputDirectory: string option *
+        scopeDeclaration: string option
     | RegenerateCmd of repoRoot: string * outputPath: string * baselineCommit: string * scopeDeclaration: string option
     | VerifyCmd of repoRoot: string * inputPath: string * scopeDeclaration: string option
     | InventoryCmd of evidenceRoot: string
@@ -93,158 +99,220 @@ let helpText () : string =
 
 let private consumeFlag (flag: string) (args: string list) : Result<string * string list, string> =
     match args with
-    | v :: rest -> Ok (v, rest)
-    | _ -> Error (sprintf "missing value for %s" flag)
+    | v :: rest -> Ok(v, rest)
+    | _ -> Error(sprintf "missing value for %s" flag)
 
 let private parse (argv: string list) : Result<Command, string> =
     match argv with
-    | [] | [ "help" ] | [ "-h" ] | [ "--help" ] -> Ok HelpCmd
-    | [ "provide" ] ->
-        Error "provide requires --repo-root and --subject"
-    | [ "regenerate" ] ->
-        Error "regenerate requires --repo-root, --output, and --baseline-commit"
-    | [ "verify" ] ->
-        Error "verify requires --repo-root and --input"
-    | [ "inventory" ] ->
-        Ok(InventoryCmd CanonicalEvidenceRoot)
-    | [ "show" ] ->
-        Error "show requires an evidence-id argument"
-    | [ "show"; evidenceId ] ->
-        Ok(ShowCmd (CanonicalEvidenceRoot, evidenceId))
+    | []
+    | [ "help" ]
+    | [ "-h" ]
+    | [ "--help" ] -> Ok HelpCmd
+    | [ "provide" ] -> Error "provide requires --repo-root and --subject"
+    | [ "regenerate" ] -> Error "regenerate requires --repo-root, --output, and --baseline-commit"
+    | [ "verify" ] -> Error "verify requires --repo-root and --input"
+    | [ "inventory" ] -> Ok(InventoryCmd CanonicalEvidenceRoot)
+    | [ "show" ] -> Error "show requires an evidence-id argument"
+    | [ "show"; evidenceId ] -> Ok(ShowCmd(CanonicalEvidenceRoot, evidenceId))
     | "provide" :: rest ->
-        let mutable repoRoot : string option = None
-        let mutable subjectOid : string option = None
-        let mutable outputDir : string option = None
-        let mutable scopeDecl : string option = None
+        let mutable repoRoot: string option = None
+        let mutable subjectOid: string option = None
+        let mutable outputDir: string option = None
+        let mutable scopeDecl: string option = None
         let mutable remaining = rest
         let mutable bad = false
+
         while not bad && not (List.isEmpty remaining) do
             match remaining with
             | "--repo-root" :: t ->
                 match consumeFlag "--repo-root" t with
-                | Ok (v, r) -> repoRoot <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    repoRoot <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | "--subject" :: t ->
                 match consumeFlag "--subject" t with
-                | Ok (v, r) -> subjectOid <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    subjectOid <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | "--output-directory" :: t ->
                 match consumeFlag "--output-directory" t with
-                | Ok (v, r) -> outputDir <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    outputDir <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | "--scope-declaration" :: t ->
                 match consumeFlag "--scope-declaration" t with
-                | Ok (v, r) -> scopeDecl <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    scopeDecl <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | unknown :: _ ->
                 bad <- true
                 stderr.WriteLine(sprintf "error: unrecognised argument: %s" unknown)
-            | [] ->
-                bad <- true
-        if bad then Error "argument parse failed"
+            | [] -> bad <- true
+
+        if bad then
+            Error "argument parse failed"
         else
             match repoRoot, subjectOid with
-            | Some r, Some s -> Ok(ProvideCmd (r, s, outputDir, scopeDecl))
+            | Some r, Some s -> Ok(ProvideCmd(r, s, outputDir, scopeDecl))
             | _ -> Error "provide requires --repo-root and --subject"
     | "regenerate" :: rest ->
-        let mutable repoRoot : string option = None
-        let mutable outputPath : string option = None
-        let mutable baselineCommit : string option = None
-        let mutable scopeDecl : string option = None
+        let mutable repoRoot: string option = None
+        let mutable outputPath: string option = None
+        let mutable baselineCommit: string option = None
+        let mutable scopeDecl: string option = None
         let mutable remaining = rest
         let mutable bad = false
+
         while not bad && not (List.isEmpty remaining) do
             match remaining with
             | "--repo-root" :: t ->
                 match consumeFlag "--repo-root" t with
-                | Ok (v, r) -> repoRoot <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    repoRoot <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | "--output" :: t ->
                 match consumeFlag "--output" t with
-                | Ok (v, r) -> outputPath <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    outputPath <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | "--baseline-commit" :: t ->
                 match consumeFlag "--baseline-commit" t with
-                | Ok (v, r) -> baselineCommit <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    baselineCommit <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | "--scope-declaration" :: t ->
                 match consumeFlag "--scope-declaration" t with
-                | Ok (v, r) -> scopeDecl <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    scopeDecl <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | unknown :: _ ->
                 bad <- true
                 stderr.WriteLine(sprintf "error: unrecognised argument: %s" unknown)
-            | [] ->
-                bad <- true
-        if bad then Error "argument parse failed"
+            | [] -> bad <- true
+
+        if bad then
+            Error "argument parse failed"
         else
             match repoRoot, outputPath, baselineCommit with
-            | Some r, Some o, Some b -> Ok(RegenerateCmd (r, o, b, scopeDecl))
+            | Some r, Some o, Some b -> Ok(RegenerateCmd(r, o, b, scopeDecl))
             | _ -> Error "regenerate requires --repo-root, --output, and --baseline-commit"
     | "verify" :: rest ->
-        let mutable repoRoot : string option = None
-        let mutable inputPath : string option = None
-        let mutable scopeDecl : string option = None
+        let mutable repoRoot: string option = None
+        let mutable inputPath: string option = None
+        let mutable scopeDecl: string option = None
         let mutable remaining = rest
         let mutable bad = false
+
         while not bad && not (List.isEmpty remaining) do
             match remaining with
             | "--repo-root" :: t ->
                 match consumeFlag "--repo-root" t with
-                | Ok (v, r) -> repoRoot <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    repoRoot <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | "--input" :: t ->
                 match consumeFlag "--input" t with
-                | Ok (v, r) -> inputPath <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    inputPath <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | "--scope-declaration" :: t ->
                 match consumeFlag "--scope-declaration" t with
-                | Ok (v, r) -> scopeDecl <- Some v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    scopeDecl <- Some v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | unknown :: _ ->
                 bad <- true
                 stderr.WriteLine(sprintf "error: unrecognised argument: %s" unknown)
-            | [] ->
-                bad <- true
-        if bad then Error "argument parse failed"
+            | [] -> bad <- true
+
+        if bad then
+            Error "argument parse failed"
         else
             match repoRoot, inputPath with
-            | Some r, Some i -> Ok(VerifyCmd (r, i, scopeDecl))
+            | Some r, Some i -> Ok(VerifyCmd(r, i, scopeDecl))
             | _ -> Error "verify requires --repo-root and --input"
     | "inventory" :: rest ->
         let mutable evidenceRoot = CanonicalEvidenceRoot
         let mutable remaining = rest
         let mutable bad = false
+
         while not bad && not (List.isEmpty remaining) do
             match remaining with
             | "--evidence-root" :: t ->
                 match consumeFlag "--evidence-root" t with
-                | Ok (v, r) -> evidenceRoot <- v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    evidenceRoot <- v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | unknown :: _ ->
                 bad <- true
                 stderr.WriteLine(sprintf "error: unrecognised argument: %s" unknown)
             | [] -> ()
-        if bad then Error "argument parse failed"
-        else Ok(InventoryCmd evidenceRoot)
+
+        if bad then
+            Error "argument parse failed"
+        else
+            Ok(InventoryCmd evidenceRoot)
     | "show" :: evidenceId :: rest ->
         let mutable evidenceRoot = CanonicalEvidenceRoot
         let mutable remaining = rest
         let mutable bad = false
+
         while not bad && not (List.isEmpty remaining) do
             match remaining with
             | "--evidence-root" :: t ->
                 match consumeFlag "--evidence-root" t with
-                | Ok (v, r) -> evidenceRoot <- v; remaining <- r
-                | Error e -> bad <- true; stderr.WriteLine("error: " + e)
+                | Ok(v, r) ->
+                    evidenceRoot <- v
+                    remaining <- r
+                | Error e ->
+                    bad <- true
+                    stderr.WriteLine("error: " + e)
             | unknown :: _ ->
                 bad <- true
                 stderr.WriteLine(sprintf "error: unrecognised argument: %s" unknown)
             | [] -> ()
-        if bad then Error "argument parse failed"
-        else Ok(ShowCmd (evidenceRoot, evidenceId))
-    | _ ->
-        Error "usage: canonical-evidence {provide|regenerate|verify|inventory|show|help}"
+
+        if bad then
+            Error "argument parse failed"
+        else
+            Ok(ShowCmd(evidenceRoot, evidenceId))
+    | _ -> Error "usage: canonical-evidence {provide|regenerate|verify|inventory|show|help}"
 
 // -----------------------------------------------------------------------------
 // Render helpers
@@ -259,8 +327,14 @@ let private renderRegenerateSummary (e: CanonicalEvidence) (outputPath: string) 
         e.ProviderName
         e.ProviderVersion
         (statusToken e.OverallStatus)
-        (if e.TestedCommitOid.Length >= 12 then e.TestedCommitOid.Substring(0, 12) else e.TestedCommitOid)
-        (if e.TestedTreeOid.Length >= 12 then e.TestedTreeOid.Substring(0, 12) else e.TestedTreeOid)
+        (if e.TestedCommitOid.Length >= 12 then
+             e.TestedCommitOid.Substring(0, 12)
+         else
+             e.TestedCommitOid)
+        (if e.TestedTreeOid.Length >= 12 then
+             e.TestedTreeOid.Substring(0, 12)
+         else
+             e.TestedTreeOid)
         (List.length e.Checks)
 
 let private renderLegacyVerifySummary (r: VerifyOutcome) : string =
@@ -268,52 +342,64 @@ let private renderLegacyVerifySummary (r: VerifyOutcome) : string =
         match r.Failure with
         | None -> "PASS"
         | Some _ -> "FAIL"
+
     let reasons =
         match r.Failure with
         | Some f -> verifyFailureToString f
         | None -> ""
+
     let commitPrefix =
         match r.Evidence with
         | Some e when e.TestedCommitOid.Length >= 12 -> e.TestedCommitOid.Substring(0, 12)
         | _ -> "?"
+
     let treePrefix =
         match r.Evidence with
         | Some e when e.TestedTreeOid.Length >= 12 -> e.TestedTreeOid.Substring(0, 12)
         | _ -> "?"
+
     if String.IsNullOrEmpty reasons then
-        sprintf
-            "canonical-evidence verify: %s (commit=%s tree=%s path=%s)"
-            status commitPrefix treePrefix r.Path
+        sprintf "canonical-evidence verify: %s (commit=%s tree=%s path=%s)" status commitPrefix treePrefix r.Path
     else
         sprintf
             "canonical-evidence verify: %s (%s) commit=%s tree=%s path=%s"
-            status reasons commitPrefix treePrefix r.Path
+            status
+            reasons
+            commitPrefix
+            treePrefix
+            r.Path
 
 let private renderDependencyVerifySummary (r: DependencyVerifyOutcome) : string =
     let status =
         match r.Failure with
         | None -> "PASS"
         | Some _ -> "FAIL"
+
     let reasons =
         match r.Failure with
         | Some f -> dependencyVerifyFailureToString f
         | None -> ""
+
     let commitPrefix =
         match r.Evidence with
         | Some e when e.TestedCommitOid.Length >= 12 -> e.TestedCommitOid.Substring(0, 12)
         | _ -> "?"
+
     let treePrefix =
         match r.Evidence with
         | Some e when e.TestedTreeOid.Length >= 12 -> e.TestedTreeOid.Substring(0, 12)
         | _ -> "?"
+
     if String.IsNullOrEmpty reasons then
-        sprintf
-            "canonical-evidence verify: %s (commit=%s tree=%s path=%s)"
-            status commitPrefix treePrefix r.Path
+        sprintf "canonical-evidence verify: %s (commit=%s tree=%s path=%s)" status commitPrefix treePrefix r.Path
     else
         sprintf
             "canonical-evidence verify: %s (%s) commit=%s tree=%s path=%s"
-            status reasons commitPrefix treePrefix r.Path
+            status
+            reasons
+            commitPrefix
+            treePrefix
+            r.Path
 
 // -----------------------------------------------------------------------------
 // Production runners (delegate to the existing CORRECTION01 surface).
@@ -321,7 +407,12 @@ let private renderDependencyVerifySummary (r: DependencyVerifyOutcome) : string 
 // seam; production callers use these wrappers.
 // -----------------------------------------------------------------------------
 
-let runRegenerate (repoRoot: string) (outputPath: string) (baselineCommit: string) (scopeDeclaration: string option) : int =
+let runRegenerate
+    (repoRoot: string)
+    (outputPath: string)
+    (baselineCommit: string)
+    (scopeDeclaration: string option)
+    : int =
     match scopeDeclaration with
     | None ->
         stderr.WriteLine "canonical-evidence regenerate: FAIL (legacy entry point requires --scope-declaration)"
@@ -333,39 +424,54 @@ let runRegenerate (repoRoot: string) (outputPath: string) (baselineCommit: strin
             ExitCode.operationalError
         | Result.Ok evidence ->
             let outcome = tryWriteAtomic outputPath evidence
+
             if not outcome.Success then
                 let reason =
                     match outcome.Failure with
                     | Some f -> writeFailureToString f
                     | None -> "unknown"
+
                 stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" reason)
                 ExitCode.operationalError
             else
                 let overall = statusToken evidence.OverallStatus
-                let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
+
+                let verdict =
+                    if overall = "pass" then
+                        ExitCode.pass
+                    else
+                        ExitCode.policyFailure
+
                 stdout.WriteLine(renderRegenerateSummary evidence outputPath outcome.CanonicalSha256)
                 // Re-verify the freshly written bytes to confirm the
                 // artifact on disk is what the producer intended.
                 let verifyOutcome = verify outputPath repoRoot
+
                 match verifyOutcome.Failure with
                 | Some f ->
                     stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (verifyFailureToString f))
                     ExitCode.operationalError
                 | None ->
-                    if overall = "pass" then ExitCode.pass
-                    else ExitCode.policyFailure
+                    if overall = "pass" then
+                        ExitCode.pass
+                    else
+                        ExitCode.policyFailure
 
 let runVerify (repoRoot: string) (inputPath: string) (scopeDeclaration: string option) : int =
     let deps = productionDependencies ()
     let result = verifyWithDependencies deps inputPath repoRoot scopeDeclaration
+
     let verdict =
         match result.Failure with
         | Some _ -> ExitCode.policyFailure
         | None -> ExitCode.pass
+
     let text = renderDependencyVerifySummary result
+
     match result.Failure with
     | Some _ -> stderr.WriteLine(text)
     | None -> stdout.WriteLine(text)
+
     verdict
 
 // -----------------------------------------------------------------------------
@@ -380,30 +486,41 @@ let internal runRegenerateWithDependencies
     (scopeDeclaration: string option)
     : int =
     match regenerateWithDependencies deps repoRoot baselineCommit scopeDeclaration with
-        | Result.Error failure ->
-            stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (regenerateFailureToString failure))
+    | Result.Error failure ->
+        stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (regenerateFailureToString failure))
+        ExitCode.operationalError
+    | Result.Ok evidence ->
+        let writeOutcome = writeArtifactWithDependencies deps outputPath evidence
+
+        if not writeOutcome.Success then
+            let reason =
+                match writeOutcome.Failure with
+                | Some f -> sprintf "%s:%s" f.Reason f.Detail
+                | None -> "unknown"
+
+            stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" reason)
             ExitCode.operationalError
-        | Result.Ok evidence ->
-            let writeOutcome = writeArtifactWithDependencies deps outputPath evidence
-            if not writeOutcome.Success then
-                let reason =
-                    match writeOutcome.Failure with
-                    | Some f -> sprintf "%s:%s" f.Reason f.Detail
-                    | None -> "unknown"
-                stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" reason)
+        else
+            let overall = statusToken evidence.OverallStatus
+
+            let verdict =
+                if overall = "pass" then
+                    ExitCode.pass
+                else
+                    ExitCode.policyFailure
+
+            stdout.WriteLine(renderRegenerateSummary evidence outputPath writeOutcome.CanonicalSha256)
+            let verifyOutcome = verifyWithDependencies deps outputPath repoRoot scopeDeclaration
+
+            match verifyOutcome.Failure with
+            | Some f ->
+                stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (dependencyVerifyFailureToString f))
                 ExitCode.operationalError
-            else
-                let overall = statusToken evidence.OverallStatus
-                let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
-                stdout.WriteLine(renderRegenerateSummary evidence outputPath writeOutcome.CanonicalSha256)
-                let verifyOutcome = verifyWithDependencies deps outputPath repoRoot scopeDeclaration
-                match verifyOutcome.Failure with
-                | Some f ->
-                    stderr.WriteLine(sprintf "canonical-evidence regenerate: FAIL (%s)" (dependencyVerifyFailureToString f))
-                    ExitCode.operationalError
-                | None ->
-                    if overall = "pass" then ExitCode.pass
-                    else ExitCode.policyFailure
+            | None ->
+                if overall = "pass" then
+                    ExitCode.pass
+                else
+                    ExitCode.policyFailure
 
 let internal runVerifyWithDependencies
     (deps: CanonicalEvidenceDependencies)
@@ -412,14 +529,18 @@ let internal runVerifyWithDependencies
     (scopeDeclaration: string option)
     : int =
     let result = verifyWithDependencies deps inputPath repoRoot scopeDeclaration
+
     let verdict =
         match result.Failure with
         | Some _ -> ExitCode.policyFailure
         | None -> ExitCode.pass
+
     let text = renderDependencyVerifySummary result
+
     match result.Failure with
     | Some _ -> stderr.WriteLine(text)
     | None -> stdout.WriteLine(text)
+
     verdict
 
 // -----------------------------------------------------------------------------
@@ -434,8 +555,14 @@ let private renderProvideSummary (e: CanonicalEvidence) (written: string) : stri
         e.ProviderName
         e.ProviderVersion
         (statusToken e.OverallStatus)
-        (if e.TestedCommitOid.Length >= 12 then e.TestedCommitOid.Substring(0, 12) else e.TestedCommitOid)
-        (if e.TestedTreeOid.Length >= 12 then e.TestedTreeOid.Substring(0, 12) else e.TestedTreeOid)
+        (if e.TestedCommitOid.Length >= 12 then
+             e.TestedCommitOid.Substring(0, 12)
+         else
+             e.TestedCommitOid)
+        (if e.TestedTreeOid.Length >= 12 then
+             e.TestedTreeOid.Substring(0, 12)
+         else
+             e.TestedTreeOid)
         (List.length e.Checks)
 
 let internal runProvide
@@ -456,7 +583,7 @@ let internal runProvide
     | Error msg ->
         stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (cannot create directory: %s)" msg)
         ExitCode.operationalError
-    | Ok () ->
+    | Ok() ->
         // Generate evidence for the subject commit using full provider
         match provideWithDependenciesFull deps repoRoot subjectOid scopeDeclaration with
         | Result.Error failure ->
@@ -466,37 +593,53 @@ let internal runProvide
             // Publish the snapshot using the staged round-trip validation pipeline.
             // This ensures strict byte-for-byte fidelity: all files are written, reread,
             // parsed, and validated before atomic replacement.
-            let pubOutcome = Circus.Tooling.CanonicalEvidence.Publication.stageAndPublishSnapshot
-                                evidenceRoot
-                                providerResult.Records
-                                providerResult.Aggregate
-                                providerResult.CompatibilityProjection
-                                None // No mutation hook in production
+            let pubOutcome =
+                Circus.Tooling.CanonicalEvidence.Publication.stageAndPublishSnapshot
+                    evidenceRoot
+                    providerResult.Records
+                    providerResult.Aggregate
+                    providerResult.CompatibilityProjection
+                    None // No mutation hook in production
 
             if not pubOutcome.Success then
                 let reason =
                     match pubOutcome.Failure with
                     | Some f -> Circus.Tooling.CanonicalEvidence.Publication.publicationFailureToString f
                     | None -> "unknown"
+
                 stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (publication failed: %s)" reason)
                 ExitCode.operationalError
             else
                 // Use the compatibility projection for overall status and rendering
                 let evidence = providerResult.CompatibilityProjection
                 let overall = statusToken evidence.OverallStatus
-                let verdict = if overall = "pass" then ExitCode.pass else ExitCode.policyFailure
+
+                let verdict =
+                    if overall = "pass" then
+                        ExitCode.pass
+                    else
+                        ExitCode.policyFailure
+
                 stdout.WriteLine(renderProvideSummary evidence pubOutcome.AggregateSha256)
 
                 // Verify the freshly published compatibility projection
                 let verifyPath = Path.Combine(evidenceRoot, "canonical-evidence.json")
                 let verifyOutcome = verifyWithDependencies deps verifyPath repoRoot scopeDeclaration
+
                 match verifyOutcome.Failure with
                 | Some f ->
-                    stderr.WriteLine(sprintf "canonical-evidence provide: FAIL (verify failed: %s)" (dependencyVerifyFailureToString f))
+                    stderr.WriteLine(
+                        sprintf
+                            "canonical-evidence provide: FAIL (verify failed: %s)"
+                            (dependencyVerifyFailureToString f)
+                    )
+
                     ExitCode.operationalError
                 | None ->
-                    if overall = "pass" then ExitCode.pass
-                    else ExitCode.policyFailure
+                    if overall = "pass" then
+                        ExitCode.pass
+                    else
+                        ExitCode.policyFailure
 
 // -----------------------------------------------------------------------------
 // Inventory command (read-only, never executes checks)
@@ -504,6 +647,7 @@ let internal runProvide
 
 let internal runInventory (evidenceRoot: string) : int =
     let recordsPath = Path.Combine(evidenceRoot, "records.jsonl")
+
     if not (File.Exists recordsPath) then
         stdout.WriteLine(sprintf "canonical-evidence inventory: no records found at %s" evidenceRoot)
         stdout.WriteLine("No records.jsonl found. Run 'provide' first to generate evidence.")
@@ -511,25 +655,33 @@ let internal runInventory (evidenceRoot: string) : int =
     else
         try
             let lines = File.ReadAllLines recordsPath
+
             if lines.Length = 0 then
                 stdout.WriteLine("canonical-evidence inventory: no records found")
                 ExitCode.pass
             else
                 stdout.WriteLine(sprintf "canonical-evidence inventory: %d record(s) found" lines.Length)
                 stdout.WriteLine("")
+
                 for line in lines do
                     match parseWireJson line with
                     | Result.Ok e ->
                         let commit =
-                            if e.TestedCommitOid.Length >= 12 then e.TestedCommitOid.Substring(0, 12)
-                            else e.TestedCommitOid
-                        stdout.WriteLine(sprintf "  %s  commit=%s status=%s checks=%d"
-                            (e.SemanticSha256.Substring(0, 8))
-                            commit
-                            (statusToken e.OverallStatus)
-                            (List.length e.Checks))
-                    | Result.Error _ ->
-                        stdout.WriteLine(sprintf "  [malformed record]")
+                            if e.TestedCommitOid.Length >= 12 then
+                                e.TestedCommitOid.Substring(0, 12)
+                            else
+                                e.TestedCommitOid
+
+                        stdout.WriteLine(
+                            sprintf
+                                "  %s  commit=%s status=%s checks=%d"
+                                (e.SemanticSha256.Substring(0, 8))
+                                commit
+                                (statusToken e.OverallStatus)
+                                (List.length e.Checks)
+                        )
+                    | Result.Error _ -> stdout.WriteLine(sprintf "  [malformed record]")
+
                 stdout.WriteLine("")
                 stdout.WriteLine(sprintf "Total: %d records" lines.Length)
                 ExitCode.pass
@@ -543,6 +695,7 @@ let internal runInventory (evidenceRoot: string) : int =
 
 let internal runShow (evidenceRoot: string) (evidenceId: string) : int =
     let recordsPath = Path.Combine(evidenceRoot, "records.jsonl")
+
     if not (File.Exists recordsPath) then
         stderr.WriteLine(sprintf "canonical-evidence show: no records found at %s" evidenceRoot)
         ExitCode.operationalError
@@ -551,6 +704,7 @@ let internal runShow (evidenceRoot: string) (evidenceId: string) : int =
             let lines = File.ReadAllLines recordsPath
             let mutable found = false
             let mutable result = ExitCode.operationalError
+
             for line in lines do
                 match parseWireJson line with
                 | Result.Ok e ->
@@ -559,6 +713,7 @@ let internal runShow (evidenceRoot: string) (evidenceId: string) : int =
                         found <- true
                         result <- ExitCode.pass
                 | Result.Error _ -> ()
+
             if not found then
                 stderr.WriteLine(sprintf "canonical-evidence show: evidence-id '%s' not found" evidenceId)
                 ExitCode.policyFailure
@@ -572,24 +727,19 @@ let internal runShow (evidenceRoot: string) (evidenceId: string) : int =
 // Dependency-driven CLI dispatcher
 // -----------------------------------------------------------------------------
 
-let internal runCliWithDependencies
-    (deps: CanonicalEvidenceDependencies)
-    (argv: string list)
-    : int =
+let internal runCliWithDependencies (deps: CanonicalEvidenceDependencies) (argv: string list) : int =
     match parse argv with
     | Ok HelpCmd ->
         stdout.WriteLine(helpText ())
         ExitCode.pass
-    | Ok(ProvideCmd (repoRoot, subjectOid, outputDir, scopeDeclaration)) ->
+    | Ok(ProvideCmd(repoRoot, subjectOid, outputDir, scopeDeclaration)) ->
         runProvide deps repoRoot subjectOid outputDir scopeDeclaration
-    | Ok(RegenerateCmd (repoRoot, outputPath, baselineCommit, scopeDeclaration)) ->
+    | Ok(RegenerateCmd(repoRoot, outputPath, baselineCommit, scopeDeclaration)) ->
         runRegenerateWithDependencies deps repoRoot outputPath baselineCommit scopeDeclaration
-    | Ok(VerifyCmd (repoRoot, inputPath, scopeDeclaration)) ->
+    | Ok(VerifyCmd(repoRoot, inputPath, scopeDeclaration)) ->
         runVerifyWithDependencies deps repoRoot inputPath scopeDeclaration
-    | Ok(InventoryCmd evidenceRoot) ->
-        runInventory evidenceRoot
-    | Ok(ShowCmd (evidenceRoot, evidenceId)) ->
-        runShow evidenceRoot evidenceId
+    | Ok(InventoryCmd evidenceRoot) -> runInventory evidenceRoot
+    | Ok(ShowCmd(evidenceRoot, evidenceId)) -> runShow evidenceRoot evidenceId
     | Result.Error msg ->
         stderr.WriteLine(sprintf "error: %s" msg)
         stderr.WriteLine(helpText ())

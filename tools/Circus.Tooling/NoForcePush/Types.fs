@@ -48,9 +48,18 @@ type DiagnosticId =
 
     member this.Detail: string =
         match this with
-        | NFP_001 d | NFP_002 d | NFP_003 d | NFP_004 d
-        | NFP_005 d | NFP_006 d | NFP_007 d | NFP_008 d
-        | NFP_009 d | NFP_010 d | NFP_012 d | NFP_013 d -> d
+        | NFP_001 d
+        | NFP_002 d
+        | NFP_003 d
+        | NFP_004 d
+        | NFP_005 d
+        | NFP_006 d
+        | NFP_007 d
+        | NFP_008 d
+        | NFP_009 d
+        | NFP_010 d
+        | NFP_012 d
+        | NFP_013 d -> d
         | NFP_011 p -> sprintf "unclassified executable: %s" p
 
 /// Surface kinds that may contain governed publication commands.
@@ -75,41 +84,37 @@ type AuthorityLevel =
     | GitHub
 
 /// A row from the surface inventory CSV.
-type SurfaceEntry = {
-    Path: string
-    SurfaceKind: SurfaceKind
-    ParserKind: ParserKind
-    Authority: AuthorityLevel
-    Reason: string
-}
+type SurfaceEntry =
+    { Path: string
+      SurfaceKind: SurfaceKind
+      ParserKind: ParserKind
+      Authority: AuthorityLevel
+      Reason: string }
 
 /// A structured diagnostic finding from the static verifier.
-type Diagnostic = {
-    Id: DiagnosticId
-    Path: string
-    Line: int
-    Column: int
-    NormalizedCommand: string
-}
-    with
-        member this.RuleId = this.Id.RuleId
-        member this.Detail = this.Id.Detail
+type Diagnostic =
+    { Id: DiagnosticId
+      Path: string
+      Line: int
+      Column: int
+      NormalizedCommand: string }
+
+    member this.RuleId = this.Id.RuleId
+    member this.Detail = this.Id.Detail
 
 /// Result of static policy verification.
-type StaticPolicyResult = {
-    RepositoryRoot: string
-    FilesExamined: int
-    Diagnostics: Diagnostic list
-    OperationalErrors: string list
-}
+type StaticPolicyResult =
+    { RepositoryRoot: string
+      FilesExamined: int
+      Diagnostics: Diagnostic list
+      OperationalErrors: string list }
 
 /// Pre-push ref update record.
-type PrePushRefUpdate = {
-    LocalRef: string
-    LocalOid: string
-    RemoteRef: string
-    RemoteOid: string
-}
+type PrePushRefUpdate =
+    { LocalRef: string
+      LocalOid: string
+      RemoteRef: string
+      RemoteOid: string }
 
 /// Pre-push verification outcome.
 type PrePushOutcome =
@@ -118,15 +123,14 @@ type PrePushOutcome =
     | OperationalFailure of refUpdate: PrePushRefUpdate * detail: string
 
 /// GitHub branch rule for no-force-push enforcement.
-type GitHubBranchRule = {
-    RepositoryId: string
-    BranchName: string
-    EnforcementActive: bool
-    BlocksNonFastForward: bool
-    BlocksDeletion: bool
-    BypassActors: string list
-    CheckedAt: System.DateTimeOffset
-}
+type GitHubBranchRule =
+    { RepositoryId: string
+      BranchName: string
+      EnforcementActive: bool
+      BlocksNonFastForward: bool
+      BlocksDeletion: bool
+      BypassActors: string list
+      CheckedAt: System.DateTimeOffset }
 
 /// GitHub ruleset verification result.
 type GitHubRulesResult =

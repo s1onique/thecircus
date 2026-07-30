@@ -43,10 +43,13 @@ let private isHexChar (c: char) : bool =
 let private isLowerHex (text: string) : bool =
     let mutable allHex = true
     let mutable i = 0
+
     while allHex && i < text.Length do
         if not (isHexChar text.[i]) then
             allHex <- false
+
         i <- i + 1
+
     allHex
 
 let private isPinnedSha256 (digest: string) =
@@ -59,15 +62,13 @@ let private isPinnedSha256 (digest: string) =
 /// can decide between exit class 2 and 1.
 let validate (manifest: ToolchainData) : Result<unit, DevHostFailure> =
     let problems =
-        [
-            match manifest.BootstrapSdkImage with
-            | None -> "bootstrap_sdk_image is required"
-            | Some image when not (isMcrDotnetSdkReference image.Reference) ->
-                sprintf "bootstrap_sdk_image.reference '%s' is not an mcr.microsoft.com/dotnet/sdk tag" image.Reference
-            | Some image when not (isPinnedSha256 image.Digest) ->
-                sprintf "bootstrap_sdk_image.digest '%s' is not a pinned sha256:..." image.Digest
-            | Some _ -> ""
-        ]
+        [ match manifest.BootstrapSdkImage with
+          | None -> "bootstrap_sdk_image is required"
+          | Some image when not (isMcrDotnetSdkReference image.Reference) ->
+              sprintf "bootstrap_sdk_image.reference '%s' is not an mcr.microsoft.com/dotnet/sdk tag" image.Reference
+          | Some image when not (isPinnedSha256 image.Digest) ->
+              sprintf "bootstrap_sdk_image.digest '%s' is not a pinned sha256:..." image.Digest
+          | Some _ -> "" ]
         |> List.filter (fun problem -> not (String.IsNullOrEmpty problem))
 
     match problems with

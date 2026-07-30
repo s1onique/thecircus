@@ -71,15 +71,7 @@ let private parse argv =
         | Error detail -> Error detail
         | Ok values -> requireFlag values "--path" |> Result.map HashCmd
     | "validate" :: tail ->
-        match
-            parseFlags
-                tail
-                (Set.ofList
-                    [ "--repo-root"
-                      "--path"
-                      "--subject-commit"
-                      "--evidence-commit" ])
-        with
+        match parseFlags tail (Set.ofList [ "--repo-root"; "--path"; "--subject-commit"; "--evidence-commit" ]) with
         | Error detail -> Error detail
         | Ok values ->
             match
@@ -88,18 +80,18 @@ let private parse argv =
                 requireFlag values "--subject-commit",
                 requireFlag values "--evidence-commit"
             with
-            | Ok repoRoot, Ok path, Ok subject, Ok evidence ->
-                Ok(ValidateCmd(repoRoot, path, subject, evidence))
+            | Ok repoRoot, Ok path, Ok subject, Ok evidence -> Ok(ValidateCmd(repoRoot, path, subject, evidence))
             | results ->
                 results
                 |> fun (a, b, c, d) -> [ a; b; c; d ]
-                |> List.choose (function | Error detail -> Some detail | Ok _ -> None)
+                |> List.choose (function
+                    | Error detail -> Some detail
+                    | Ok _ -> None)
                 |> String.concat "; "
                 |> Error
     | _ -> Error "usage: evidence-validate {validate|hash|help}"
 
-let private boolToken value =
-    if value then "true" else "false"
+let private boolToken value = if value then "true" else "false"
 
 let private optionalBoolToken value =
     match value with
@@ -183,8 +175,7 @@ let run argv =
         stdout.WriteLine(helpText ())
         ExitCode.pass
     | Ok(HashCmd path) -> runHash path
-    | Ok(ValidateCmd(repoRoot, path, subject, evidence)) ->
-        runValidate repoRoot path subject evidence
+    | Ok(ValidateCmd(repoRoot, path, subject, evidence)) -> runValidate repoRoot path subject evidence
     | Error detail ->
         stderr.WriteLine("error: " + detail)
         stderr.WriteLine(helpText ())

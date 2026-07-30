@@ -36,46 +36,42 @@ let Sha256Width = 64
 let RepositoryProtectedProductionAndMigrationRoots =
     [ "src/Circus.Persistence.Postgres/"; "db/migrations/" ]
 
-type ActiveScopePointer = {
-    SchemaVersion: int
-    ActId: string
-    DeclarationPath: string
-    DeclarationBlobOid: string
-    BaselineCommitOid: string
-}
+type ActiveScopePointer =
+    { SchemaVersion: int
+      ActId: string
+      DeclarationPath: string
+      DeclarationBlobOid: string
+      BaselineCommitOid: string }
 
-type PrefixQualification = {
-    Path: string
-    Reason: string
-    ExpectedDescendants: string list
-    SiblingMutationTest: string
-}
+type PrefixQualification =
+    { Path: string
+      Reason: string
+      ExpectedDescendants: string list
+      SiblingMutationTest: string }
 
-type ScopeDeclaration = {
-    SchemaVersion: int
-    ActId: string
-    ActClassification: string
-    BaselineCommitOid: string
-    Purpose: string
-    GloballyProtected: string list
-    ActOwned: string list
-    PrefixQualifications: PrefixQualification list
-    RejectUndeclaredChanges: bool
-    DoNotAuthorizeProductionOrMigrationPaths: bool
-}
+type ScopeDeclaration =
+    { SchemaVersion: int
+      ActId: string
+      ActClassification: string
+      BaselineCommitOid: string
+      Purpose: string
+      GloballyProtected: string list
+      ActOwned: string list
+      PrefixQualifications: PrefixQualification list
+      RejectUndeclaredChanges: bool
+      DoNotAuthorizeProductionOrMigrationPaths: bool }
 
-type ScopeBinding = {
-    EvaluatedCommitOid: string
-    EvaluatedTreeOid: string
-    PointerPath: string
-    PointerBlobOid: string
-    DeclarationPath: string
-    DeclarationBlobOid: string
-    BaselineCommitOid: string
-    ActId: string
-    Pointer: ActiveScopePointer
-    Declaration: ScopeDeclaration
-}
+type ScopeBinding =
+    { EvaluatedCommitOid: string
+      EvaluatedTreeOid: string
+      PointerPath: string
+      PointerBlobOid: string
+      DeclarationPath: string
+      DeclarationBlobOid: string
+      BaselineCommitOid: string
+      ActId: string
+      Pointer: ActiveScopePointer
+      Declaration: ScopeDeclaration }
 
 type ScopeAuthorityError =
     | JsonParseFailed of context: string * detail: string
@@ -107,42 +103,46 @@ type ScopeAuthorityError =
 
 let errorToString error =
     match error with
-    | JsonParseFailed (context, detail) -> sprintf "%s JSON parse failed: %s" context detail
+    | JsonParseFailed(context, detail) -> sprintf "%s JSON parse failed: %s" context detail
     | JsonRootNotObject context -> sprintf "%s root must be a JSON object" context
-    | DuplicateJsonProperty (context, property) -> sprintf "%s contains duplicate JSON property: %s" context property
-    | MissingJsonProperty (context, property) -> sprintf "%s missing required property: %s" context property
-    | UnknownJsonProperty (context, property) -> sprintf "%s contains unknown property: %s" context property
-    | WrongJsonType (context, property, expected) -> sprintf "%s.%s must be %s" context property expected
-    | UnsupportedSchemaVersion (context, actual) -> sprintf "%s.schema_version unsupported: %d" context actual
-    | EmptyStringField (context, property) -> sprintf "%s.%s must be a non-empty string" context property
-    | InvalidOid (context, property, value) -> sprintf "%s.%s is not a full 40/64-character ASCII hexadecimal OID: %s" context property value
-    | InvalidRepositoryPath (context, property, value, detail) -> sprintf "%s.%s is not a normalized repository-relative POSIX path (%s): %s" context property detail value
-    | DuplicatePath (category, path) -> sprintf "%s contains duplicate path: %s" category path
-    | ScopeOverlap (globallyProtected, actOwned) -> sprintf "globally_protected path %s overlaps act_owned path %s" globallyProtected actOwned
+    | DuplicateJsonProperty(context, property) -> sprintf "%s contains duplicate JSON property: %s" context property
+    | MissingJsonProperty(context, property) -> sprintf "%s missing required property: %s" context property
+    | UnknownJsonProperty(context, property) -> sprintf "%s contains unknown property: %s" context property
+    | WrongJsonType(context, property, expected) -> sprintf "%s.%s must be %s" context property expected
+    | UnsupportedSchemaVersion(context, actual) -> sprintf "%s.schema_version unsupported: %d" context actual
+    | EmptyStringField(context, property) -> sprintf "%s.%s must be a non-empty string" context property
+    | InvalidOid(context, property, value) ->
+        sprintf "%s.%s is not a full 40/64-character ASCII hexadecimal OID: %s" context property value
+    | InvalidRepositoryPath(context, property, value, detail) ->
+        sprintf "%s.%s is not a normalized repository-relative POSIX path (%s): %s" context property detail value
+    | DuplicatePath(category, path) -> sprintf "%s contains duplicate path: %s" category path
+    | ScopeOverlap(globallyProtected, actOwned) ->
+        sprintf "globally_protected path %s overlaps act_owned path %s" globallyProtected actOwned
     | MissingPrefixQualification path -> sprintf "directory prefix lacks qualification metadata: %s" path
     | DuplicatePrefixQualification path -> sprintf "directory prefix has duplicate qualification metadata: %s" path
     | OrphanPrefixQualification path -> sprintf "prefix qualification does not name a declared prefix: %s" path
-    | InvalidPrefixQualification (path, detail) -> sprintf "prefix qualification invalid for %s: %s" path detail
-    | ProtectedRootOwned (ownedPath, protectedRoot) -> sprintf "act_owned path %s overlaps repository-protected root %s" ownedPath protectedRoot
+    | InvalidPrefixQualification(path, detail) -> sprintf "prefix qualification invalid for %s: %s" path detail
+    | ProtectedRootOwned(ownedPath, protectedRoot) ->
+        sprintf "act_owned path %s overlaps repository-protected root %s" ownedPath protectedRoot
     | MissingRepositoryProtectedRoot path -> sprintf "globally_protected omits repository-protected root: %s" path
     | MandatoryBooleanFalse property -> sprintf "mandatory Boolean must be true: %s" property
-    | GitOperationFailed (operation, detail) -> sprintf "Git operation %s failed: %s" operation detail
-    | GitObjectMissing (objectKind, value) -> sprintf "Git %s does not exist: %s" objectKind value
-    | GitObjectIdentityMismatch (objectKind, expected, actual) -> sprintf "Git %s identity mismatch: expected=%s actual=%s" objectKind expected actual
-    | GitObjectNotAncestor (ancestor, descendant) -> sprintf "baseline %s is not an ancestor of %s" ancestor descendant
-    | PointerDeclarationMismatch (field, pointerValue, declarationValue) -> sprintf "pointer/declaration %s mismatch: pointer=%s declaration=%s" field pointerValue declarationValue
-    | CliPointerDisagreement (field, cliValue, pointerValue) -> sprintf "CLI/pointer disagreement for %s: cli=%s pointer=%s" field cliValue pointerValue
-    | InvalidUtf8Blob (path, detail) -> sprintf "Git blob is not strict UTF-8 (%s): %s" path detail
+    | GitOperationFailed(operation, detail) -> sprintf "Git operation %s failed: %s" operation detail
+    | GitObjectMissing(objectKind, value) -> sprintf "Git %s does not exist: %s" objectKind value
+    | GitObjectIdentityMismatch(objectKind, expected, actual) ->
+        sprintf "Git %s identity mismatch: expected=%s actual=%s" objectKind expected actual
+    | GitObjectNotAncestor(ancestor, descendant) -> sprintf "baseline %s is not an ancestor of %s" ancestor descendant
+    | PointerDeclarationMismatch(field, pointerValue, declarationValue) ->
+        sprintf "pointer/declaration %s mismatch: pointer=%s declaration=%s" field pointerValue declarationValue
+    | CliPointerDisagreement(field, cliValue, pointerValue) ->
+        sprintf "CLI/pointer disagreement for %s: cli=%s pointer=%s" field cliValue pointerValue
+    | InvalidUtf8Blob(path, detail) -> sprintf "Git blob is not strict UTF-8 (%s): %s" path detail
 
 let isAsciiHexOid (value: string) =
     if isNull value || (value.Length <> Sha1Width && value.Length <> Sha256Width) then
         false
     else
         value
-        |> Seq.forall (fun c ->
-            (c >= '0' && c <= '9')
-            || (c >= 'a' && c <= 'f')
-            || (c >= 'A' && c <= 'F'))
+        |> Seq.forall (fun c -> (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
 
 let private hasWindowsDrivePrefix (value: string) =
     value.Length >= 2 && Char.IsAsciiLetter(value.[0]) && value.[1] = ':'
@@ -158,7 +158,11 @@ let validateRepositoryPath (allowDirectoryPrefix: bool) (value: string) : Result
         Error "NUL is forbidden"
     elif value.Contains('\\') then
         Error "backslashes are forbidden"
-    elif value.StartsWith("/", StringComparison.Ordinal) || Path.IsPathRooted value || hasWindowsDrivePrefix value then
+    elif
+        value.StartsWith("/", StringComparison.Ordinal)
+        || Path.IsPathRooted value
+        || hasWindowsDrivePrefix value
+    then
         Error "absolute/rooted paths are forbidden"
     elif value.EndsWith("/", StringComparison.Ordinal) && not allowDirectoryPrefix then
         Error "a file path may not end in slash"
@@ -201,8 +205,7 @@ let patternsOverlap (left: string) (right: string) =
 
 exception private ScopeJsonException of ScopeAuthorityError
 
-let private raiseScope error =
-    raise (ScopeJsonException error)
+let private raiseScope error = raise (ScopeJsonException error)
 
 let rec private rejectDuplicateProperties (context: string) (element: JsonElement) =
     match element.ValueKind with
@@ -319,7 +322,10 @@ let private validatePath context property allowPrefix value =
     | Error detail -> Error(InvalidRepositoryPath(context, property, value, detail))
 
 let private firstError (results: Result<unit, ScopeAuthorityError> list) =
-    results |> List.tryPick (function | Error error -> Some error | Ok() -> None)
+    results
+    |> List.tryPick (function
+        | Error error -> Some error
+        | Ok() -> None)
 
 let validatePointer (pointer: ActiveScopePointer) =
     let checks =
@@ -388,8 +394,13 @@ let private requiredQualifications element =
 
 let private duplicateIn category values =
     let seen = HashSet<string>(StringComparer.Ordinal)
+
     values
-    |> List.tryPick (fun value -> if seen.Add value then None else Some(DuplicatePath(category, value)))
+    |> List.tryPick (fun value ->
+        if seen.Add value then
+            None
+        else
+            Some(DuplicatePath(category, value)))
 
 let validateDeclaration (declaration: ScopeDeclaration) =
     let mutable errors: ScopeAuthorityError list = []
@@ -429,7 +440,12 @@ let validateDeclaration (declaration: ScopeDeclaration) =
                 add (ScopeOverlap(globalPath, ownedPath))
 
     for protectedRoot in RepositoryProtectedProductionAndMigrationRoots do
-        if not (declaration.GloballyProtected |> List.exists (fun path -> String.Equals(path, protectedRoot, StringComparison.Ordinal))) then
+        if
+            not (
+                declaration.GloballyProtected
+                |> List.exists (fun path -> String.Equals(path, protectedRoot, StringComparison.Ordinal))
+            )
+        then
             add (MissingRepositoryProtectedRoot protectedRoot)
 
         for ownedPath in declaration.ActOwned do
@@ -445,18 +461,18 @@ let validateDeclaration (declaration: ScopeDeclaration) =
     // Only ActOwned directory prefixes require qualification metadata.
     // GloballyProtected prefixes restrict authority; they do not broaden it
     // and therefore do not need sibling-authorization justification.
-    let declaredPrefixes =
-        declaration.ActOwned
-        |> List.filter isDirectoryPrefix
+    let declaredPrefixes = declaration.ActOwned |> List.filter isDirectoryPrefix
 
-    let qualificationPaths = declaration.PrefixQualifications |> List.map (fun item -> item.Path)
+    let qualificationPaths =
+        declaration.PrefixQualifications |> List.map (fun item -> item.Path)
 
     match duplicateIn "prefix_qualifications" qualificationPaths with
     | Some(DuplicatePath(_, path)) -> add (DuplicatePrefixQualification path)
     | _ -> ()
 
     for prefix in declaredPrefixes do
-        let matches = declaration.PrefixQualifications |> List.filter (fun item -> item.Path = prefix)
+        let matches =
+            declaration.PrefixQualifications |> List.filter (fun item -> item.Path = prefix)
 
         match matches with
         | [] -> add (MissingPrefixQualification prefix)
@@ -482,23 +498,40 @@ let validateDeclaration (declaration: ScopeDeclaration) =
 
         for descendant in qualification.ExpectedDescendants do
             match validateRepositoryPath false descendant with
-            | Error detail -> add (InvalidPrefixQualification(qualification.Path, "invalid expected descendant: " + detail))
+            | Error detail ->
+                add (InvalidPrefixQualification(qualification.Path, "invalid expected descendant: " + detail))
             | Ok() ->
                 if not (patternMatches qualification.Path descendant) then
-                    add (InvalidPrefixQualification(qualification.Path, sprintf "expected descendant is outside prefix: %s" descendant))
+                    add (
+                        InvalidPrefixQualification(
+                            qualification.Path,
+                            sprintf "expected descendant is outside prefix: %s" descendant
+                        )
+                    )
 
         match validateRepositoryPath false qualification.SiblingMutationTest with
-        | Error detail -> add (InvalidPrefixQualification(qualification.Path, "invalid sibling_mutation_test: " + detail))
+        | Error detail ->
+            add (InvalidPrefixQualification(qualification.Path, "invalid sibling_mutation_test: " + detail))
         | Ok() ->
             if patternMatches qualification.Path qualification.SiblingMutationTest then
-                add (InvalidPrefixQualification(qualification.Path, "sibling_mutation_test is inside the qualified prefix"))
+                add (
+                    InvalidPrefixQualification(
+                        qualification.Path,
+                        "sibling_mutation_test is inside the qualified prefix"
+                    )
+                )
 
             let authorizedByAny =
                 declaration.GloballyProtected @ declaration.ActOwned
                 |> List.exists (fun pattern -> patternMatches pattern qualification.SiblingMutationTest)
 
             if authorizedByAny then
-                add (InvalidPrefixQualification(qualification.Path, "sibling_mutation_test is declared instead of undeclared"))
+                add (
+                    InvalidPrefixQualification(
+                        qualification.Path,
+                        "sibling_mutation_test is declared instead of undeclared"
+                    )
+                )
 
     match List.rev errors with
     | first :: _ -> Error first

@@ -22,11 +22,16 @@ open Circus.DevHost.Verify
 /// The default tool root used when `CIRCUS_TOOL_ROOT` is unset.
 let defaultToolRoot () : string =
     let v = Environment.GetEnvironmentVariable "CIRCUS_TOOL_ROOT"
-    if not (System.String.IsNullOrEmpty v) then v
+
+    if not (System.String.IsNullOrEmpty v) then
+        v
     else
         let home = Environment.GetEnvironmentVariable "HOME"
-        if System.String.IsNullOrEmpty home then "/tmp/circus-dev"
-        else Path.Combine(home, ".local", "share", "circus-dev")
+
+        if System.String.IsNullOrEmpty home then
+            "/tmp/circus-dev"
+        else
+            Path.Combine(home, ".local", "share", "circus-dev")
 
 /// The repository root, computed by walking up from the executable.
 let resolveRepoRoot () : string =
@@ -74,7 +79,7 @@ let execute
 
     match Cli.parse argv with
     | Error msg ->
-        console.Stderr ("error: " + msg)
+        console.Stderr("error: " + msg)
         ExitCodes.Code.contractError
     | Ok command ->
         match command with
@@ -104,15 +109,15 @@ let execute
             let manifestPath = Path.Combine(repoRoot, "eng", "devhost-toolchain.json")
 
             let missing =
-                [ if not (fs.IsFile (Path.Combine(repoRoot, "Circus.sln"))) then
+                [ if not (fs.IsFile(Path.Combine(repoRoot, "Circus.sln"))) then
                       "Circus.sln"
-                  if not (fs.IsFile (Path.Combine(repoRoot, "global.json"))) then
+                  if not (fs.IsFile(Path.Combine(repoRoot, "global.json"))) then
                       "global.json"
-                  if not (fs.IsFile (Path.Combine(repoRoot, "Dockerfile.frontend"))) then
+                  if not (fs.IsFile(Path.Combine(repoRoot, "Dockerfile.frontend"))) then
                       "Dockerfile.frontend"
-                  if not (fs.IsFile (Path.Combine(repoRoot, "web", "elm.json"))) then
+                  if not (fs.IsFile(Path.Combine(repoRoot, "web", "elm.json"))) then
                       "web/elm.json"
-                  if not (fs.IsFile (Path.Combine(repoRoot, "web", "package.json"))) then
+                  if not (fs.IsFile(Path.Combine(repoRoot, "web", "package.json"))) then
                       "web/package.json"
                   if not (fs.IsFile manifestPath) then
                       "eng/devhost-toolchain.json" ]
@@ -123,9 +128,7 @@ let execute
                 else
                     let parsed =
                         try
-                            fs.ReadAllText manifestPath
-                            |> Manifest.parse
-                            |> Some
+                            fs.ReadAllText manifestPath |> Manifest.parse |> Some
                         with
                         | ManifestFormatException _ -> None
                         | _ -> None
@@ -146,7 +149,7 @@ let execute
                 console.Stderr("check: " + String.concat "; " issues)
                 ExitCodes.Code.contractError
 
-        | Bootstrap (force, dryRun) ->
+        | Bootstrap(force, dryRun) ->
             let manifestPath = Path.Combine(repoRoot, "eng", "devhost-toolchain.json")
             let json = fs.ReadAllText manifestPath
 
@@ -177,12 +180,11 @@ let execute
                             console.Stderr("bootstrap: " + renderFailure f)
 
                         ExitCodes.Code.capabilityFailure
-            with
-            | ManifestFormatException msg ->
+            with ManifestFormatException msg ->
                 console.Stderr("bootstrap: malformed manifest: " + msg)
                 ExitCodes.Code.contractError
 
-        | Doctor (json, allowDirty) ->
+        | Doctor(json, allowDirty) ->
             let manifestPath = Path.Combine(repoRoot, "eng", "devhost-toolchain.json")
 
             let inputs: DoctorInputs =

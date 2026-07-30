@@ -23,31 +23,36 @@ let main (argv: string[]) : int =
             ExitCode.pass
         | VerifyCmd _ ->
             match resolveRepoRoot () with
-            | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
+            | Error detail ->
+                stderr.WriteLine detail
+                ExitCode.operationalError
             | Ok repoRoot -> runSourcePolicyVerify repoRoot
         | ContainerPolicyCmd _ ->
             match resolveRepoRoot () with
-            | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
+            | Error detail ->
+                stderr.WriteLine detail
+                ExitCode.operationalError
             | Ok repoRoot -> runContainerPolicy repoRoot
         | GateSummaryRegenerateCmd ->
             match resolveRepoRoot () with
-            | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
+            | Error detail ->
+                stderr.WriteLine detail
+                ExitCode.operationalError
             | Ok repoRoot -> runGateSummaryRegenerate repoRoot
         | GateSummaryVerifyCmd ->
             match resolveRepoRoot () with
-            | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
+            | Error detail ->
+                stderr.WriteLine detail
+                ExitCode.operationalError
             | Ok repoRoot -> runGateSummaryVerify repoRoot
         | GateRunCmd ->
             match resolveRepoRoot () with
-            | Error detail -> stderr.WriteLine detail; ExitCode.operationalError
+            | Error detail ->
+                stderr.WriteLine detail
+                ExitCode.operationalError
             | Ok repoRoot -> runGate repoRoot
-        | CanonicalEvidenceCmd subArgs ->
-            Circus.Tooling.CanonicalEvidence.Cli.run subArgs
-        | NoForcePushCmd subArgs ->
-            Circus.Tooling.NoForcePush.Cli.run subArgs
-        | FSharpDiagnosticsCmd subArgs ->
-            Circus.Tooling.FSharpDiagnostics.Cli.run subArgs
-        | EvidenceValidateCmd subArgs ->
-            Circus.Tooling.EvidenceValidator.Cli.run subArgs
-        | ProtectedScopeCmd subArgs ->
-            Circus.Tooling.ProtectedScope.Cli.run subArgs
+        | CanonicalEvidenceCmd subArgs -> Circus.Tooling.CanonicalEvidence.Cli.run subArgs
+        | NoForcePushCmd subArgs -> Circus.Tooling.NoForcePush.Cli.run subArgs
+        | FSharpDiagnosticsCmd subArgs -> Circus.Tooling.FSharpDiagnostics.Cli.run subArgs
+        | EvidenceValidateCmd subArgs -> Circus.Tooling.EvidenceValidator.Cli.run subArgs
+        | ProtectedScopeCmd subArgs -> Circus.Tooling.ProtectedScope.Cli.run subArgs

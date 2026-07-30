@@ -26,10 +26,9 @@ type InputIdentityKind =
 
 /// Typed transition identity using structural equality.
 [<StructuralEquality; StructuralComparison>]
-type TransitionIdentityKey = {
-    EpisodeId: string
-    ExactFingerprint: string
-}
+type TransitionIdentityKey =
+    { EpisodeId: string
+      ExactFingerprint: string }
 
 /// Creates a typed transition identity from a DiagnosticTransition.
 let makeTransitionIdentityKey (t: DiagnosticTransition) : TransitionIdentityKey =
@@ -41,8 +40,7 @@ let renderTransitionIdentity (key: TransitionIdentityKey) : string =
     sprintf "episode=%s;fingerprint=%s" key.EpisodeId key.ExactFingerprint
 
 /// String conversion for transition identity (used in duplicate detection).
-let transitionIdentityString (t: DiagnosticTransition) : string =
-    t.EpisodeId + "|" + t.ExactFingerprint
+let transitionIdentityString (t: DiagnosticTransition) : string = t.EpisodeId + "|" + t.ExactFingerprint
 
 type EngineError =
     | EpisodeLoadFailed of errors: string list
@@ -169,9 +167,7 @@ let private checkForDuplicates
     (items: 'a list)
     : Result<unit, EngineError> =
     let duplicates =
-        items
-        |> List.countBy identity
-        |> List.filter (fun (_, count) -> count > 1)
+        items |> List.countBy identity |> List.filter (fun (_, count) -> count > 1)
 
     if not duplicates.IsEmpty then
         let dupIds =
@@ -191,11 +187,7 @@ let private buildUniqueMap
     : Result<Map<string, 'a>, EngineError> =
     match checkForDuplicates kind identity items with
     | Error e -> Error e
-    | Ok () ->
-        items
-        |> List.map (fun item -> identity item, item)
-        |> Map.ofList
-        |> Ok
+    | Ok() -> items |> List.map (fun item -> identity item, item) |> Map.ofList |> Ok
 
 // -----------------------------------------------------------------------------
 // Single canonical input snapshot from episode engine
@@ -212,13 +204,11 @@ type RuleCandidateInputs =
 let private mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError =
     match failure with
     | EpisodeEngineFailure.VerificationEvidenceLoadFailed errors ->
-        EngineError.VerificationEvidenceLoadFailed (errors |> List.map string)
+        EngineError.VerificationEvidenceLoadFailed(errors |> List.map string)
     | EpisodeEngineFailure.DeclarationLoadFailed issues ->
-        EngineError.Internal (sprintf "Declaration load failed: %A" issues)
-    | EpisodeEngineFailure.PublicationFailed (_, msg) ->
-        EngineError.PublicationFailed msg
-    | EpisodeEngineFailure.InternalFailure (op, msg) ->
-        EngineError.Internal (sprintf "Internal failure in %s: %s" op msg)
+        EngineError.Internal(sprintf "Declaration load failed: %A" issues)
+    | EpisodeEngineFailure.PublicationFailed(_, msg) -> EngineError.PublicationFailed msg
+    | EpisodeEngineFailure.InternalFailure(op, msg) -> EngineError.Internal(sprintf "Internal failure in %s: %s" op msg)
 
 let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInputs, EngineError> =
     match runEpisodeEngine repoRoot defaultEngineOptions with
@@ -234,11 +224,13 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
                 | errs -> Error(errs.Head)
         with
         | Error e -> Error e
-        | Ok () ->
+        | Ok() ->
             // Check episode duplicates
-            match checkForDuplicates EpisodeIdentity (fun (ep: RepairEpisode) -> ep.EpisodeId) result.RepairEpisodes with
+            match
+                checkForDuplicates EpisodeIdentity (fun (ep: RepairEpisode) -> ep.EpisodeId) result.RepairEpisodes
+            with
             | Error e -> Error e
-            | Ok () ->
+            | Ok() ->
                 // Validate transition identities are non-empty
                 match
                     result.Transitions
@@ -249,13 +241,11 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
                         | errs -> Error(errs.Head)
                 with
                 | Error e -> Error e
-                | Ok () ->
+                | Ok() ->
                     // Check transition duplicates by (EpisodeId, ExactFingerprint)
-                    match
-                        checkForDuplicates TransitionIdentity transitionIdentityString result.Transitions
-                    with
+                    match checkForDuplicates TransitionIdentity transitionIdentityString result.Transitions with
                     | Error e -> Error e
-                    | Ok () ->
+                    | Ok() ->
                         // Validate change-set identities are non-empty
                         match
                             result.ChangeSets
@@ -266,7 +256,7 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
                                 | errs -> Error(errs.Head)
                         with
                         | Error e -> Error e
-                        | Ok () ->
+                        | Ok() ->
                             // Build change-set map with duplicate detection
                             match
                                 buildUniqueMap
@@ -286,7 +276,7 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
                                         | errs -> Error(errs.Head)
                                 with
                                 | Error e -> Error e
-                                | Ok () ->
+                                | Ok() ->
                                     // Build verification map with duplicate detection
                                     match
                                         buildUniqueMap
@@ -303,8 +293,7 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
                                               VerificationEvidence = evidMap }
 
 // Single entry point - no backward-compatible wrappers to avoid multiple engine calls
-let loadAllInputs (repoRoot: string) : Result<RuleCandidateInputs, EngineError> =
-    loadFromEpisodeEngine repoRoot
+let loadAllInputs (repoRoot: string) : Result<RuleCandidateInputs, EngineError> = loadFromEpisodeEngine repoRoot
 
 // -----------------------------------------------------------------------------
 // Candidate building
@@ -390,34 +379,30 @@ let validateVerificationBinding
 
         for evid in evidId do
             match Map.tryFind evid verificationMap with
-            | None ->
-                firstError <- Some (sprintf "Verification evidence %s not found" evid)
+            | None -> firstError <- Some(sprintf "Verification evidence %s not found" evid)
             | Some locatedRecord ->
                 let record = locatedRecord.Evidence
                 // Verify episode_id matches
                 if record.EpisodeId <> ep.EpisodeId then
-                    firstError <-
-                        Some (sprintf "Verification evidence %s has episode_id mismatch" evid)
+                    firstError <- Some(sprintf "Verification evidence %s has episode_id mismatch" evid)
 
                 // Verify status is pass
                 elif record.Status <> VerificationStatus.Pass then
                     firstError <-
-                        Some (sprintf "Verification evidence %s has status %A (expected Pass)" evid record.Status)
+                        Some(sprintf "Verification evidence %s has status %A (expected Pass)" evid record.Status)
 
                 // Verify exit code is 0
                 elif record.ExitCode <> 0 then
                     firstError <-
-                        Some (sprintf "Verification evidence %s has exit_code %d (expected 0)" evid record.ExitCode)
+                        Some(sprintf "Verification evidence %s has exit_code %d (expected 0)" evid record.ExitCode)
 
                 // Verify tested commit matches after commit
                 elif record.TestedCommitOid <> ep.AfterCommitOid then
-                    firstError <-
-                        Some (sprintf "Verification evidence %s tested_commit_oid mismatch" evid)
+                    firstError <- Some(sprintf "Verification evidence %s tested_commit_oid mismatch" evid)
 
                 // Verify tested tree matches after tree
                 elif record.TestedTreeOid <> ep.AfterTreeOid then
-                    firstError <-
-                        Some (sprintf "Verification evidence %s tested_tree_oid mismatch" evid)
+                    firstError <- Some(sprintf "Verification evidence %s tested_tree_oid mismatch" evid)
 
         firstError
 
@@ -434,7 +419,11 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
     match loadAllInputs repoRoot with
     | Result.Error e ->
         errs.Add e
-        { Candidates = []; EligibleEpisodes = 0; EpisodesWithCandidates = 0; Errors = errs |> Seq.toList }
+
+        { Candidates = []
+          EligibleEpisodes = 0
+          EpisodesWithCandidates = 0
+          Errors = errs |> Seq.toList }
 
     | Result.Ok inputs ->
         for ep in inputs.Episodes do
@@ -442,8 +431,7 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
             if isEpisodeEligible ep then
                 // Verify all evidence bindings
                 match validateVerificationBinding ep inputs.VerificationEvidence with
-                | Some errMsg ->
-                    errs.Add(EngineError.CandidateGenerationFailed errMsg)
+                | Some errMsg -> errs.Add(EngineError.CandidateGenerationFailed errMsg)
                 | None ->
                     elEp <- elEp + 1
 
@@ -453,9 +441,7 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
                     match Map.tryFind ep.ChangeSetId inputs.ChangeSets with
                     | None ->
                         errs.Add(
-                            EngineError.CandidateGenerationFailed(
-                                sprintf "change set %s not found" ep.ChangeSetId
-                            )
+                            EngineError.CandidateGenerationFailed(sprintf "change set %s not found" ep.ChangeSetId)
                         )
                     | Some changeSet ->
                         match selectCandidateGroup ep changeSet et with
@@ -469,18 +455,11 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
             match elEp, cands.Count with
             | 1, 1 -> () // Success
             | 0, _ -> errs.Add EngineError.NoEligibleEpisodes
-            | _, 0 ->
-                errs.Add(
-                    EngineError.CandidateGenerationFailed(
-                        "eligible episode produced no rule candidate"
-                    )
-                )
+            | _, 0 -> errs.Add(EngineError.CandidateGenerationFailed("eligible episode produced no rule candidate"))
             | _, count ->
                 errs.Add(
                     EngineError.CandidateGenerationFailed(
-                        sprintf
-                            "production candidate count must be exactly one; actual=%d"
-                            count
+                        sprintf "production candidate count must be exactly one; actual=%d" count
                     )
                 )
 

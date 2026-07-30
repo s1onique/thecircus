@@ -25,30 +25,38 @@ let normalizedEpisodesSubdir = episodesSubdir + "/normalized"
 // -----------------------------------------------------------------------------
 
 let repairEpisodeDeclarationSchemaFile = "repair-episode-declaration-v1.schema.json"
+
 let repairEpisodeDeclarationSchemaCorpusRelativePath =
     "schemas/" + repairEpisodeDeclarationSchemaFile
+
 let repairEpisodeDeclarationSchemaCanonicalPath =
     canonicalRootRelative + "/" + repairEpisodeDeclarationSchemaCorpusRelativePath
 
 let repairEpisodeSchemaFile = "repair-episode-v1.schema.json"
 let repairEpisodeSchemaCorpusRelativePath = "schemas/" + repairEpisodeSchemaFile
+
 let repairEpisodeSchemaCanonicalPath =
     canonicalRootRelative + "/" + repairEpisodeSchemaCorpusRelativePath
 
 let diagnosticTransitionSchemaFile = "diagnostic-transition-v1.schema.json"
+
 let diagnosticTransitionSchemaCorpusRelativePath =
     "schemas/" + diagnosticTransitionSchemaFile
+
 let diagnosticTransitionSchemaCanonicalPath =
     canonicalRootRelative + "/" + diagnosticTransitionSchemaCorpusRelativePath
 
 let gitChangeSetSchemaFile = "git-change-set-v1.schema.json"
 let gitChangeSetSchemaCorpusRelativePath = "schemas/" + gitChangeSetSchemaFile
+
 let gitChangeSetSchemaCanonicalPath =
     canonicalRootRelative + "/" + gitChangeSetSchemaCorpusRelativePath
 
 let verificationEvidenceSchemaFile = "verification-evidence-v1.schema.json"
+
 let verificationEvidenceSchemaCorpusRelativePath =
     "schemas/" + verificationEvidenceSchemaFile
+
 let verificationEvidenceSchemaCanonicalPath =
     canonicalRootRelative + "/" + verificationEvidenceSchemaCorpusRelativePath
 
@@ -57,32 +65,42 @@ let verificationEvidenceSchemaCanonicalPath =
 // -----------------------------------------------------------------------------
 
 let repairEpisodesFile = "repair-episodes-v1.jsonl"
+
 let repairEpisodesCorpusRelativePath =
     normalizedCorpusRelativeSubdir + "/" + repairEpisodesFile
+
 let repairEpisodesCanonicalPath =
     canonicalRootRelative + "/" + repairEpisodesCorpusRelativePath
 
 let diagnosticTransitionsFile = "diagnostic-transitions-v1.jsonl"
+
 let diagnosticTransitionsCorpusRelativePath =
     normalizedCorpusRelativeSubdir + "/" + diagnosticTransitionsFile
+
 let diagnosticTransitionsCanonicalPath =
     canonicalRootRelative + "/" + diagnosticTransitionsCorpusRelativePath
 
 let gitChangeSetsFile = "git-change-sets-v1.jsonl"
+
 let gitChangeSetsCorpusRelativePath =
     normalizedCorpusRelativeSubdir + "/" + gitChangeSetsFile
+
 let gitChangeSetsCanonicalPath =
     canonicalRootRelative + "/" + gitChangeSetsCorpusRelativePath
 
 let repairEpisodeSummaryFile = "repair-episode-summary-v1.json"
+
 let repairEpisodeSummaryCorpusRelativePath =
     normalizedCorpusRelativeSubdir + "/" + repairEpisodeSummaryFile
+
 let repairEpisodeSummaryCanonicalPath =
     canonicalRootRelative + "/" + repairEpisodeSummaryCorpusRelativePath
 
 let verificationEvidenceFile = "verification-evidence-v1.jsonl"
+
 let verificationEvidenceCorpusRelativePath =
     normalizedCorpusRelativeSubdir + "/" + verificationEvidenceFile
+
 let verificationEvidenceCanonicalPath =
     canonicalRootRelative + "/" + verificationEvidenceCorpusRelativePath
 
@@ -91,21 +109,21 @@ let verificationEvidenceCanonicalPath =
 // -----------------------------------------------------------------------------
 
 let declarationDirCorpusRelativePath = "corpus/episodes/declarations"
-let declarationDirCanonicalPath = canonicalRootRelative + "/" + declarationDirCorpusRelativePath
+
+let declarationDirCanonicalPath =
+    canonicalRootRelative + "/" + declarationDirCorpusRelativePath
 
 // Combined list of all episode-managed canonical paths, useful for tests and
 // inventory.  Does NOT include the existing foundation outputs (which the
 // foundation manifest already inventories separately).
-let allEpisodeCanonicalPaths : string list =
-    [
-        repairEpisodeDeclarationSchemaCanonicalPath
-        repairEpisodeSchemaCanonicalPath
-        diagnosticTransitionSchemaCanonicalPath
-        gitChangeSetSchemaCanonicalPath
-        verificationEvidenceSchemaCanonicalPath
-        repairEpisodesCanonicalPath
-        diagnosticTransitionsCanonicalPath
-        gitChangeSetsCanonicalPath
-        repairEpisodeSummaryCanonicalPath
-        verificationEvidenceCanonicalPath
-    ]
+let allEpisodeCanonicalPaths: string list =
+    [ repairEpisodeDeclarationSchemaCanonicalPath
+      repairEpisodeSchemaCanonicalPath
+      diagnosticTransitionSchemaCanonicalPath
+      gitChangeSetSchemaCanonicalPath
+      verificationEvidenceSchemaCanonicalPath
+      repairEpisodesCanonicalPath
+      diagnosticTransitionsCanonicalPath
+      gitChangeSetsCanonicalPath
+      repairEpisodeSummaryCanonicalPath
+      verificationEvidenceCanonicalPath ]

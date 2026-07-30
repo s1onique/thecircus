@@ -18,18 +18,15 @@ open System.Text
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Git
 open Circus.Tooling.ScopeAuthority.Domain
 
-type GitBytesResult = {
-    ExitCode: int
-    Stdout: byte array
-    Stderr: byte array
-}
+type GitBytesResult =
+    { ExitCode: int
+      Stdout: byte array
+      Stderr: byte array }
 
-type ScopeAuthorityDependencies = {
-    RunGit: string -> string list -> Result<GitBytesResult, string>
-}
+type ScopeAuthorityDependencies =
+    { RunGit: string -> string list -> Result<GitBytesResult, string> }
 
-let private diagnosticText (bytes: byte array) =
-    Encoding.UTF8.GetString(bytes).Trim()
+let private diagnosticText (bytes: byte array) = Encoding.UTF8.GetString(bytes).Trim()
 
 let productionDependencies () =
     { RunGit =
@@ -44,8 +41,7 @@ let productionDependencies () =
 
 exception private AuthorityException of ScopeAuthorityError
 
-let private fail error =
-    raise (AuthorityException error)
+let private fail error = raise (AuthorityException error)
 
 let private run deps repoRoot operation arguments =
     match deps.RunGit repoRoot arguments with
@@ -57,7 +53,16 @@ let private runRequired deps repoRoot operation missingKind missingValue argumen
 
     if result.ExitCode <> 0 then
         let stderr = diagnosticText result.Stderr
-        fail (GitObjectMissing(missingKind, if String.IsNullOrEmpty stderr then missingValue else missingValue + " (" + stderr + ")"))
+
+        fail (
+            GitObjectMissing(
+                missingKind,
+                if String.IsNullOrEmpty stderr then
+                    missingValue
+                else
+                    missingValue + " (" + stderr + ")"
+            )
+        )
 
     result
 
@@ -119,13 +124,7 @@ let private resolvePathBlob deps repoRoot commitOid path =
 
 let private readBlob deps repoRoot path blobOid =
     let result =
-        runRequired
-            deps
-            repoRoot
-            ("cat-file-blob:" + path)
-            "blob"
-            blobOid
-            [ "cat-file"; "blob"; blobOid ]
+        runRequired deps repoRoot ("cat-file-blob:" + path) "blob" blobOid [ "cat-file"; "blob"; blobOid ]
 
     strictUtf8 path result.Stdout
 
@@ -163,7 +162,10 @@ let resolveWith
             fail (GitObjectIdentityMismatch("evaluated commit", evaluatedCommitOid, resolvedCommit))
 
         let evaluatedTree = resolveTree deps repoRoot resolvedCommit
-        let pointerBlob = resolvePathBlob deps repoRoot resolvedCommit ActiveScopePointerPath
+
+        let pointerBlob =
+            resolvePathBlob deps repoRoot resolvedCommit ActiveScopePointerPath
+
         let pointerRaw = readBlob deps repoRoot ActiveScopePointerPath pointerBlob
 
         let pointer: ActiveScopePointer =
@@ -189,7 +191,8 @@ let resolveWith
                 fail (CliPointerDisagreement("baseline_commit_oid", supplied, pointer.BaselineCommitOid))
         | None -> ()
 
-        let declarationBlob = resolvePathBlob deps repoRoot resolvedCommit pointer.DeclarationPath
+        let declarationBlob =
+            resolvePathBlob deps repoRoot resolvedCommit pointer.DeclarationPath
 
         if not (equalOid declarationBlob pointer.DeclarationBlobOid) then
             fail (GitObjectIdentityMismatch("declaration blob", pointer.DeclarationBlobOid, declarationBlob))
@@ -220,11 +223,12 @@ let resolveWith
         | 0 -> ()
         | 1 -> fail (GitObjectNotAncestor(resolvedBaseline, resolvedCommit))
         | code ->
-            fail
-                (GitOperationFailed(
+            fail (
+                GitOperationFailed(
                     "merge-base-is-ancestor",
                     sprintf "exit=%d stderr=%s" code (diagnosticText ancestry.Stderr)
-                ))
+                )
+            )
 
         Ok
             { EvaluatedCommitOid = resolvedCommit
@@ -241,9 +245,4 @@ let resolveWith
         Error error
 
 let resolve repoRoot evaluatedCommitOid cliDeclarationPath cliBaselineCommitOid =
-    resolveWith
-        (productionDependencies ())
-        repoRoot
-        evaluatedCommitOid
-        cliDeclarationPath
-        cliBaselineCommitOid
+    resolveWith (productionDependencies ()) repoRoot evaluatedCommitOid cliDeclarationPath cliBaselineCommitOid

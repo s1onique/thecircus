@@ -31,7 +31,8 @@ open Circus.Tooling.FSharpDiagnostics.Hashing
 // -----------------------------------------------------------------------------
 
 /// Valid 64-character hexadecimal evidence ID for SHA-256
-let private validEvidenceId = "000100020003000400050006000700080009000a000b000c000d000e000f0010"
+let private validEvidenceId =
+    "000100020003000400050006000700080009000a000b000c000d000e000f0010"
 
 /// Valid 40-character commit OID
 let private validCommitOid = String.replicate 40 "a"
@@ -49,10 +50,15 @@ let private defaultOutputLimit = 1024 * 1024
 let private validEvidenceRecord (evId: string) (epId: string) : string =
     sprintf
         """{"schema_version":"verification-evidence-v1","verification_evidence_id":"%s","episode_id":"%s","verification_kind":"build","verification_command":"dotnet build","verification_result":"pass","verification_exit_code":0,"tested_commit_oid":"%s","tested_tree_oid":"%s"}"""
-        evId epId validCommitOid validTreeOid
+        evId
+        epId
+        validCommitOid
+        validTreeOid
 
 let private tempDir (label: string) : string =
-    let dir = Path.Combine(Path.GetTempPath(), label + "-" + Guid.NewGuid().ToString("N"))
+    let dir =
+        Path.Combine(Path.GetTempPath(), label + "-" + Guid.NewGuid().ToString("N"))
+
     Directory.CreateDirectory dir |> ignore
     dir
 
@@ -60,11 +66,14 @@ let private cleanup (dir: string) : unit =
     try
         if Directory.Exists dir then
             Directory.Delete(dir, true)
-    with _ -> ()
+    with _ ->
+        ()
 
 /// Create minimal directory structure needed by the repair-episode engine.
 let private createMinimalStructure (dir: string) : unit =
-    let declarationsDir = Path.Combine(dir, canonicalRootRelative, "corpus", "episodes", "declarations")
+    let declarationsDir =
+        Path.Combine(dir, canonicalRootRelative, "corpus", "episodes", "declarations")
+
     let capturesDir = Path.Combine(dir, canonicalRootRelative, "corpus", "captures")
     Directory.CreateDirectory declarationsDir |> ignore
     Directory.CreateDirectory capturesDir |> ignore
@@ -73,16 +82,20 @@ let private createMinimalStructure (dir: string) : unit =
 let private writeEvidence (dir: string) (records: string list) : unit =
     let evidencePath = Path.Combine(dir, verificationEvidenceCanonicalPath)
     let evidenceDir = Path.GetDirectoryName(evidencePath)
+
     if not (Directory.Exists evidenceDir) then
         Directory.CreateDirectory(evidenceDir) |> ignore
+
     File.WriteAllLines(evidencePath, records)
 
 /// Seed a canonical file with known content
 let private seedCanonicalFile (dir: string) (canonicalPath: string) (content: string) : unit =
     let fullPath = Path.Combine(dir, canonicalPath)
     let dirPath = Path.GetDirectoryName(fullPath)
+
     if not (Directory.Exists dirPath) then
         Directory.CreateDirectory(dirPath) |> ignore
+
     File.WriteAllText(fullPath, content)
 
 /// Get SHA-256 of a file's content
@@ -107,23 +120,22 @@ let private circusToolingDll () : string =
 
 /// Run regenerate command via BoundedProcess
 let private runRegenerate (dir: string) : Task<Result<BoundedProcessSuccess, BoundedProcessFailure>> =
-    let dll = circusToolingDll()
-    let request: BoundedProcessRequest = {
-        Executable = "dotnet"
-        WorkingDirectory = dir
-        Arguments = [ dll; "fsharp-diagnostics"; "repair-episodes"; "regenerate" ]
-        Environment = []
-        Limits = {
-            Timeout = defaultTimeout
-            StdoutLimitBytes = defaultOutputLimit
-            StderrLimitBytes = defaultOutputLimit
-        }
-    }
+    let dll = circusToolingDll ()
+
+    let request: BoundedProcessRequest =
+        { Executable = "dotnet"
+          WorkingDirectory = dir
+          Arguments = [ dll; "fsharp-diagnostics"; "repair-episodes"; "regenerate" ]
+          Environment = []
+          Limits =
+            { Timeout = defaultTimeout
+              StdoutLimitBytes = defaultOutputLimit
+              StderrLimitBytes = defaultOutputLimit } }
+
     run request CancellationToken.None
 
 /// Run verifyPipeline
-let private runVerify (dir: string) : VerificationResult =
-    verifyPipeline dir defaultEngineOptions
+let private runVerify (dir: string) : VerificationResult = verifyPipeline dir defaultEngineOptions
 
 // -----------------------------------------------------------------------------
 // Test list
@@ -137,6 +149,7 @@ let tests =
           // Test 1: canonical files survive missing evidence file
           test "canonical files survive missing evidence file" {
               let dir = tempDir "preserve-missing-evidence"
+
               try
                   createMinimalStructure dir
 
@@ -177,6 +190,7 @@ let tests =
           // Test 2: canonical files survive malformed evidence
           test "canonical files survive malformed evidence" {
               let dir = tempDir "preserve-malformed-evidence"
+
               try
                   createMinimalStructure dir
 
@@ -214,6 +228,7 @@ let tests =
           // Test 3: canonical files survive invalid SHA-256 evidence
           test "canonical files survive invalid SHA-256 evidence" {
               let dir = tempDir "preserve-invalid-sha256-evidence"
+
               try
                   createMinimalStructure dir
 
@@ -228,8 +243,10 @@ let tests =
                   seedCanonicalFile dir repairEpisodeSummaryCanonicalPath summaryContent
 
                   // Write evidence with invalid SHA-256
-                  let bad = validEvidenceRecord validEvidenceId "ep-001"
-                            |> fun s -> s.Replace("}", ",\"stdout_sha256\":\"not-valid\"}")
+                  let bad =
+                      validEvidenceRecord validEvidenceId "ep-001"
+                      |> fun s -> s.Replace("}", ",\"stdout_sha256\":\"not-valid\"}")
+
                   writeEvidence dir [ bad ]
 
                   // Capture SHA-256 before failure
@@ -253,6 +270,7 @@ let tests =
           // Test 4: canonical files survive duplicate evidence ID
           test "canonical files survive duplicate evidence ID" {
               let dir = tempDir "preserve-duplicate-evidence-id"
+
               try
                   createMinimalStructure dir
 
@@ -292,6 +310,7 @@ let tests =
           // Test 5: canonical files survive placeholder evidence ID
           test "canonical files survive placeholder evidence ID" {
               let dir = tempDir "preserve-placeholder-evidence-id"
+
               try
                   createMinimalStructure dir
 
@@ -323,6 +342,7 @@ let tests =
           // Test 6: actual regeneration preserves all 5 canonical files (bytes unchanged)
           testTask "regenerate preserves all canonical files (bytes unchanged)" {
               let dir = tempDir "preserve-regenerate-all"
+
               try
                   createMinimalStructure dir
 
@@ -365,7 +385,10 @@ let tests =
                   // Compare as strings for simplicity (bytes should be identical)
                   let episodeStrBefore = episodeBytesBefore |> Option.map Encoding.UTF8.GetString
                   let episodeStrAfter = episodeBytesAfter |> Option.map Encoding.UTF8.GetString
-                  let transitionStrBefore = transitionBytesBefore |> Option.map Encoding.UTF8.GetString
+
+                  let transitionStrBefore =
+                      transitionBytesBefore |> Option.map Encoding.UTF8.GetString
+
                   let transitionStrAfter = transitionBytesAfter |> Option.map Encoding.UTF8.GetString
                   let changeSetStrBefore = changeSetBytesBefore |> Option.map Encoding.UTF8.GetString
                   let changeSetStrAfter = changeSetBytesAfter |> Option.map Encoding.UTF8.GetString
@@ -386,38 +409,39 @@ let tests =
           // Test 7: verify canonical file preservation across verify failures
           test "canonical files preserved across verify failures (SHA-256 comparison)" {
               let dir = tempDir "preserve-verify-sha256"
+
               try
                   createMinimalStructure dir
 
                   // Seed all canonical files
-                  let files = [
-                      (repairEpisodesCanonicalPath, "EPISODES-CONTENT-ABCDEF123456")
-                      (diagnosticTransitionsCanonicalPath, "TRANSITIONS-CONTENT-GHIJKL789012")
-                      (gitChangeSetsCanonicalPath, "CHANGESETS-CONTENT-MNOPQR345678")
-                      (repairEpisodeSummaryCanonicalPath, "{\"schema\":\"summary-v2\"}")
-                  ]
+                  let files =
+                      [ (repairEpisodesCanonicalPath, "EPISODES-CONTENT-ABCDEF123456")
+                        (diagnosticTransitionsCanonicalPath, "TRANSITIONS-CONTENT-GHIJKL789012")
+                        (gitChangeSetsCanonicalPath, "CHANGESETS-CONTENT-MNOPQR345678")
+                        (repairEpisodeSummaryCanonicalPath, "{\"schema\":\"summary-v2\"}") ]
 
-                  files |> List.iter (fun (path, content) ->
-                      seedCanonicalFile dir path content)
+                  files |> List.iter (fun (path, content) -> seedCanonicalFile dir path content)
 
                   // Write malformed evidence to trigger verify failure
                   writeEvidence dir [ """{"invalid json""" ]
 
                   // Capture SHA-256 of all files before
-                  let sha256Before = files |> List.map (fun (path, _) ->
-                      let fullPath = Path.Combine(dir, path)
-                      path, getFileSha256 fullPath)
+                  let sha256Before =
+                      files
+                      |> List.map (fun (path, _) ->
+                          let fullPath = Path.Combine(dir, path)
+                          path, getFileSha256 fullPath)
 
                   // Run verify - should fail
                   let vr = runVerify dir
                   Expect.isTrue (List.length vr.Issues > 0) "verify should fail"
 
                   // Verify SHA-256 unchanged
-                  sha256Before |> List.iter (fun (path, shaBefore) ->
+                  sha256Before
+                  |> List.iter (fun (path, shaBefore) ->
                       let fullPath = Path.Combine(dir, path)
                       let shaAfter = getFileSha256 fullPath
                       Expect.equal shaBefore shaAfter (sprintf "SHA-256 of %s unchanged" path))
               finally
                   cleanup dir
-          }
-        ]
+          } ]

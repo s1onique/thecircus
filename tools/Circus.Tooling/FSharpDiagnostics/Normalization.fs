@@ -20,24 +20,23 @@ let private normalizeLineEndings (text: string) : string =
 /// like "/home/me" matching "/home/me-other".  Returns the substituted text
 /// and a boolean indicating whether substitution happened.  Unknown absolute
 /// paths are left untouched so extraction can fail closed later.
-let private applyAliases
-    (aliases: SourceRootAlias list)
-    (text: string)
-    : string =
+let private applyAliases (aliases: SourceRootAlias list) (text: string) : string =
     let mutable result = text
+
     for alias in aliases do
         let abs = alias.AbsoluteRoot
-        let absWithSep =
-            if abs.EndsWith("/") then abs else abs + "/"
+        let absWithSep = if abs.EndsWith("/") then abs else abs + "/"
         let absExact = abs
         // Replace alias-prefixed occurrences only; standalone exact occurrences
         // are replaced too but only when the result still begins with "/"
         // (i.e. it is an absolute path).
         if result.Contains(absWithSep) then
             result <- result.Replace(absWithSep, "<REPO>/")
+
         if result.StartsWith(absExact, System.StringComparison.Ordinal) then
             // Exact match (no trailing separator) — replace only the prefix.
             result <- "<REPO>" + result.Substring(absExact.Length)
+
     result
 
 /// Convert path separators to '/' in path-like substrings only.
@@ -46,31 +45,39 @@ let private applyAliases
 /// and at least one backslash.  Backslash-only text (e.g. in error messages
 /// like "Unexpected character '\'") is preserved unchanged.
 let private normalizePathSeparators (text: string) : string =
-    if not (text.Contains("\\")) then text
-    elif not (text.Contains("/")) then text
+    if not (text.Contains("\\")) then
+        text
+    elif not (text.Contains("/")) then
+        text
     else
         // Split on forward slashes and process each segment.
         // If a segment contains backslashes, replace them with forward slashes.
         let sb = System.Text.StringBuilder()
         let mutable lastStart = 0
         let mutable i = 0
+
         while i < text.Length do
             if text.[i] = '/' then
                 // Process segment from lastStart to i (exclusive)
                 let segment = text.Substring(lastStart, i - lastStart)
+
                 if segment.Contains("\\") then
                     sb.Append(segment.Replace('\\', '/')) |> ignore
                 else
                     sb.Append(segment) |> ignore
+
                 sb.Append('/') |> ignore
                 lastStart <- i + 1
+
             i <- i + 1
         // Process final segment
         let finalSegment = text.Substring(lastStart)
+
         if finalSegment.Contains("\\") then
             sb.Append(finalSegment.Replace('\\', '/')) |> ignore
         else
             sb.Append(finalSegment) |> ignore
+
         sb.ToString()
 
 /// Pure message normalization pipeline. The pipeline performs ONLY:
@@ -80,14 +87,8 @@ let private normalizePathSeparators (text: string) : string =
 ///
 /// It does NOT lowercase, trim, replace numbers, remove punctuation, or
 /// alter diagnostic semantics.
-let normalizeMessage
-    (aliases: SourceRootAlias list)
-    (raw: string)
-    : string =
-    raw
-    |> normalizeLineEndings
-    |> applyAliases aliases
-    |> normalizePathSeparators
+let normalizeMessage (aliases: SourceRootAlias list) (raw: string) : string =
+    raw |> normalizeLineEndings |> applyAliases aliases |> normalizePathSeparators
 
 // =============================================================================
 // Absolute path resolution
@@ -98,14 +99,18 @@ let normalizeMessage
 /// "/home/me-other".
 let matchesDeclaredAlias (aliases: SourceRootAlias list) (path: string) : bool =
     let mutable found = false
+
     for alias in aliases do
         let abs = alias.AbsoluteRoot
+
         if path = abs then
             found <- true
         elif path.StartsWith(abs, System.StringComparison.Ordinal) then
             let after = path.Substring(abs.Length)
+
             if after.StartsWith("/") || after.StartsWith(System.IO.Path.DirectorySeparatorChar) then
                 found <- true
+
     found
 
 /// Resolve `path` through declared aliases. Returns the substituted path or

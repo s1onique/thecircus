@@ -46,6 +46,7 @@ let private strictUtf8 = UTF8Encoding(false, true)
 let private escapeJsonStringPub (s: string) : string =
     let sb = StringBuilder(s.Length + 10)
     sb.Append('"') |> ignore
+
     for c in s do
         match c with
         | '\\' -> sb.Append("\\\\") |> ignore
@@ -55,9 +56,11 @@ let private escapeJsonStringPub (s: string) : string =
         | '\t' -> sb.Append("\\t") |> ignore
         | _ ->
             if int c < 0x20 then
-                sb.AppendFormat(System.Globalization.CultureInfo.InvariantCulture, "\\u{0:x4}", int c) |> ignore
+                sb.AppendFormat(System.Globalization.CultureInfo.InvariantCulture, "\\u{0:x4}", int c)
+                |> ignore
             else
                 sb.Append(c) |> ignore
+
     sb.Append('"') |> ignore
     sb.ToString()
 
@@ -65,18 +68,16 @@ let private escapeJsonStringPub (s: string) : string =
 // Publication types
 // -----------------------------------------------------------------------------
 
-type PublicationArtifact = {
-    Path: string
-    Sha256: string
-    ByteLength: int64
-}
+type PublicationArtifact =
+    { Path: string
+      Sha256: string
+      ByteLength: int64 }
 
-type PublicationSnapshot = {
-    Records: CanonicalExecutionEvidence list
-    Aggregate: CanonicalExecutionAggregate
-    Artifacts: PublicationArtifact list
-    Timestamp: string
-}
+type PublicationSnapshot =
+    { Records: CanonicalExecutionEvidence list
+      Aggregate: CanonicalExecutionAggregate
+      Artifacts: PublicationArtifact list
+      Timestamp: string }
 
 /// Typed staged validation failures for detailed error reporting.
 [<RequireQualifiedAccess>]
@@ -105,33 +106,39 @@ type StagedSnapshotFailure =
 let stagedSnapshotFailureToString (f: StagedSnapshotFailure) : string =
     match f with
     | StagedSnapshotFailure.MissingFile p -> sprintf "missing staged file: %s" p
-    | StagedSnapshotFailure.InvalidUtf8 (p, d) -> sprintf "invalid UTF-8 in %s: %s" p d
-    | StagedSnapshotFailure.RecordParseFailed (line, errors) ->
-        sprintf "record parse failed at line %d: %s" line (String.concat "; " (List.map evidenceWireParseErrorToString errors))
+    | StagedSnapshotFailure.InvalidUtf8(p, d) -> sprintf "invalid UTF-8 in %s: %s" p d
+    | StagedSnapshotFailure.RecordParseFailed(line, errors) ->
+        sprintf
+            "record parse failed at line %d: %s"
+            line
+            (String.concat "; " (List.map evidenceWireParseErrorToString errors))
     | StagedSnapshotFailure.AggregateParseFailed errors ->
         sprintf "aggregate parse failed: %s" (String.concat "; " (List.map aggregateWireParseErrorToString errors))
     | StagedSnapshotFailure.ArtifactManifestParseFailed errors ->
-        sprintf "artifact manifest parse failed: %s" (String.concat "; " (List.map artifactManifestParseErrorToString errors))
+        sprintf
+            "artifact manifest parse failed: %s"
+            (String.concat "; " (List.map artifactManifestParseErrorToString errors))
     | StagedSnapshotFailure.CompatibilityParseFailed d -> sprintf "compatibility parse failed: %s" d
     | StagedSnapshotFailure.NonCanonicalWire p -> sprintf "non-canonical wire bytes in: %s" p
     | StagedSnapshotFailure.RecordValidationFailed issues ->
         sprintf "record validation failed: %s" (String.concat "; " (List.map recordValidationIssueToString issues))
-    | StagedSnapshotFailure.AggregateSemanticHashMismatch (expected, actual) ->
+    | StagedSnapshotFailure.AggregateSemanticHashMismatch(expected, actual) ->
         sprintf "aggregate semantic hash mismatch: expected=%s actual=%s" expected actual
     | StagedSnapshotFailure.AggregateFieldMismatch diff ->
         sprintf "aggregate field difference: %s" (Validation.aggregateDifferenceToString diff)
-    | StagedSnapshotFailure.ArtifactHashMismatch (path, expected, actual) ->
+    | StagedSnapshotFailure.ArtifactHashMismatch(path, expected, actual) ->
         sprintf "artifact hash mismatch for %s: expected=%s actual=%s" path expected actual
-    | StagedSnapshotFailure.ArtifactLengthMismatch (path, expected, actual) ->
+    | StagedSnapshotFailure.ArtifactLengthMismatch(path, expected, actual) ->
         sprintf "artifact length mismatch for %s: expected=%d actual=%d" path expected actual
-    | StagedSnapshotFailure.CompatibilitySemanticHashMismatch (expected, actual) ->
+    | StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual) ->
         sprintf "compatibility semantic hash mismatch: expected=%s actual=%s" expected actual
-    | StagedSnapshotFailure.CompatibilityCommitOidMismatch (expected, actual) ->
+    | StagedSnapshotFailure.CompatibilityCommitOidMismatch(expected, actual) ->
         sprintf "compatibility commit OID mismatch: expected=%s actual=%s" expected actual
-    | StagedSnapshotFailure.CompatibilityTreeOidMismatch (expected, actual) ->
+    | StagedSnapshotFailure.CompatibilityTreeOidMismatch(expected, actual) ->
         sprintf "compatibility tree OID mismatch: expected=%s actual=%s" expected actual
     | StagedSnapshotFailure.CompatibilityProjectionMismatch d -> sprintf "compatibility projection mismatch: %s" d
-    | StagedSnapshotFailure.CompatibilityRecordMismatch (id, d) -> sprintf "compatibility record mismatch for %s: %s" id d
+    | StagedSnapshotFailure.CompatibilityRecordMismatch(id, d) ->
+        sprintf "compatibility record mismatch for %s: %s" id d
     | StagedSnapshotFailure.MutationHookFailed d -> sprintf "mutation hook failed: %s" d
     | StagedSnapshotFailure.UnknownArtifactPath p -> sprintf "unknown artifact path in manifest: %s" p
     | StagedSnapshotFailure.DuplicateArtifactPath p -> sprintf "duplicate artifact path in manifest: %s" p
@@ -167,34 +174,36 @@ let publicationFailureToString (f: PublicationFailure) : string =
         sprintf "staged validation failed: %s" (String.concat "; " (List.map stagedSnapshotFailureToString failures))
 
 /// Typed cleanup operation representing what the dependency performed.
-type CleanupOperation =
-    | DeleteStagingDirectory
+type CleanupOperation = | DeleteStagingDirectory
 
 /// Typed cleanup failure preserving the operation, path, and detail.
-type CleanupFailure = {
-    Operation: CleanupOperation
-    Path: string
-    Detail: string
-}
+type CleanupFailure =
+    { Operation: CleanupOperation
+      Path: string
+      Detail: string }
 
 /// Helper to construct a typed cleanup failure, avoiding F# parser ambiguity with Error ({.
-let private mkCleanupFailure (p: string) (d: string) = { Operation = DeleteStagingDirectory; Path = p; Detail = d }
+let private mkCleanupFailure (p: string) (d: string) =
+    { Operation = DeleteStagingDirectory
+      Path = p
+      Detail = d }
 
 /// Injection seam for filesystem cleanup used by both production and tests.
 /// Production uses Directory.Delete; tests inject recording or failing implementations.
-type CleanupDependencies = {
-    DeleteDirectoryRecursively: string -> Result<unit, CleanupFailure>
-}
+type CleanupDependencies =
+    { DeleteDirectoryRecursively: string -> Result<unit, CleanupFailure> }
 
 /// Default production cleanup using Directory.Delete with exception translation.
-let defaultCleanupDependencies = {
-    DeleteDirectoryRecursively = fun (path: string) ->
-        try
-            if Directory.Exists path then Directory.Delete(path, true)
-            Ok()
-        with ex ->
-            Error (mkCleanupFailure path (sprintf "%s: %s" (ex.GetType().Name) ex.Message))
-}
+let defaultCleanupDependencies =
+    { DeleteDirectoryRecursively =
+        fun (path: string) ->
+            try
+                if Directory.Exists path then
+                    Directory.Delete(path, true)
+
+                Ok()
+            with ex ->
+                Error(mkCleanupFailure path (sprintf "%s: %s" (ex.GetType().Name) ex.Message)) }
 
 /// Invoke cleanup with exception safety: even if the dependency throws,
 /// the boundary returns a typed CleanupFailure and never propagates exceptions.
@@ -203,22 +212,19 @@ let defaultCleanupDependencies = {
 let invokeCleanup (deps: CleanupDependencies) (stagingPath: string) : CleanupFailure option =
     try
         match deps.DeleteDirectoryRecursively stagingPath with
-        | Ok () ->
-            None
+        | Ok() -> None
         | Error failure ->
             // Normalize: use the actual staging path from the publication boundary,
             // not the potentially untrusted path from the dependency's Error.
-            Some {
-                Operation = DeleteStagingDirectory
-                Path = stagingPath
-                Detail = failure.Detail
-            }
+            Some
+                { Operation = DeleteStagingDirectory
+                  Path = stagingPath
+                  Detail = failure.Detail }
     with ex ->
-        Some {
-            Operation = DeleteStagingDirectory
-            Path = stagingPath
-            Detail = sprintf "%s: %s" (ex.GetType().FullName) ex.Message
-        }
+        Some
+            { Operation = DeleteStagingDirectory
+              Path = stagingPath
+              Detail = sprintf "%s: %s" (ex.GetType().FullName) ex.Message }
 
 /// Combine primary publication outcome with cleanup result into the final outcome.
 /// Uses LiveSnapshotState when replacement was attempted; otherwise LiveSnapshotUnchanged.
@@ -244,26 +250,27 @@ type StagingState =
     | StagingMayRemain
 
 /// Final publication outcome with typed primary and cleanup separation.
-type PublicationOutcome = {
-    /// Overall success: both primary publication and cleanup succeeded.
-    Success: bool
-    SnapshotPath: string
-    RecordsCount: int
-    AggregateSha256: string
-    PreviousSnapshotPreserved: bool
-    /// State of the live snapshot after publication attempt.
-    LiveSnapshotState: LiveSnapshotState
-    /// State of the staging directory after publication attempt.
-    StagingState: StagingState
-    /// Primary publication failure, if any.
-    Failure: PublicationFailure option
-    /// Cleanup failure, if any. Never masks primary failure.
-    CleanupFailure: CleanupFailure option
-    /// Number of cleanup invocations (should be exactly 1 for correct behavior).
-    CleanupInvocationCount: int
-    /// Number of atomic replacement invocations (0 or 1).
-    ReplacementPhaseInvocationCount: int
-}
+type PublicationOutcome =
+    {
+        /// Overall success: both primary publication and cleanup succeeded.
+        Success: bool
+        SnapshotPath: string
+        RecordsCount: int
+        AggregateSha256: string
+        PreviousSnapshotPreserved: bool
+        /// State of the live snapshot after publication attempt.
+        LiveSnapshotState: LiveSnapshotState
+        /// State of the staging directory after publication attempt.
+        StagingState: StagingState
+        /// Primary publication failure, if any.
+        Failure: PublicationFailure option
+        /// Cleanup failure, if any. Never masks primary failure.
+        CleanupFailure: CleanupFailure option
+        /// Number of cleanup invocations (should be exactly 1 for correct behavior).
+        CleanupInvocationCount: int
+        /// Number of atomic replacement invocations (0 or 1).
+        ReplacementPhaseInvocationCount: int
+    }
 
 /// Legacy field for backward compatibility: maps LiveSnapshotState to boolean.
 let liveSnapshotMayHaveChanged (state: LiveSnapshotState) =
@@ -328,21 +335,32 @@ let computeCompatibilityProjection (snapshot: PublicationSnapshot) : string =
     sb.Append(",") |> ignore
     sb.Append("\"record_ids\":[") |> ignore
     let mutable first = true
+
     for id in aggregate.RecordIds do
         if first then first <- false else sb.Append(",") |> ignore
         sb.Append(escapeJsonStringPub id) |> ignore
+
     sb.Append("],") |> ignore
     sb.Append("\"overall_status\":") |> ignore
-    sb.Append(escapeJsonStringPub (recordStatusToken aggregate.OverallStatus)) |> ignore
+
+    sb.Append(escapeJsonStringPub (recordStatusToken aggregate.OverallStatus))
+    |> ignore
+
     sb.Append(",") |> ignore
     sb.Append("\"semantic_sha256\":") |> ignore
     sb.Append(escapeJsonStringPub aggregate.SemanticSha256) |> ignore
     sb.Append(",") |> ignore
     sb.Append("\"records\":[") |> ignore
     let mutable firstRecord = true
+
     for r in records do
-        if firstRecord then firstRecord <- false else sb.Append(",") |> ignore
+        if firstRecord then
+            firstRecord <- false
+        else
+            sb.Append(",") |> ignore
+
         sb.Append(renderEvidenceWireJson r) |> ignore
+
     sb.Append("]") |> ignore
     sb.Append("}") |> ignore
     sb.ToString()
@@ -351,15 +369,14 @@ let computeCompatibilityProjection (snapshot: PublicationSnapshot) : string =
 // Snapshot validation
 // -----------------------------------------------------------------------------
 
-type SnapshotValidationResult = {
-    Valid: bool
-    Issues: string list
-    DuplicateRecordIds: string list
-    DuplicateCheckIds: string list
-    SubjectMismatch: bool
-    AggregateCountMismatch: bool
-    AggregateHashMismatch: bool
-}
+type SnapshotValidationResult =
+    { Valid: bool
+      Issues: string list
+      DuplicateRecordIds: string list
+      DuplicateCheckIds: string list
+      SubjectMismatch: bool
+      AggregateCountMismatch: bool
+      AggregateHashMismatch: bool }
 
 let validateSnapshot (snapshot: PublicationSnapshot) : SnapshotValidationResult =
     let issues = ResizeArray<string>()
@@ -367,18 +384,22 @@ let validateSnapshot (snapshot: PublicationSnapshot) : SnapshotValidationResult 
     let duplicateCheckIds = ResizeArray<string>()
 
     let recordIdCounts = System.Collections.Generic.Dictionary<string, int>()
+
     for r in snapshot.Records do
         if recordIdCounts.ContainsKey(r.EvidenceId) then
             recordIdCounts.[r.EvidenceId] <- recordIdCounts.[r.EvidenceId] + 1
+
             if not (duplicateRecordIds.Contains(r.EvidenceId)) then
                 duplicateRecordIds.Add(r.EvidenceId)
         else
             recordIdCounts.[r.EvidenceId] <- 1
 
     let checkIdCounts = System.Collections.Generic.Dictionary<string, int>()
+
     for r in snapshot.Records do
         if checkIdCounts.ContainsKey(r.CheckId) then
             checkIdCounts.[r.CheckId] <- checkIdCounts.[r.CheckId] + 1
+
             if not (duplicateCheckIds.Contains(r.CheckId)) then
                 duplicateCheckIds.Add(r.CheckId)
         else
@@ -388,48 +409,83 @@ let validateSnapshot (snapshot: PublicationSnapshot) : SnapshotValidationResult 
         match snapshot.Records with
         | [] -> true // Empty records means mismatch
         | head :: _ -> snapshot.Aggregate.SubjectCommitOid <> head.TestedCommitOid
-    let aggregateCountMismatch = snapshot.Aggregate.RecordsTotal <> List.length snapshot.Records
-    let aggregateHashMismatch = snapshot.Aggregate.SemanticSha256 <> computeAggregateSemanticHash snapshot.Aggregate
+
+    let aggregateCountMismatch =
+        snapshot.Aggregate.RecordsTotal <> List.length snapshot.Records
+
+    let aggregateHashMismatch =
+        snapshot.Aggregate.SemanticSha256
+        <> computeAggregateSemanticHash snapshot.Aggregate
 
     if duplicateRecordIds.Count > 0 then
         issues.Add(sprintf "duplicate record IDs: %s" (String.concat ", " duplicateRecordIds))
+
     if duplicateCheckIds.Count > 0 then
         issues.Add(sprintf "duplicate check IDs: %s" (String.concat ", " duplicateCheckIds))
+
     if subjectMismatch then
         issues.Add("subject commit mismatch between records and aggregate")
+
     if aggregateCountMismatch then
-        issues.Add(sprintf "aggregate count mismatch: expected %d, got %d" (List.length snapshot.Records) snapshot.Aggregate.RecordsTotal)
+        issues.Add(
+            sprintf
+                "aggregate count mismatch: expected %d, got %d"
+                (List.length snapshot.Records)
+                snapshot.Aggregate.RecordsTotal
+        )
+
     if aggregateHashMismatch then
         issues.Add("aggregate semantic hash mismatch")
 
-    { Valid = issues.Count = 0; Issues = List.ofSeq issues; DuplicateRecordIds = List.ofSeq duplicateRecordIds; DuplicateCheckIds = List.ofSeq duplicateCheckIds; SubjectMismatch = subjectMismatch; AggregateCountMismatch = aggregateCountMismatch; AggregateHashMismatch = aggregateHashMismatch }
+    { Valid = issues.Count = 0
+      Issues = List.ofSeq issues
+      DuplicateRecordIds = List.ofSeq duplicateRecordIds
+      DuplicateCheckIds = List.ofSeq duplicateCheckIds
+      SubjectMismatch = subjectMismatch
+      AggregateCountMismatch = aggregateCountMismatch
+      AggregateHashMismatch = aggregateHashMismatch }
 
 // -----------------------------------------------------------------------------
 // Atomic snapshot publication
 // -----------------------------------------------------------------------------
 
 let private safeDeleteFile (path: string) : unit =
-    if File.Exists path then File.Delete path
+    if File.Exists path then
+        File.Delete path
 
 let private safeDeleteDir (path: string) : unit =
-    if Directory.Exists path then Directory.Delete(path, true)
+    if Directory.Exists path then
+        Directory.Delete(path, true)
 
 let private snapshotExistingFiles (dir: string) (files: string list) : Map<string, byte array option> =
     let mutable result = Map.empty
+
     for f in files do
         let path = Path.Combine(dir, f)
-        let bytes = if File.Exists path then Some(File.ReadAllBytes path) else None
+
+        let bytes =
+            if File.Exists path then
+                Some(File.ReadAllBytes path)
+            else
+                None
+
         result <- Map.add f bytes result
+
     result
 
 let private restoreSnapshot (dir: string) (snapshot: Map<string, byte array option>) : bool =
     let mutable ok = true
+
     for kv in snapshot do
         try
             match kv.Value with
             | Some bytes -> File.WriteAllBytes(Path.Combine(dir, kv.Key), bytes)
-            | None -> if File.Exists (Path.Combine(dir, kv.Key)) then File.Delete (Path.Combine(dir, kv.Key))
-        with _ -> ok <- false
+            | None ->
+                if File.Exists(Path.Combine(dir, kv.Key)) then
+                    File.Delete(Path.Combine(dir, kv.Key))
+        with _ ->
+            ok <- false
+
     ok
 
 /// Publish a canonical evidence snapshot atomically.
@@ -438,17 +494,38 @@ let private restoreSnapshot (dir: string) (snapshot: Map<string, byte array opti
 /// the provider-owned projection. Use publishSnapshotWithCompatibilityProjection instead
 /// to ensure single compatibility authority. This function will raise a compile-time error.
 [<Obsolete("Use publishSnapshotWithCompatibilityProjection for single compatibility authority", true)>]
-let publishSnapshot (outputRoot: string) (records: CanonicalExecutionEvidence list) (aggregate: CanonicalExecutionAggregate) : PublicationOutcome =
-    let snapshotFiles = ["records.jsonl"; "aggregate.json"; "artifacts.jsonl"; "canonical-evidence.json"]
+let publishSnapshot
+    (outputRoot: string)
+    (records: CanonicalExecutionEvidence list)
+    (aggregate: CanonicalExecutionAggregate)
+    : PublicationOutcome =
+    let snapshotFiles =
+        [ "records.jsonl"
+          "aggregate.json"
+          "artifacts.jsonl"
+          "canonical-evidence.json" ]
+
     let recordsCount = List.length records
     let semanticSha = aggregate.SemanticSha256
 
     let ensureOutputDir dir =
-        if not (Directory.Exists dir) then Directory.CreateDirectory dir |> ignore
+        if not (Directory.Exists dir) then
+            Directory.CreateDirectory dir |> ignore
+
         Directory.Exists dir
 
     if not (ensureOutputDir outputRoot) then
-        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
+        { Success = false
+          SnapshotPath = outputRoot
+          RecordsCount = recordsCount
+          AggregateSha256 = ""
+          PreviousSnapshotPreserved = true
+          LiveSnapshotState = LiveSnapshotUnchanged
+          StagingState = StagingRemoved
+          Failure = Some(SnapshotStagingFailed "cannot create output directory")
+          CleanupFailure = None
+          CleanupInvocationCount = 0
+          ReplacementPhaseInvocationCount = 0 }
     else
         let previousSnapshot = snapshotExistingFiles outputRoot snapshotFiles
         let guid = Guid.NewGuid().ToString("n")
@@ -458,7 +535,14 @@ let publishSnapshot (outputRoot: string) (records: CanonicalExecutionEvidence li
             Directory.CreateDirectory stagingDir |> ignore
 
             let timestamp = DateTimeOffset.UtcNow.ToString("O")
-            let compatibilityProjection = computeCompatibilityProjection { Records = records; Aggregate = aggregate; Artifacts = []; Timestamp = timestamp }
+
+            let compatibilityProjection =
+                computeCompatibilityProjection
+                    { Records = records
+                      Aggregate = aggregate
+                      Artifacts = []
+                      Timestamp = timestamp }
+
             let recordsJsonl = String.concat "\n" (List.map renderEvidenceWireJson records)
             let aggregateJson = renderAggregateWireJson aggregate
 
@@ -466,41 +550,114 @@ let publishSnapshot (outputRoot: string) (records: CanonicalExecutionEvidence li
             let aggregateBytes = System.Text.Encoding.UTF8.GetBytes(aggregateJson + "\n")
             let compatBytes = System.Text.Encoding.UTF8.GetBytes(compatibilityProjection + "\n")
 
-            let artifactsJsonl = String.concat "\n" [
-                sprintf """{"path":"records.jsonl","sha256":"%s","byte_length":%d}""" (sha256Hex recordsBytes) recordsBytes.Length
-                sprintf """{"path":"aggregate.json","sha256":"%s","byte_length":%d}""" (sha256Hex aggregateBytes) aggregateBytes.Length
-                sprintf """{"path":"canonical-evidence.json","sha256":"%s","byte_length":%d}""" (sha256Hex compatBytes) compatBytes.Length
-            ]
+            let artifactsJsonl =
+                String.concat
+                    "\n"
+                    [ sprintf
+                          """{"path":"records.jsonl","sha256":"%s","byte_length":%d}"""
+                          (sha256Hex recordsBytes)
+                          recordsBytes.Length
+                      sprintf
+                          """{"path":"aggregate.json","sha256":"%s","byte_length":%d}"""
+                          (sha256Hex aggregateBytes)
+                          aggregateBytes.Length
+                      sprintf
+                          """{"path":"canonical-evidence.json","sha256":"%s","byte_length":%d}"""
+                          (sha256Hex compatBytes)
+                          compatBytes.Length ]
 
             File.WriteAllText(Path.Combine(stagingDir, "records.jsonl"), recordsJsonl + "\n")
             File.WriteAllText(Path.Combine(stagingDir, "aggregate.json"), aggregateJson + "\n")
             File.WriteAllText(Path.Combine(stagingDir, "artifacts.jsonl"), artifactsJsonl + "\n")
             File.WriteAllText(Path.Combine(stagingDir, "canonical-evidence.json"), compatibilityProjection + "\n")
 
-            let snap = { Records = records; Aggregate = aggregate; Artifacts = []; Timestamp = timestamp }
+            let snap =
+                { Records = records
+                  Aggregate = aggregate
+                  Artifacts = []
+                  Timestamp = timestamp }
+
             let validation = validateSnapshot snap
 
             if not validation.Valid then
                 safeDeleteDir stagingDir
-                { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotValidationFailed validation.Issues); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
+
+                { Success = false
+                  SnapshotPath = outputRoot
+                  RecordsCount = recordsCount
+                  AggregateSha256 = ""
+                  PreviousSnapshotPreserved = true
+                  LiveSnapshotState = LiveSnapshotUnchanged
+                  StagingState = StagingRemoved
+                  Failure = Some(SnapshotValidationFailed validation.Issues)
+                  CleanupFailure = None
+                  CleanupInvocationCount = 0
+                  ReplacementPhaseInvocationCount = 0 }
             else
                 try
                     for f in snapshotFiles do
                         let src = Path.Combine(stagingDir, f)
                         let dst = Path.Combine(outputRoot, f)
+
                         if File.Exists src then
-                            if File.Exists dst then File.Delete dst
+                            if File.Exists dst then
+                                File.Delete dst
+
                             File.Move(src, dst)
+
                     safeDeleteDir stagingDir
-                    { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = None; CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 1 }
+
+                    { Success = true
+                      SnapshotPath = outputRoot
+                      RecordsCount = recordsCount
+                      AggregateSha256 = semanticSha
+                      PreviousSnapshotPreserved = true
+                      LiveSnapshotState = LiveSnapshotUnchanged
+                      StagingState = StagingRemoved
+                      Failure = None
+                      CleanupFailure = None
+                      CleanupInvocationCount = 0
+                      ReplacementPhaseInvocationCount = 1 }
                 with ex ->
                     let restored = restoreSnapshot outputRoot previousSnapshot
                     safeDeleteDir stagingDir
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 1 }
+
+                    { Success = false
+                      SnapshotPath = outputRoot
+                      RecordsCount = recordsCount
+                      AggregateSha256 = ""
+                      PreviousSnapshotPreserved = restored
+                      LiveSnapshotState =
+                        (if restored then
+                             LiveSnapshotUnchanged
+                         else
+                             LiveSnapshotMayHaveChanged)
+                      StagingState = StagingRemoved
+                      Failure = Some(SnapshotReplacementFailed(sprintf "%s: %s" (ex.GetType().Name) ex.Message))
+                      CleanupFailure = None
+                      CleanupInvocationCount = 0
+                      ReplacementPhaseInvocationCount = 1 }
         with ex ->
             let restored = restoreSnapshot outputRoot previousSnapshot
-            if Directory.Exists stagingDir then safeDeleteDir stagingDir
-            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
+
+            if Directory.Exists stagingDir then
+                safeDeleteDir stagingDir
+
+            { Success = false
+              SnapshotPath = outputRoot
+              RecordsCount = recordsCount
+              AggregateSha256 = ""
+              PreviousSnapshotPreserved = restored
+              LiveSnapshotState =
+                (if restored then
+                     LiveSnapshotUnchanged
+                 else
+                     LiveSnapshotMayHaveChanged)
+              StagingState = StagingRemoved
+              Failure = Some(SnapshotStagingFailed(sprintf "%s: %s" (ex.GetType().Name) ex.Message))
+              CleanupFailure = None
+              CleanupInvocationCount = 0
+              ReplacementPhaseInvocationCount = 0 }
 
 /// Publish a canonical evidence snapshot using the exact provider-computed compatibility projection.
 /// This ensures single compatibility authority: the provider owns the projection bytes and
@@ -511,16 +668,33 @@ let publishSnapshotWithCompatibilityProjection
     (aggregate: CanonicalExecutionAggregate)
     (compatibilityProjection: CanonicalEvidence)
     : PublicationOutcome =
-    let snapshotFiles = ["records.jsonl"; "aggregate.json"; "artifacts.jsonl"; "canonical-evidence.json"]
+    let snapshotFiles =
+        [ "records.jsonl"
+          "aggregate.json"
+          "artifacts.jsonl"
+          "canonical-evidence.json" ]
+
     let recordsCount = List.length records
     let semanticSha = aggregate.SemanticSha256
 
     let ensureOutputDir dir =
-        if not (Directory.Exists dir) then Directory.CreateDirectory dir |> ignore
+        if not (Directory.Exists dir) then
+            Directory.CreateDirectory dir |> ignore
+
         Directory.Exists dir
 
     if not (ensureOutputDir outputRoot) then
-        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
+        { Success = false
+          SnapshotPath = outputRoot
+          RecordsCount = recordsCount
+          AggregateSha256 = ""
+          PreviousSnapshotPreserved = true
+          LiveSnapshotState = LiveSnapshotUnchanged
+          StagingState = StagingRemoved
+          Failure = Some(SnapshotStagingFailed "cannot create output directory")
+          CleanupFailure = None
+          CleanupInvocationCount = 0
+          ReplacementPhaseInvocationCount = 0 }
     else
         let previousSnapshot = snapshotExistingFiles outputRoot snapshotFiles
         let guid = Guid.NewGuid().ToString("n")
@@ -538,11 +712,21 @@ let publishSnapshotWithCompatibilityProjection
             let aggregateBytes = System.Text.Encoding.UTF8.GetBytes(aggregateJson + "\n")
             let compatBytes = System.Text.Encoding.UTF8.GetBytes(compatJson + "\n")
 
-            let artifactsJsonl = String.concat "\n" [
-                sprintf """{"path":"records.jsonl","sha256":"%s","byte_length":%d}""" (sha256Hex recordsBytes) recordsBytes.Length
-                sprintf """{"path":"aggregate.json","sha256":"%s","byte_length":%d}""" (sha256Hex aggregateBytes) aggregateBytes.Length
-                sprintf """{"path":"canonical-evidence.json","sha256":"%s","byte_length":%d}""" (sha256Hex compatBytes) compatBytes.Length
-            ]
+            let artifactsJsonl =
+                String.concat
+                    "\n"
+                    [ sprintf
+                          """{"path":"records.jsonl","sha256":"%s","byte_length":%d}"""
+                          (sha256Hex recordsBytes)
+                          recordsBytes.Length
+                      sprintf
+                          """{"path":"aggregate.json","sha256":"%s","byte_length":%d}"""
+                          (sha256Hex aggregateBytes)
+                          aggregateBytes.Length
+                      sprintf
+                          """{"path":"canonical-evidence.json","sha256":"%s","byte_length":%d}"""
+                          (sha256Hex compatBytes)
+                          compatBytes.Length ]
 
             File.WriteAllText(Path.Combine(stagingDir, "records.jsonl"), recordsJsonl + "\n")
             File.WriteAllText(Path.Combine(stagingDir, "aggregate.json"), aggregateJson + "\n")
@@ -552,6 +736,7 @@ let publishSnapshotWithCompatibilityProjection
 
             // Validate: READ the written compatibility projection from disk, parse it, and verify
             let compatPath = Path.Combine(stagingDir, "canonical-evidence.json")
+
             let parsedCompat =
                 try
                     if not (File.Exists compatPath) then
@@ -559,51 +744,164 @@ let publishSnapshotWithCompatibilityProjection
                     else
                         let writtenBytes = File.ReadAllBytes compatPath
                         let writtenText = System.Text.Encoding.UTF8.GetString writtenBytes
+
                         match parseWireJson writtenText with
                         | Result.Ok e -> Ok e
                         | Result.Error err -> Error(sprintf "parse failed: %s" err)
-                with ex -> Error(sprintf "read/parse exception: %s" ex.Message)
+                with ex ->
+                    Error(sprintf "read/parse exception: %s" ex.Message)
 
             match parsedCompat with
             | Error detail ->
                 safeDeleteDir stagingDir
-                { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed detail); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
+
+                { Success = false
+                  SnapshotPath = outputRoot
+                  RecordsCount = recordsCount
+                  AggregateSha256 = ""
+                  PreviousSnapshotPreserved = true
+                  LiveSnapshotState = LiveSnapshotUnchanged
+                  StagingState = StagingRemoved
+                  Failure = Some(SnapshotCompatibilityWriteFailed detail)
+                  CleanupFailure = None
+                  CleanupInvocationCount = 0
+                  ReplacementPhaseInvocationCount = 0 }
             | Ok parsed ->
                 // Verify commit/tree match aggregate
                 if parsed.TestedCommitOid <> aggregate.SubjectCommitOid then
                     safeDeleteDir stagingDir
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed(sprintf "commit mismatch: projection=%s aggregate=%s" parsed.TestedCommitOid aggregate.SubjectCommitOid)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
+
+                    { Success = false
+                      SnapshotPath = outputRoot
+                      RecordsCount = recordsCount
+                      AggregateSha256 = ""
+                      PreviousSnapshotPreserved = true
+                      LiveSnapshotState = LiveSnapshotUnchanged
+                      StagingState = StagingRemoved
+                      Failure =
+                        Some(
+                            SnapshotCompatibilityWriteFailed(
+                                sprintf
+                                    "commit mismatch: projection=%s aggregate=%s"
+                                    parsed.TestedCommitOid
+                                    aggregate.SubjectCommitOid
+                            )
+                        )
+                      CleanupFailure = None
+                      CleanupInvocationCount = 0
+                      ReplacementPhaseInvocationCount = 0 }
                 elif parsed.TestedTreeOid <> aggregate.SubjectTreeOid then
                     safeDeleteDir stagingDir
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed(sprintf "tree mismatch: projection=%s aggregate=%s" parsed.TestedTreeOid aggregate.SubjectTreeOid)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
+
+                    { Success = false
+                      SnapshotPath = outputRoot
+                      RecordsCount = recordsCount
+                      AggregateSha256 = ""
+                      PreviousSnapshotPreserved = true
+                      LiveSnapshotState = LiveSnapshotUnchanged
+                      StagingState = StagingRemoved
+                      Failure =
+                        Some(
+                            SnapshotCompatibilityWriteFailed(
+                                sprintf
+                                    "tree mismatch: projection=%s aggregate=%s"
+                                    parsed.TestedTreeOid
+                                    aggregate.SubjectTreeOid
+                            )
+                        )
+                      CleanupFailure = None
+                      CleanupInvocationCount = 0
+                      ReplacementPhaseInvocationCount = 0 }
                 else
                     // Validate snapshot
-                    let snap = { Records = records; Aggregate = aggregate; Artifacts = []; Timestamp = "" }
+                    let snap =
+                        { Records = records
+                          Aggregate = aggregate
+                          Artifacts = []
+                          Timestamp = "" }
+
                     let validation = validateSnapshot snap
 
                     if not validation.Valid then
                         safeDeleteDir stagingDir
-                        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotValidationFailed validation.Issues); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
+
+                        { Success = false
+                          SnapshotPath = outputRoot
+                          RecordsCount = recordsCount
+                          AggregateSha256 = ""
+                          PreviousSnapshotPreserved = true
+                          LiveSnapshotState = LiveSnapshotUnchanged
+                          StagingState = StagingRemoved
+                          Failure = Some(SnapshotValidationFailed validation.Issues)
+                          CleanupFailure = None
+                          CleanupInvocationCount = 0
+                          ReplacementPhaseInvocationCount = 0 }
                     else
                         try
                             for f in snapshotFiles do
                                 let src = Path.Combine(stagingDir, f)
                                 let dst = Path.Combine(outputRoot, f)
+
                                 if File.Exists src then
-                                    if File.Exists dst then File.Delete dst
+                                    if File.Exists dst then
+                                        File.Delete dst
+
                                     File.Move(src, dst)
+
                             safeDeleteDir stagingDir
-                            { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = None; CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 1 }
+
+                            { Success = true
+                              SnapshotPath = outputRoot
+                              RecordsCount = recordsCount
+                              AggregateSha256 = semanticSha
+                              PreviousSnapshotPreserved = true
+                              LiveSnapshotState = LiveSnapshotUnchanged
+                              StagingState = StagingRemoved
+                              Failure = None
+                              CleanupFailure = None
+                              CleanupInvocationCount = 0
+                              ReplacementPhaseInvocationCount = 1 }
                         with ex ->
                             let restored = restoreSnapshot outputRoot previousSnapshot
                             safeDeleteDir stagingDir
-                            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-                              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message))); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 1 }
+
+                            { Success = false
+                              SnapshotPath = outputRoot
+                              RecordsCount = recordsCount
+                              AggregateSha256 = ""
+                              PreviousSnapshotPreserved = restored
+                              LiveSnapshotState =
+                                (if restored then
+                                     LiveSnapshotUnchanged
+                                 else
+                                     LiveSnapshotMayHaveChanged)
+                              StagingState = StagingRemoved
+                              Failure =
+                                Some(SnapshotReplacementFailed(sprintf "%s: %s" (ex.GetType().Name) (ex.Message)))
+                              CleanupFailure = None
+                              CleanupInvocationCount = 0
+                              ReplacementPhaseInvocationCount = 1 }
         with ex ->
             let restored = restoreSnapshot outputRoot previousSnapshot
-            if Directory.Exists stagingDir then safeDeleteDir stagingDir
-            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message))); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
+
+            if Directory.Exists stagingDir then
+                safeDeleteDir stagingDir
+
+            { Success = false
+              SnapshotPath = outputRoot
+              RecordsCount = recordsCount
+              AggregateSha256 = ""
+              PreviousSnapshotPreserved = restored
+              LiveSnapshotState =
+                (if restored then
+                     LiveSnapshotUnchanged
+                 else
+                     LiveSnapshotMayHaveChanged)
+              StagingState = StagingRemoved
+              Failure = Some(SnapshotStagingFailed(sprintf "%s: %s" (ex.GetType().Name) (ex.Message)))
+              CleanupFailure = None
+              CleanupInvocationCount = 0
+              ReplacementPhaseInvocationCount = 0 }
 
 // -----------------------------------------------------------------------------
 // Staged round-trip validation
@@ -652,34 +950,40 @@ let private validateRecordRoundTrip
     : StagedSnapshotFailure option =
     let reRendered = renderEvidenceWireJson record
     let reRenderedBytes = strictUtf8.GetBytes(reRendered)
+
     if reRenderedBytes <> originalBytes then
         // Compute diff for debugging (but don't expose raw bytes in error message)
         let originalLen = originalBytes.Length
         let reRenderedLen = reRenderedBytes.Length
-        let lenDiff = abs(originalLen - reRenderedLen)
-        Some(StagedSnapshotFailure.NonCanonicalWire(
-            sprintf "records.jsonl line %d: re-rendered bytes differ (length diff: %d)" lineNumber lenDiff))
+        let lenDiff = abs (originalLen - reRenderedLen)
+
+        Some(
+            StagedSnapshotFailure.NonCanonicalWire(
+                sprintf "records.jsonl line %d: re-rendered bytes differ (length diff: %d)" lineNumber lenDiff
+            )
+        )
     else
         // Verify evidence_id is derivable from canonical form
         let computedId = computeEvidenceId record
+
         if computedId <> record.EvidenceId then
-            Some(StagedSnapshotFailure.RecordValidationFailed [
-                RecordValidationIssue.RecordIdMismatch(computedId, record.EvidenceId)
-            ])
+            Some(
+                StagedSnapshotFailure.RecordValidationFailed
+                    [ RecordValidationIssue.RecordIdMismatch(computedId, record.EvidenceId) ]
+            )
         else
             None
 
 /// Parse records.jsonl from disk bytes with full round-trip validation.
-let private parseAndValidateRecordsJsonl
-    (recordsPath: string)
-    (recordsBytes: byte array)
-    : StagedSnapshotFailure list =
+let private parseAndValidateRecordsJsonl (recordsPath: string) (recordsBytes: byte array) : StagedSnapshotFailure list =
     let failures = ResizeArray()
+
     let recordsText =
         try
             strictUtf8.GetString(recordsBytes) |> Ok
         with ex ->
             Error ex.Message
+
     match recordsText with
     | Error detail ->
         failures.Add(StagedSnapshotFailure.InvalidUtf8(recordsPath, detail))
@@ -687,21 +991,23 @@ let private parseAndValidateRecordsJsonl
     | Ok text ->
         // Normalize line endings: accept both \n and \r\n
         let normalizedText = text.Replace("\r\n", "\n")
-        let lines = normalizedText.Split([|'\n'|], StringSplitOptions.None)
+        let lines = normalizedText.Split([| '\n' |], StringSplitOptions.None)
         let parsedRecords = ResizeArray()
         let mutable lineIdx = 0
+
         for line in lines do
             lineIdx <- lineIdx + 1
             // Skip empty trailing line
             if not (String.IsNullOrEmpty line) then
                 match parseEvidenceWireJsonStrict line with
-                | Result.Error errors ->
-                    failures.Add(StagedSnapshotFailure.RecordParseFailed(lineIdx, errors))
+                | Result.Error errors -> failures.Add(StagedSnapshotFailure.RecordParseFailed(lineIdx, errors))
                 | Result.Ok record ->
                     let lineBytes = strictUtf8.GetBytes(line)
+
                     match validateRecordRoundTrip lineIdx lineBytes record with
                     | Some failure -> failures.Add(failure)
                     | None -> parsedRecords.Add(record)
+
         List.ofSeq failures
 
 /// Parse aggregate.json from disk bytes with recomputation verification.
@@ -711,24 +1017,26 @@ let private parseAndValidateAggregateJson
     (expectedAggregate: CanonicalExecutionAggregate)
     : StagedSnapshotFailure list =
     let failures = ResizeArray()
+
     let aggregateText =
         try
             strictUtf8.GetString(aggregateBytes) |> Ok
         with ex ->
             Error ex.Message
+
     match aggregateText with
-    | Error detail ->
-        failures.Add(StagedSnapshotFailure.InvalidUtf8(aggregatePath, detail))
+    | Error detail -> failures.Add(StagedSnapshotFailure.InvalidUtf8(aggregatePath, detail))
     | Ok text ->
         match parseAggregateWireJsonStrict text with
-        | Result.Error errors ->
-            failures.Add(StagedSnapshotFailure.AggregateParseFailed(errors))
+        | Result.Error errors -> failures.Add(StagedSnapshotFailure.AggregateParseFailed(errors))
         | Result.Ok aggregate ->
             // Phase 1: Verify self-integrity (semantic hash recomputed from aggregate itself)
             let recomputedHash = computeAggregateSemanticHash aggregate
+
             if recomputedHash <> aggregate.SemanticSha256 then
-                failures.Add(StagedSnapshotFailure.AggregateSemanticHashMismatch(
-                    recomputedHash, aggregate.SemanticSha256))
+                failures.Add(
+                    StagedSnapshotFailure.AggregateSemanticHashMismatch(recomputedHash, aggregate.SemanticSha256)
+                )
 
             // Phase 2: Use production aggregate comparator for complete field-by-field comparison
             // SemanticSha256 is excluded here because it's already handled in Phase 1 (self-integrity).
@@ -738,48 +1046,58 @@ let private parseAndValidateAggregateJson
                 |> List.filter (function
                     | AggregateDifference.SemanticSha256 _ -> false
                     | _ -> true)
+
             for diff in diffs do
                 failures.Add(StagedSnapshotFailure.AggregateFieldMismatch(diff))
+
     List.ofSeq failures
 
 /// Parse artifacts.jsonl from disk bytes with hash/length verification.
 let private parseAndValidateArtifactsJsonl
     (artifactsPath: string)
     (artifactsBytes: byte array)
-    (recordsPath: string) (recordsBytes: byte array)
-    (aggregatePath: string) (aggregateBytes: byte array)
-    (compatPath: string) (compatBytes: byte array)
+    (recordsPath: string)
+    (recordsBytes: byte array)
+    (aggregatePath: string)
+    (aggregateBytes: byte array)
+    (compatPath: string)
+    (compatBytes: byte array)
     : StagedSnapshotFailure list =
     let failures = ResizeArray()
+
     let artifactsText =
         try
             strictUtf8.GetString(artifactsBytes) |> Ok
         with ex ->
             Error ex.Message
+
     match artifactsText with
-    | Error detail ->
-        failures.Add(StagedSnapshotFailure.InvalidUtf8(artifactsPath, detail))
+    | Error detail -> failures.Add(StagedSnapshotFailure.InvalidUtf8(artifactsPath, detail))
     | Ok text ->
         match parseArtifactManifestJsonlStrict text with
-        | Result.Error errors ->
-            failures.Add(StagedSnapshotFailure.ArtifactManifestParseFailed(errors))
+        | Result.Error errors -> failures.Add(StagedSnapshotFailure.ArtifactManifestParseFailed(errors))
         | Result.Ok entries ->
             // Exact manifest inventory: only these three paths are permitted
-            let requiredPaths = ["records.jsonl"; "aggregate.json"; "canonical-evidence.json"] |> Set.ofList
+            let requiredPaths =
+                [ "records.jsonl"; "aggregate.json"; "canonical-evidence.json" ] |> Set.ofList
+
             let actualPaths = entries |> List.map (fun e -> e.Path) |> Set.ofList
 
             // Check for missing paths
             let missingPaths = requiredPaths - actualPaths
+
             for p in missingPaths do
                 failures.Add(StagedSnapshotFailure.MissingFile(p))
 
             // Check for unknown paths (extra entries not allowed)
             let unknownPaths = actualPaths - requiredPaths
+
             for p in unknownPaths do
                 failures.Add(StagedSnapshotFailure.UnknownArtifactPath(p))
 
             // Check for duplicate paths
             let pathCounts = entries |> List.countBy (fun e -> e.Path)
+
             for path, count in pathCounts do
                 if count > 1 then
                     failures.Add(StagedSnapshotFailure.DuplicateArtifactPath(path))
@@ -797,13 +1115,19 @@ let private parseAndValidateArtifactsJsonl
                 | None -> () // Already reported as missing above
                 | Some entry ->
                     if entry.Sha256 <> expectedHash then
-                        failures.Add(StagedSnapshotFailure.ArtifactHashMismatch(expectedPath, expectedHash, entry.Sha256))
+                        failures.Add(
+                            StagedSnapshotFailure.ArtifactHashMismatch(expectedPath, expectedHash, entry.Sha256)
+                        )
+
                     if entry.ByteLength <> expectedLength then
-                        failures.Add(StagedSnapshotFailure.ArtifactLengthMismatch(expectedPath, expectedLength, entry.ByteLength))
+                        failures.Add(
+                            StagedSnapshotFailure.ArtifactLengthMismatch(expectedPath, expectedLength, entry.ByteLength)
+                        )
 
             checkArtifact "records.jsonl" recordsHash recordsLength
             checkArtifact "aggregate.json" aggregateHash aggregateLength
             checkArtifact "canonical-evidence.json" compatHash compatLength
+
     List.ofSeq failures
 
 /// Validate compatibility evidence against records and expected projection.
@@ -815,120 +1139,210 @@ let private validateCompatibilityEvidence
     (aggregate: CanonicalExecutionAggregate)
     : StagedSnapshotFailure list =
     let failures = ResizeArray()
+
     let compatText =
         try
             strictUtf8.GetString(compatBytes) |> Ok
         with ex ->
             Error ex.Message
+
     match compatText with
-    | Error detail ->
-        failures.Add(StagedSnapshotFailure.InvalidUtf8(compatPath, detail))
+    | Error detail -> failures.Add(StagedSnapshotFailure.InvalidUtf8(compatPath, detail))
     | Ok text ->
         match parseWireJson text with
-        | Result.Error detail ->
-            failures.Add(StagedSnapshotFailure.CompatibilityParseFailed(detail))
+        | Result.Error detail -> failures.Add(StagedSnapshotFailure.CompatibilityParseFailed(detail))
         | Result.Ok diskCompat ->
             // Phase 1: Compare disk compatibility against expected projection using production comparator
             // This is the authoritative structural comparison for staged validation
             let projectionDiffs = compareCompatibilityProjection expectedProjection diskCompat
+
             for diff in projectionDiffs do
                 match diff with
-                | CompatibilityDifference.SchemaVersion (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "schema_version mismatch: expected=%d actual=%d" expected actual))
-                | CompatibilityDifference.ProviderName (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "provider_name mismatch: expected=%s actual=%s" expected actual))
-                | CompatibilityDifference.ProviderVersion (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "provider_version mismatch: expected=%s actual=%s" expected actual))
-                | CompatibilityDifference.TestedCommitOid (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "tested_commit_oid mismatch: expected=%s actual=%s" expected actual))
-                | CompatibilityDifference.TestedTreeOid (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "tested_tree_oid mismatch: expected=%s actual=%s" expected actual))
-                | CompatibilityDifference.ObjectFormat (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "object_format mismatch: expected=%s actual=%s" expected actual))
-                | CompatibilityDifference.ActiveScopeActId (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "active_scope_act_id mismatch: expected=%s actual=%s" expected actual))
-                | CompatibilityDifference.ActiveScopePointerBlobOid (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "active_scope_pointer_blob_oid mismatch: expected=%s actual=%s" expected actual))
-                | CompatibilityDifference.ScopeDeclarationPath (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "scope_declaration_path mismatch: expected=%s actual=%s" expected actual))
-                | CompatibilityDifference.DeclarationBlobOid (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "declaration_blob_oid mismatch: expected=%s actual=%s" expected actual))
-                | CompatibilityDifference.BaselineCommitOid (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "baseline_commit_oid mismatch: expected=%s actual=%s" expected actual))
-                | CompatibilityDifference.OverallStatus (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityProjectionMismatch(
-                        sprintf "overall_status mismatch: expected=%s actual=%s" (statusToken expected) (statusToken actual)))
-                | CompatibilityDifference.SemanticSha256 (expected, actual) ->
+                | CompatibilityDifference.SchemaVersion(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "schema_version mismatch: expected=%d actual=%d" expected actual
+                        )
+                    )
+                | CompatibilityDifference.ProviderName(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "provider_name mismatch: expected=%s actual=%s" expected actual
+                        )
+                    )
+                | CompatibilityDifference.ProviderVersion(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "provider_version mismatch: expected=%s actual=%s" expected actual
+                        )
+                    )
+                | CompatibilityDifference.TestedCommitOid(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "tested_commit_oid mismatch: expected=%s actual=%s" expected actual
+                        )
+                    )
+                | CompatibilityDifference.TestedTreeOid(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "tested_tree_oid mismatch: expected=%s actual=%s" expected actual
+                        )
+                    )
+                | CompatibilityDifference.ObjectFormat(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "object_format mismatch: expected=%s actual=%s" expected actual
+                        )
+                    )
+                | CompatibilityDifference.ActiveScopeActId(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "active_scope_act_id mismatch: expected=%s actual=%s" expected actual
+                        )
+                    )
+                | CompatibilityDifference.ActiveScopePointerBlobOid(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "active_scope_pointer_blob_oid mismatch: expected=%s actual=%s" expected actual
+                        )
+                    )
+                | CompatibilityDifference.ScopeDeclarationPath(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "scope_declaration_path mismatch: expected=%s actual=%s" expected actual
+                        )
+                    )
+                | CompatibilityDifference.DeclarationBlobOid(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "declaration_blob_oid mismatch: expected=%s actual=%s" expected actual
+                        )
+                    )
+                | CompatibilityDifference.BaselineCommitOid(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf "baseline_commit_oid mismatch: expected=%s actual=%s" expected actual
+                        )
+                    )
+                | CompatibilityDifference.OverallStatus(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityProjectionMismatch(
+                            sprintf
+                                "overall_status mismatch: expected=%s actual=%s"
+                                (statusToken expected)
+                                (statusToken actual)
+                        )
+                    )
+                | CompatibilityDifference.SemanticSha256(expected, actual) ->
                     failures.Add(StagedSnapshotFailure.CompatibilitySemanticHashMismatch(expected, actual))
-                | CompatibilityDifference.CheckCount (expected, actual) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
-                        "(all)", sprintf "check count mismatch: expected=%d actual=%d" expected actual))
+                | CompatibilityDifference.CheckCount(expected, actual) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityRecordMismatch(
+                            "(all)",
+                            sprintf "check count mismatch: expected=%d actual=%d" expected actual
+                        )
+                    )
                 | CompatibilityDifference.MissingCheck checkId ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
-                        checkId, sprintf "missing check in disk compatibility: %s" checkId))
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityRecordMismatch(
+                            checkId,
+                            sprintf "missing check in disk compatibility: %s" checkId
+                        )
+                    )
                 | CompatibilityDifference.UnknownCheck checkId ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
-                        checkId, sprintf "unknown check in disk compatibility: %s" checkId))
-                | CompatibilityDifference.CheckDifference (checkId, checkDiff) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityRecordMismatch(
+                            checkId,
+                            sprintf "unknown check in disk compatibility: %s" checkId
+                        )
+                    )
+                | CompatibilityDifference.CheckDifference(checkId, checkDiff) ->
                     let detail =
                         match checkDiff with
-                        | CompatibilityCheckDifference.Id (expected, actual) -> sprintf "id mismatch: expected=%s actual=%s" expected actual
-                        | CompatibilityCheckDifference.CommandArgv (expected, actual) -> sprintf "command_argv mismatch"
-                        | CompatibilityCheckDifference.WorkingDirectory (expected, actual) -> sprintf "working_directory mismatch"
-                        | CompatibilityCheckDifference.DurationMilliseconds (expected, actual) -> sprintf "duration mismatch: expected=%d actual=%d" expected actual
-                        | CompatibilityCheckDifference.ExitCode (expected, actual) -> sprintf "exit_code mismatch"
-                        | CompatibilityCheckDifference.Status (expected, actual) -> sprintf "status mismatch: expected=%s actual=%s" (statusToken expected) (statusToken actual)
-                        | CompatibilityCheckDifference.StdoutSha256 (expected, actual) -> sprintf "stdout_sha256 mismatch"
-                        | CompatibilityCheckDifference.StderrSha256 (expected, actual) -> sprintf "stderr_sha256 mismatch"
-                        | CompatibilityCheckDifference.FailureKind (expected, actual) -> sprintf "failure_kind mismatch"
+                        | CompatibilityCheckDifference.Id(expected, actual) ->
+                            sprintf "id mismatch: expected=%s actual=%s" expected actual
+                        | CompatibilityCheckDifference.CommandArgv(expected, actual) -> sprintf "command_argv mismatch"
+                        | CompatibilityCheckDifference.WorkingDirectory(expected, actual) ->
+                            sprintf "working_directory mismatch"
+                        | CompatibilityCheckDifference.DurationMilliseconds(expected, actual) ->
+                            sprintf "duration mismatch: expected=%d actual=%d" expected actual
+                        | CompatibilityCheckDifference.ExitCode(expected, actual) -> sprintf "exit_code mismatch"
+                        | CompatibilityCheckDifference.Status(expected, actual) ->
+                            sprintf "status mismatch: expected=%s actual=%s" (statusToken expected) (statusToken actual)
+                        | CompatibilityCheckDifference.StdoutSha256(expected, actual) ->
+                            sprintf "stdout_sha256 mismatch"
+                        | CompatibilityCheckDifference.StderrSha256(expected, actual) ->
+                            sprintf "stderr_sha256 mismatch"
+                        | CompatibilityCheckDifference.FailureKind(expected, actual) -> sprintf "failure_kind mismatch"
+
                     failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(checkId, detail))
-                | CompatibilityDifference.DuplicateExpectedCheckId (checkId, count) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
-                        checkId, sprintf "duplicate check id in expected: %s (count=%d)" checkId count))
-                | CompatibilityDifference.DuplicateActualCheckId (checkId, count) ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
-                        checkId, sprintf "duplicate check id in disk: %s (count=%d)" checkId count))
+                | CompatibilityDifference.DuplicateExpectedCheckId(checkId, count) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityRecordMismatch(
+                            checkId,
+                            sprintf "duplicate check id in expected: %s (count=%d)" checkId count
+                        )
+                    )
+                | CompatibilityDifference.DuplicateActualCheckId(checkId, count) ->
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityRecordMismatch(
+                            checkId,
+                            sprintf "duplicate check id in disk: %s (count=%d)" checkId count
+                        )
+                    )
 
             // Phase 2: Cross-file consistency checks (aggregate vs compatibility)
             // Verify commit: use dedicated type to avoid misclassifying OIDs as hashes
             if diskCompat.TestedCommitOid <> aggregate.SubjectCommitOid then
-                failures.Add(StagedSnapshotFailure.CompatibilityCommitOidMismatch(
-                    aggregate.SubjectCommitOid, diskCompat.TestedCommitOid))
+                failures.Add(
+                    StagedSnapshotFailure.CompatibilityCommitOidMismatch(
+                        aggregate.SubjectCommitOid,
+                        diskCompat.TestedCommitOid
+                    )
+                )
             // Verify tree: use dedicated type for consistency
             if diskCompat.TestedTreeOid <> aggregate.SubjectTreeOid then
-                failures.Add(StagedSnapshotFailure.CompatibilityTreeOidMismatch(
-                    aggregate.SubjectTreeOid, diskCompat.TestedTreeOid))
+                failures.Add(
+                    StagedSnapshotFailure.CompatibilityTreeOidMismatch(
+                        aggregate.SubjectTreeOid,
+                        diskCompat.TestedTreeOid
+                    )
+                )
             // Verify record IDs match (diskCompat.Checks uses EvidenceCheckResult with Id field)
-            let compatRecordIds = List.map (fun (e: EvidenceCheckResult) -> e.Id) diskCompat.Checks |> List.sort
+            let compatRecordIds =
+                List.map (fun (e: EvidenceCheckResult) -> e.Id) diskCompat.Checks |> List.sort
+
             let aggregateRecordIds = aggregate.RecordIds
+
             if compatRecordIds <> aggregateRecordIds then
-                failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
-                    "(all)",
-                    sprintf "record IDs mismatch: compat count=%d aggregate count=%d"
-                        (List.length compatRecordIds) (List.length aggregateRecordIds)))
+                failures.Add(
+                    StagedSnapshotFailure.CompatibilityRecordMismatch(
+                        "(all)",
+                        sprintf
+                            "record IDs mismatch: compat count=%d aggregate count=%d"
+                            (List.length compatRecordIds)
+                            (List.length aggregateRecordIds)
+                    )
+                )
             // Verify individual record consistency
-            let compatById = List.map (fun (e: EvidenceCheckResult) -> e.Id, e) diskCompat.Checks |> Map.ofList
+            let compatById =
+                List.map (fun (e: EvidenceCheckResult) -> e.Id, e) diskCompat.Checks
+                |> Map.ofList
+
             for record in records do
                 match Map.tryFind record.EvidenceId compatById with
                 | None ->
-                    failures.Add(StagedSnapshotFailure.CompatibilityRecordMismatch(
-                        record.CheckId,
-                        sprintf "record %s not found in compatibility projection" record.EvidenceId))
+                    failures.Add(
+                        StagedSnapshotFailure.CompatibilityRecordMismatch(
+                            record.CheckId,
+                            sprintf "record %s not found in compatibility projection" record.EvidenceId
+                        )
+                    )
                 | Some _ ->
                     // Record found - EvidenceCheckResult doesn't have check_id so we skip check_id validation
                     // The semantic hash comparison is sufficient for compatibility
                     ()
+
     List.ofSeq failures
 
 // =============================================================================
@@ -947,7 +1361,12 @@ let rec stageAndPublishSnapshotWithDependencies
     (compatibilityProjection: CanonicalEvidence)
     (mutationHook: (string -> Result<unit, string>) option)
     : PublicationOutcome =
-    let snapshotFiles = ["records.jsonl"; "aggregate.json"; "artifacts.jsonl"; "canonical-evidence.json"]
+    let snapshotFiles =
+        [ "records.jsonl"
+          "aggregate.json"
+          "artifacts.jsonl"
+          "canonical-evidence.json" ]
+
     let recordsCount = List.length records
     let semanticSha = aggregate.SemanticSha256
 
@@ -960,14 +1379,23 @@ let rec stageAndPublishSnapshotWithDependencies
 
     // Ensure output directory
     let ensureOutputDir dir =
-        if not (Directory.Exists dir) then Directory.CreateDirectory dir |> ignore
+        if not (Directory.Exists dir) then
+            Directory.CreateDirectory dir |> ignore
+
         Directory.Exists dir
 
     if not (ensureOutputDir outputRoot) then
-        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-          PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved;
-          Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None;
-          CleanupInvocationCount = 0; ReplacementPhaseInvocationCount = 0 }
+        { Success = false
+          SnapshotPath = outputRoot
+          RecordsCount = recordsCount
+          AggregateSha256 = ""
+          PreviousSnapshotPreserved = true
+          LiveSnapshotState = LiveSnapshotUnchanged
+          StagingState = StagingRemoved
+          Failure = Some(SnapshotStagingFailed "cannot create output directory")
+          CleanupFailure = None
+          CleanupInvocationCount = 0
+          ReplacementPhaseInvocationCount = 0 }
     else
         // Create staging directory with unique name
         let guid = Guid.NewGuid().ToString("n")
@@ -986,14 +1414,22 @@ let rec stageAndPublishSnapshotWithDependencies
             let aggregateBytes = strictUtf8.GetBytes(aggregateJson + "\n")
             let compatBytes = strictUtf8.GetBytes(compatJson + "\n")
 
-            let artifactsJsonl = String.concat "\n" [
-                sprintf """{"path":"records.jsonl","sha256":"%s","byte_length":%d}"""
-                    (sha256HexOfBytes recordsBytes) recordsBytes.Length
-                sprintf """{"path":"aggregate.json","sha256":"%s","byte_length":%d}"""
-                    (sha256HexOfBytes aggregateBytes) aggregateBytes.Length
-                sprintf """{"path":"canonical-evidence.json","sha256":"%s","byte_length":%d}"""
-                    (sha256HexOfBytes compatBytes) compatBytes.Length
-            ]
+            let artifactsJsonl =
+                String.concat
+                    "\n"
+                    [ sprintf
+                          """{"path":"records.jsonl","sha256":"%s","byte_length":%d}"""
+                          (sha256HexOfBytes recordsBytes)
+                          recordsBytes.Length
+                      sprintf
+                          """{"path":"aggregate.json","sha256":"%s","byte_length":%d}"""
+                          (sha256HexOfBytes aggregateBytes)
+                          aggregateBytes.Length
+                      sprintf
+                          """{"path":"canonical-evidence.json","sha256":"%s","byte_length":%d}"""
+                          (sha256HexOfBytes compatBytes)
+                          compatBytes.Length ]
+
             let artifactsBytes = strictUtf8.GetBytes(artifactsJsonl + "\n")
 
             // Write all files using canonical UTF-8
@@ -1010,29 +1446,70 @@ let rec stageAndPublishSnapshotWithDependencies
                     // Single terminal cleanup boundary
                     let cleanupFailure = invokeCleanup dependencies stagingDir
                     cleanupCallCount.Add(1)
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-                      PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
-                      StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
-                      Failure = Some(SnapshotMutationHookFailed detail); CleanupFailure = cleanupFailure;
-                      CleanupInvocationCount = cleanupCallCount.Count; ReplacementPhaseInvocationCount = replacementCallCount.Count }
-                | Result.Ok () ->
+
+                    { Success = false
+                      SnapshotPath = outputRoot
+                      RecordsCount = recordsCount
+                      AggregateSha256 = ""
+                      PreviousSnapshotPreserved = true
+                      LiveSnapshotState = LiveSnapshotUnchanged
+                      StagingState =
+                        (if cleanupFailure.IsNone then
+                             StagingRemoved
+                         else
+                             StagingMayRemain)
+                      Failure = Some(SnapshotMutationHookFailed detail)
+                      CleanupFailure = cleanupFailure
+                      CleanupInvocationCount = cleanupCallCount.Count
+                      ReplacementPhaseInvocationCount = replacementCallCount.Count }
+                | Result.Ok() ->
                     // Continue to validation phase
-                    stageAndPublishValidationWithDeps dependencies stagingDir snapshotFiles recordsCount semanticSha
-                        previousSnapshot outputRoot compatibilityProjection records aggregate None
+                    stageAndPublishValidationWithDeps
+                        dependencies
+                        stagingDir
+                        snapshotFiles
+                        recordsCount
+                        semanticSha
+                        previousSnapshot
+                        outputRoot
+                        compatibilityProjection
+                        records
+                        aggregate
+                        None
             | None ->
                 // Continue to validation phase with no mutation
-                stageAndPublishValidationWithDeps dependencies stagingDir snapshotFiles recordsCount semanticSha
-                    previousSnapshot outputRoot compatibilityProjection records aggregate None
+                stageAndPublishValidationWithDeps
+                    dependencies
+                    stagingDir
+                    snapshotFiles
+                    recordsCount
+                    semanticSha
+                    previousSnapshot
+                    outputRoot
+                    compatibilityProjection
+                    records
+                    aggregate
+                    None
         with ex ->
             // Attempt cleanup, preserving cleanup failure details
             let cleanupFailure = invokeCleanup dependencies stagingDir
             cleanupCallCount.Add(1)
-            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-              PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
-              StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
-              Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)));
-              CleanupFailure = cleanupFailure;
-              CleanupInvocationCount = cleanupCallCount.Count; ReplacementPhaseInvocationCount = replacementCallCount.Count }
+
+            { Success = false
+              SnapshotPath = outputRoot
+              RecordsCount = recordsCount
+              AggregateSha256 = ""
+              PreviousSnapshotPreserved = true
+              LiveSnapshotState = LiveSnapshotUnchanged
+              StagingState =
+                (if cleanupFailure.IsNone then
+                     StagingRemoved
+                 else
+                     StagingMayRemain)
+              Failure = Some(SnapshotStagingFailed(sprintf "%s: %s" (ex.GetType().Name) (ex.Message)))
+              CleanupFailure = cleanupFailure
+              CleanupInvocationCount = cleanupCallCount.Count
+              ReplacementPhaseInvocationCount = replacementCallCount.Count }
 
 /// Internal validation phase with dependency injection.
 /// Executes phases 3-10 with proper cleanup boundary.
@@ -1053,10 +1530,17 @@ and stageAndPublishValidationWithDeps
     let replacementCallCount = ResizeArray()
 
     // Phase 3: Reread all four files from disk
-    let recordsDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "records.jsonl"))
-    let aggregateDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "aggregate.json"))
-    let artifactsDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "artifacts.jsonl"))
-    let compatDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "canonical-evidence.json"))
+    let recordsDiskBytes =
+        readFileCanonicalUtf8 (Path.Combine(stagingDir, "records.jsonl"))
+
+    let aggregateDiskBytes =
+        readFileCanonicalUtf8 (Path.Combine(stagingDir, "aggregate.json"))
+
+    let artifactsDiskBytes =
+        readFileCanonicalUtf8 (Path.Combine(stagingDir, "artifacts.jsonl"))
+
+    let compatDiskBytes =
+        readFileCanonicalUtf8 (Path.Combine(stagingDir, "canonical-evidence.json"))
 
     // Phase 4-8: Strict validation
     let allFailures =
@@ -1066,8 +1550,7 @@ and stageAndPublishValidationWithDeps
 
     // Validate records.jsonl
     match recordsDiskBytes with
-    | Result.Error detail ->
-        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("records.jsonl", detail))
+    | Result.Error detail -> allFailures.Add(StagedSnapshotFailure.InvalidUtf8("records.jsonl", detail))
     | Ok bytes ->
         let recordFailures = parseAndValidateRecordsJsonl "records.jsonl" bytes
         allFailures.AddRange(recordFailures)
@@ -1078,9 +1561,10 @@ and stageAndPublishValidationWithDeps
         | Result.Ok bytes ->
             let text = strictUtf8.GetString bytes
             let normalizedText = text.Replace("\r\n", "\n")
-            let lines = normalizedText.Split([|'\n'|], StringSplitOptions.None)
+            let lines = normalizedText.Split([| '\n' |], StringSplitOptions.None)
             let parsed = ResizeArray()
             let hadParseErrors = ref false
+
             for line in lines do
                 if not (String.IsNullOrEmpty line) then
                     match parseEvidenceWireJsonStrict line with
@@ -1095,8 +1579,7 @@ and stageAndPublishValidationWithDeps
 
     // Validate aggregate.json
     match aggregateDiskBytes with
-    | Result.Error detail ->
-        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
+    | Result.Error detail -> allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
     | Ok bytes ->
         match parsedRecordsResult with
         | Error _ -> ()
@@ -1104,57 +1587,84 @@ and stageAndPublishValidationWithDeps
             let recomputedAggregate =
                 computeAggregate aggregate.SubjectCommitOid aggregate.SubjectTreeOid parsedRecords
                 |> finalizeAggregate
-            let aggregateFailures = parseAndValidateAggregateJson "aggregate.json" bytes recomputedAggregate
+
+            let aggregateFailures =
+                parseAndValidateAggregateJson "aggregate.json" bytes recomputedAggregate
+
             allFailures.AddRange(aggregateFailures)
 
     // Validate artifacts.jsonl
     match artifactsDiskBytes, recordsDiskBytes, aggregateDiskBytes, compatDiskBytes with
     | Result.Ok artBytes, Result.Ok recBytes, Result.Ok aggBytes, Result.Ok comBytes ->
         let artifactFailures =
-            parseAndValidateArtifactsJsonl "artifacts.jsonl" artBytes
-                "records.jsonl" recBytes "aggregate.json" aggBytes
-                "canonical-evidence.json" comBytes
+            parseAndValidateArtifactsJsonl
+                "artifacts.jsonl"
+                artBytes
+                "records.jsonl"
+                recBytes
+                "aggregate.json"
+                aggBytes
+                "canonical-evidence.json"
+                comBytes
+
         allFailures.AddRange(artifactFailures)
-    | Result.Error detail, _, _, _ ->
-        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("artifacts.jsonl", detail))
-    | _, Result.Error detail, _, _ ->
-        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("records.jsonl", detail))
-    | _, _, Result.Error detail, _ ->
-        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
+    | Result.Error detail, _, _, _ -> allFailures.Add(StagedSnapshotFailure.InvalidUtf8("artifacts.jsonl", detail))
+    | _, Result.Error detail, _, _ -> allFailures.Add(StagedSnapshotFailure.InvalidUtf8("records.jsonl", detail))
+    | _, _, Result.Error detail, _ -> allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
     | _, _, _, Result.Error detail ->
         allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
 
     // Validate compatibility evidence
     match compatDiskBytes with
-    | Result.Error detail ->
-        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
+    | Result.Error detail -> allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
     | Ok bytes ->
         match parsedRecordsResult with
         | Error _ -> ()
         | Ok parsedRecords ->
-            let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes compatibilityProjection parsedRecords aggregate
+            let compatFailures =
+                validateCompatibilityEvidence
+                    "canonical-evidence.json"
+                    bytes
+                    compatibilityProjection
+                    parsedRecords
+                    aggregate
+
             allFailures.AddRange(compatFailures)
 
     // Phase 9: Handle validation result with single terminal cleanup boundary
     if allFailures.Count > 0 then
         let cleanupFailure = invokeCleanup dependencies stagingDir
         cleanupCallCount.Add(1)
-        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-          PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
-          StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
-          Failure = Some(SnapshotStagedValidationFailed(List.ofSeq allFailures));
-          CleanupFailure = cleanupFailure;
-          CleanupInvocationCount = cleanupCallCount.Count; ReplacementPhaseInvocationCount = replacementCallCount.Count }
+
+        { Success = false
+          SnapshotPath = outputRoot
+          RecordsCount = recordsCount
+          AggregateSha256 = ""
+          PreviousSnapshotPreserved = true
+          LiveSnapshotState = LiveSnapshotUnchanged
+          StagingState =
+            (if cleanupFailure.IsNone then
+                 StagingRemoved
+             else
+                 StagingMayRemain)
+          Failure = Some(SnapshotStagedValidationFailed(List.ofSeq allFailures))
+          CleanupFailure = cleanupFailure
+          CleanupInvocationCount = cleanupCallCount.Count
+          ReplacementPhaseInvocationCount = replacementCallCount.Count }
     else
         // Phase 10: Atomically replace live snapshot
         try
             replacementCallCount.Add(1)
             let mutable moveFailed = false
+
             for f in snapshotFiles do
                 let src = Path.Combine(stagingDir, f)
                 let dst = Path.Combine(outputRoot, f)
+
                 if File.Exists src then
-                    if File.Exists dst then File.Delete dst
+                    if File.Exists dst then
+                        File.Delete dst
+
                     File.Move(src, dst)
                 elif File.Exists dst then
                     moveFailed <- true
@@ -1167,23 +1677,47 @@ and stageAndPublishValidationWithDeps
             cleanupCallCount.Add(1)
             // FIX P0: Primary did NOT fail - cleanup failure should NOT be in Failure field.
             // Failure = None because publication succeeded. CleanupFailure carries the cleanup error.
-            { Success = cleanupFailure.IsNone; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha;
-              PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotReplaced;
-              StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
-              Failure = None; CleanupFailure = cleanupFailure;
-              CleanupInvocationCount = cleanupCallCount.Count; ReplacementPhaseInvocationCount = replacementCallCount.Count }
+            { Success = cleanupFailure.IsNone
+              SnapshotPath = outputRoot
+              RecordsCount = recordsCount
+              AggregateSha256 = semanticSha
+              PreviousSnapshotPreserved = true
+              LiveSnapshotState = LiveSnapshotReplaced
+              StagingState =
+                (if cleanupFailure.IsNone then
+                     StagingRemoved
+                 else
+                     StagingMayRemain)
+              Failure = None
+              CleanupFailure = cleanupFailure
+              CleanupInvocationCount = cleanupCallCount.Count
+              ReplacementPhaseInvocationCount = replacementCallCount.Count }
         with ex ->
             // Rollback to previous snapshot
             let restored = restoreSnapshot outputRoot previousSnapshot
             // Single terminal cleanup boundary
             let cleanupFailure = invokeCleanup dependencies stagingDir
             cleanupCallCount.Add(1)
-            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged);
-              StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
-              Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)));
-              CleanupFailure = cleanupFailure;
-              CleanupInvocationCount = cleanupCallCount.Count; ReplacementPhaseInvocationCount = replacementCallCount.Count }
+
+            { Success = false
+              SnapshotPath = outputRoot
+              RecordsCount = recordsCount
+              AggregateSha256 = ""
+              PreviousSnapshotPreserved = restored
+              LiveSnapshotState =
+                (if restored then
+                     LiveSnapshotUnchanged
+                 else
+                     LiveSnapshotMayHaveChanged)
+              StagingState =
+                (if cleanupFailure.IsNone then
+                     StagingRemoved
+                 else
+                     StagingMayRemain)
+              Failure = Some(SnapshotReplacementFailed(sprintf "%s: %s" (ex.GetType().Name) (ex.Message)))
+              CleanupFailure = cleanupFailure
+              CleanupInvocationCount = cleanupCallCount.Count
+              ReplacementPhaseInvocationCount = replacementCallCount.Count }
 
 /// Publish a snapshot using the staged validation pipeline.
 /// This is the production entry point that uses staged round-trip validation
@@ -1194,7 +1728,13 @@ let publishStagedSnapshot
     (aggregate: CanonicalExecutionAggregate)
     (compatibilityProjection: CanonicalEvidence)
     : PublicationOutcome =
-    stageAndPublishSnapshotWithDependencies defaultCleanupDependencies outputRoot records aggregate compatibilityProjection None
+    stageAndPublishSnapshotWithDependencies
+        defaultCleanupDependencies
+        outputRoot
+        records
+        aggregate
+        compatibilityProjection
+        None
 
 /// Stage and publish a snapshot with full round-trip validation.
 ///
@@ -1209,4 +1749,10 @@ let stageAndPublishSnapshot
     (compatibilityProjection: CanonicalEvidence)
     (mutationFn: (string -> Result<unit, string>) option)
     : PublicationOutcome =
-    stageAndPublishSnapshotWithDependencies defaultCleanupDependencies outputRoot records aggregate compatibilityProjection mutationFn
+    stageAndPublishSnapshotWithDependencies
+        defaultCleanupDependencies
+        outputRoot
+        records
+        aggregate
+        compatibilityProjection
+        mutationFn

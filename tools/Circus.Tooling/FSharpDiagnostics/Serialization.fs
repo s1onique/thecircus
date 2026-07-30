@@ -30,19 +30,29 @@ let private NullToken = "<null>"
 let escapeJsonString (s: string) : string =
     let sb = StringBuilder(s.Length + 2)
     sb.Append '"' |> ignore
+
     for c in s do
-        if c = '\\' then sb.Append("\\\\") |> ignore
-        elif c = '"' then sb.Append("\\\"") |> ignore
-        elif c = '\n' then sb.Append("\\n") |> ignore
-        elif c = '\r' then sb.Append("\\r") |> ignore
-        elif c = '\t' then sb.Append("\\t") |> ignore
-        elif c = '\b' then sb.Append("\\b") |> ignore
-        elif c = '\x0c' then sb.Append("\\f") |> ignore
+        if c = '\\' then
+            sb.Append("\\\\") |> ignore
+        elif c = '"' then
+            sb.Append("\\\"") |> ignore
+        elif c = '\n' then
+            sb.Append("\\n") |> ignore
+        elif c = '\r' then
+            sb.Append("\\r") |> ignore
+        elif c = '\t' then
+            sb.Append("\\t") |> ignore
+        elif c = '\b' then
+            sb.Append("\\b") |> ignore
+        elif c = '\x0c' then
+            sb.Append("\\f") |> ignore
         elif int c < 0x20 then
             sb.AppendFormat(CultureInfo.InvariantCulture, "\\u{0:x4}", int c) |> ignore
         elif c = '\uFEFF' then
             sb.Append("\\ufeff") |> ignore
-        else sb.Append c |> ignore
+        else
+            sb.Append c |> ignore
+
     sb.Append '"' |> ignore
     sb.ToString()
 
@@ -70,8 +80,7 @@ let optInt64Str (v: int64 option) : string =
     | None -> "null"
     | Some n -> n.ToString(CultureInfo.InvariantCulture)
 
-let boolStr (v: bool) : string =
-    if v then "true" else "false"
+let boolStr (v: bool) : string = if v then "true" else "false"
 
 /// Write a string list as a JSON array.
 let strListJson (vs: string list) : string =
@@ -134,7 +143,15 @@ let renderCaptureManifest (m: CaptureManifest) : string =
     sb.Append ",\"capture_kind\":" |> ignore
     sb.Append(escapeJsonString m.CaptureKind) |> ignore
     sb.Append ",\"raw_artifacts\":" |> ignore
-    sb.Append(m.RawArtifacts |> List.map escapeJsonString |> String.concat "," |> fun s -> "[" + s + "]") |> ignore
+
+    sb.Append(
+        m.RawArtifacts
+        |> List.map escapeJsonString
+        |> String.concat ","
+        |> fun s -> "[" + s + "]"
+    )
+    |> ignore
+
     sb.Append ",\"command\":" |> ignore
     sb.Append(optStr m.Command) |> ignore
     sb.Append ",\"working_directory\":" |> ignore
@@ -146,7 +163,15 @@ let renderCaptureManifest (m: CaptureManifest) : string =
     sb.Append ",\"working_tree_state\":" |> ignore
     sb.Append(optStr m.WorkingTreeState) |> ignore
     sb.Append ",\"source_root_aliases\":" |> ignore
-    sb.Append(m.SourceRootAliases |> List.map renderAlias |> String.concat "," |> fun s -> "[" + s + "]") |> ignore
+
+    sb.Append(
+        m.SourceRootAliases
+        |> List.map renderAlias
+        |> String.concat ","
+        |> fun s -> "[" + s + "]"
+    )
+    |> ignore
+
     sb.Append ",\"dotnet_sdk_version\":" |> ignore
     sb.Append(optStr m.DotnetSdkVersion) |> ignore
     sb.Append ",\"msbuild_version\":" |> ignore
@@ -235,9 +260,11 @@ let renderOccurrence (o: DiagnosticOccurrence) : string =
     sb.Append ",\"event_timestamp\":" |> ignore
     sb.Append(optStr o.EventTimestamp) |> ignore
     sb.Append ",\"build_context\":" |> ignore
+
     match o.BuildContext with
     | Some b -> sb.Append(renderBuildContext b) |> ignore
     | None -> sb.Append "null" |> ignore
+
     sb.Append ",\"legacy_source_line_start\":" |> ignore
     sb.Append(optIntStr o.LegacySourceLineStart) |> ignore
     sb.Append ",\"legacy_source_line_end\":" |> ignore
@@ -257,55 +284,75 @@ let renderFingerprintTsv (fp: ExactFingerprint) : string =
     let cols =
         [ fp.Sha256
           fp.Severity
-          (match fp.Subcategory with | Some s -> s | None -> "")
-          (match fp.Code with | Some s -> s | None -> "")
-          (match fp.SourcePath with | Some s -> s | None -> "")
-          (match fp.ProjectPath with | Some s -> s | None -> "")
-          (match fp.StartLine with | Some n -> n.ToString(CultureInfo.InvariantCulture) | None -> "")
-          (match fp.StartColumn with | Some n -> n.ToString(CultureInfo.InvariantCulture) | None -> "")
-          (match fp.EndLine with | Some n -> n.ToString(CultureInfo.InvariantCulture) | None -> "")
-          (match fp.EndColumn with | Some n -> n.ToString(CultureInfo.InvariantCulture) | None -> "")
+          (match fp.Subcategory with
+           | Some s -> s
+           | None -> "")
+          (match fp.Code with
+           | Some s -> s
+           | None -> "")
+          (match fp.SourcePath with
+           | Some s -> s
+           | None -> "")
+          (match fp.ProjectPath with
+           | Some s -> s
+           | None -> "")
+          (match fp.StartLine with
+           | Some n -> n.ToString(CultureInfo.InvariantCulture)
+           | None -> "")
+          (match fp.StartColumn with
+           | Some n -> n.ToString(CultureInfo.InvariantCulture)
+           | None -> "")
+          (match fp.EndLine with
+           | Some n -> n.ToString(CultureInfo.InvariantCulture)
+           | None -> "")
+          (match fp.EndColumn with
+           | Some n -> n.ToString(CultureInfo.InvariantCulture)
+           | None -> "")
           fp.MessageNormalized
           fp.OccurrenceCount.ToString(CultureInfo.InvariantCulture) ]
+
     cols |> String.concat "\t"
 
-let fingerprintsHeader : string =
+let fingerprintsHeader: string =
     "sha256\tseverity\tsubcategory\tcode\tsource_path\tproject_path\tstart_line\tstart_column\tend_line\tend_column\tmessage_normalized\toccurrence_count"
 
 /// Migration map TSV columns: original_path, canonical_path, sha256, byte_length.
-let renderMigrationRow (originalPath: string)
-                       (canonicalPath: string)
-                       (sha256: string)
-                       (byteLength: int64) : string =
+let renderMigrationRow (originalPath: string) (canonicalPath: string) (sha256: string) (byteLength: int64) : string =
     [ originalPath
       canonicalPath
       sha256
       byteLength.ToString(CultureInfo.InvariantCulture) ]
     |> String.concat "\t"
 
-let migrationMapHeader : string =
+let migrationMapHeader: string =
     "original_path\tcanonical_path\tsha256\tbyte_length"
 
 /// Duplicate occurrences TSV. Columns:
 ///   fingerprint    capture_id    event_ordinal    message_raw
 ///   source_path    project_path    span_text
-let renderDuplicateRow (fp: string)
-                       (captureId: string)
-                       (eventOrdinal: int64)
-                       (messageRaw: string)
-                       (sourcePath: string option)
-                       (projectPath: string option)
-                       (spanText: string) : string =
+let renderDuplicateRow
+    (fp: string)
+    (captureId: string)
+    (eventOrdinal: int64)
+    (messageRaw: string)
+    (sourcePath: string option)
+    (projectPath: string option)
+    (spanText: string)
+    : string =
     [ fp
       captureId
       eventOrdinal.ToString(CultureInfo.InvariantCulture)
       messageRaw
-      (match sourcePath with | Some s -> s | None -> "")
-      (match projectPath with | Some s -> s | None -> "")
+      (match sourcePath with
+       | Some s -> s
+       | None -> "")
+      (match projectPath with
+       | Some s -> s
+       | None -> "")
       spanText ]
     |> String.concat "\t"
 
-let duplicatesHeader : string =
+let duplicatesHeader: string =
     "fingerprint\tcapture_id\tevent_ordinal\tmessage_raw\tsource_path\tproject_path\tspan_text"
 
 // =============================================================================
@@ -359,17 +406,16 @@ let renderCorpusSummary (s: CorpusSummary) : string =
 // File writers (UTF-8 without BOM, LF endings, exactly one terminal newline)
 // =============================================================================
 
-let private utf8NoBom : Encoding =
-    new UTF8Encoding(false)
+let private utf8NoBom: Encoding = new UTF8Encoding(false)
 
 /// Write `text` (which already uses LF line endings) to `path` with exactly
 /// one terminal LF.  Existing file is overwritten; intermediate directories
 /// are created.
 let writeLineOriented (path: string) (text: string) : unit =
     let dir = Path.GetDirectoryName path
+
     if not (System.String.IsNullOrEmpty dir) && not (Directory.Exists dir) then
         Directory.CreateDirectory dir |> ignore
-    let body =
-        if text.EndsWith "\n" then text
-        else text + "\n"
+
+    let body = if text.EndsWith "\n" then text else text + "\n"
     File.WriteAllText(path, body, utf8NoBom)

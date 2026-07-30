@@ -59,21 +59,20 @@ let issueToString (i: ValidationIssue) : string =
     | UnsupportedProviderName actual -> sprintf "unsupported provider_name: %s" actual
     | UnsupportedProviderVersion actual -> sprintf "unsupported provider_version: %s" actual
     | UnsupportedObjectFormat actual -> sprintf "unsupported object_format: %s" actual
-    | InvalidCommitOid (oid, fmt) -> sprintf "invalid commit_oid for %s: %s" fmt oid
-    | InvalidTreeOid (oid, fmt) -> sprintf "invalid tree_oid for %s: %s" fmt oid
-    | InvalidScopeOid (field, oid, fmt) -> sprintf "invalid %s for %s: %s" field fmt oid
+    | InvalidCommitOid(oid, fmt) -> sprintf "invalid commit_oid for %s: %s" fmt oid
+    | InvalidTreeOid(oid, fmt) -> sprintf "invalid tree_oid for %s: %s" fmt oid
+    | InvalidScopeOid(field, oid, fmt) -> sprintf "invalid %s for %s: %s" field fmt oid
     | EmptyScopeField field -> sprintf "empty canonical scope field: %s" field
     | UnsupportedCheckId id -> sprintf "unsupported check id: %s" id
-    | InvalidStatusToken (ctx, tok) -> sprintf "%s status token invalid: %s" ctx tok
-    | SemanticHashMismatch (expected, actual) ->
+    | InvalidStatusToken(ctx, tok) -> sprintf "%s status token invalid: %s" ctx tok
+    | SemanticHashMismatch(expected, actual) ->
         sprintf "semantic_sha256 mismatch: expected=%s actual=%s" expected actual
-    | OverallStatusMismatch (expected, actual) ->
-        sprintf "overall_status mismatch: expected=%s actual=%s"
-            (statusToken expected) (statusToken actual)
+    | OverallStatusMismatch(expected, actual) ->
+        sprintf "overall_status mismatch: expected=%s actual=%s" (statusToken expected) (statusToken actual)
     | EmptyCheckId -> "empty check id"
     | EmptyCommitOid -> "empty tested_commit_oid"
     | EmptyTreeOid -> "empty tested_tree_oid"
-    | NegativeDuration (id, d) -> sprintf "negative duration_ms for %s: %d" id d
+    | NegativeDuration(id, d) -> sprintf "negative duration_ms for %s: %d" id d
     | DuplicateCheckId id -> sprintf "duplicate check id: %s" id
 
 // -----------------------------------------------------------------------------
@@ -85,10 +84,9 @@ let issueToString (i: ValidationIssue) : string =
 // part of the schema but might appear in a tampered document.
 // -----------------------------------------------------------------------------
 
-type ValidationResult = {
-    Evidence: CanonicalEvidence
-    Issues: ValidationIssue list
-}
+type ValidationResult =
+    { Evidence: CanonicalEvidence
+      Issues: ValidationIssue list }
 
 let private validateSchemaVersion (e: CanonicalEvidence) (issues: ResizeArray<ValidationIssue>) =
     if e.SchemaVersion <> SchemaVersionValue then
@@ -110,11 +108,12 @@ let private validateOids (e: CanonicalEvidence) (issues: ResizeArray<ValidationI
     if String.IsNullOrWhiteSpace e.TestedCommitOid then
         issues.Add EmptyCommitOid
     elif not (isValidOid e.ObjectFormat e.TestedCommitOid) then
-        issues.Add(InvalidCommitOid (e.TestedCommitOid, e.ObjectFormat))
+        issues.Add(InvalidCommitOid(e.TestedCommitOid, e.ObjectFormat))
+
     if String.IsNullOrWhiteSpace e.TestedTreeOid then
         issues.Add EmptyTreeOid
     elif not (isValidOid e.ObjectFormat e.TestedTreeOid) then
-        issues.Add(InvalidTreeOid (e.TestedTreeOid, e.ObjectFormat))
+        issues.Add(InvalidTreeOid(e.TestedTreeOid, e.ObjectFormat))
 
 let private validateScopeBindingFields (e: CanonicalEvidence) (issues: ResizeArray<ValidationIssue>) =
     for field, value in
@@ -132,32 +131,37 @@ let private validateScopeBindingFields (e: CanonicalEvidence) (issues: ResizeArr
 
 let private validateChecks (e: CanonicalEvidence) (issues: ResizeArray<ValidationIssue>) =
     let seen = System.Collections.Generic.HashSet<string>()
+
     for c in e.Checks do
         if String.IsNullOrWhiteSpace c.Id then
             issues.Add EmptyCheckId
         elif not (isSupportedCheckId c.Id) then
             issues.Add(UnsupportedCheckId c.Id)
+
         if not (seen.Add c.Id) then
             issues.Add(DuplicateCheckId c.Id)
+
         if c.DurationMilliseconds < 0L then
-            issues.Add(NegativeDuration (c.Id, c.DurationMilliseconds))
+            issues.Add(NegativeDuration(c.Id, c.DurationMilliseconds))
 
 let private validateSemanticHash (e: CanonicalEvidence) (issues: ResizeArray<ValidationIssue>) =
     let recomputed = computeSemanticHash e
+
     if recomputed <> e.SemanticSha256 then
-        issues.Add(SemanticHashMismatch (recomputed, e.SemanticSha256))
+        issues.Add(SemanticHashMismatch(recomputed, e.SemanticSha256))
 
 let private validateOverallStatus (e: CanonicalEvidence) (issues: ResizeArray<ValidationIssue>) =
     let expected = computeOverallStatus e.Checks
+
     if expected <> e.OverallStatus then
-        issues.Add(OverallStatusMismatch (expected, e.OverallStatus))
+        issues.Add(OverallStatusMismatch(expected, e.OverallStatus))
 
 let private validateForbiddenIdentityFields (rawKeys: string list) (issues: ResizeArray<ValidationIssue>) =
     match firstForbiddenIdentityField rawKeys with
     | Some k ->
         // Reuse the existing issue vocabulary so the CLI surface
         // is uniform. The 'context' is the field name itself.
-        issues.Add(UnsupportedProviderName (sprintf "forbidden_identity_field:%s" k))
+        issues.Add(UnsupportedProviderName(sprintf "forbidden_identity_field:%s" k))
     | None -> ()
 
 // -----------------------------------------------------------------------------
@@ -176,13 +180,11 @@ let validate (rawJsonKeys: string list) (e: CanonicalEvidence) : ValidationResul
     validateSemanticHash e issues
     validateOverallStatus e issues
     validateForbiddenIdentityFields rawJsonKeys issues
-    {
-        Evidence = e
-        Issues = issues |> Seq.toList
-    }
 
-let isValid (r: ValidationResult) : bool =
-    List.isEmpty r.Issues
+    { Evidence = e
+      Issues = issues |> Seq.toList }
+
+let isValid (r: ValidationResult) : bool = List.isEmpty r.Issues
 
 // -----------------------------------------------------------------------------
 // Compatibility projection comparison (for staged validation)
@@ -223,49 +225,98 @@ type CompatibilityDifference =
     | DuplicateActualCheckId of checkId: string * count: int
 
 /// Compare two evidence check results field by field
-let compareCompatibilityCheck (expected: EvidenceCheckResult) (actual: EvidenceCheckResult) : CompatibilityCheckDifference list =
+let compareCompatibilityCheck
+    (expected: EvidenceCheckResult)
+    (actual: EvidenceCheckResult)
+    : CompatibilityCheckDifference list =
     let diffs = ResizeArray()
-    if expected.Id <> actual.Id then diffs.Add(CompatibilityCheckDifference.Id(expected.Id, actual.Id))
-    if expected.CommandArgv <> actual.CommandArgv then diffs.Add(CompatibilityCheckDifference.CommandArgv(expected.CommandArgv, actual.CommandArgv))
-    if expected.WorkingDirectory <> actual.WorkingDirectory then diffs.Add(CompatibilityCheckDifference.WorkingDirectory(expected.WorkingDirectory, actual.WorkingDirectory))
-    if expected.DurationMilliseconds <> actual.DurationMilliseconds then diffs.Add(CompatibilityCheckDifference.DurationMilliseconds(expected.DurationMilliseconds, actual.DurationMilliseconds))
-    if expected.ExitCode <> actual.ExitCode then diffs.Add(CompatibilityCheckDifference.ExitCode(expected.ExitCode, actual.ExitCode))
-    if expected.Status <> actual.Status then diffs.Add(CompatibilityCheckDifference.Status(expected.Status, actual.Status))
-    if expected.StdoutSha256 <> actual.StdoutSha256 then diffs.Add(CompatibilityCheckDifference.StdoutSha256(expected.StdoutSha256, actual.StdoutSha256))
-    if expected.StderrSha256 <> actual.StderrSha256 then diffs.Add(CompatibilityCheckDifference.StderrSha256(expected.StderrSha256, actual.StderrSha256))
-    if expected.FailureKind <> actual.FailureKind then diffs.Add(CompatibilityCheckDifference.FailureKind(expected.FailureKind, actual.FailureKind))
+
+    if expected.Id <> actual.Id then
+        diffs.Add(CompatibilityCheckDifference.Id(expected.Id, actual.Id))
+
+    if expected.CommandArgv <> actual.CommandArgv then
+        diffs.Add(CompatibilityCheckDifference.CommandArgv(expected.CommandArgv, actual.CommandArgv))
+
+    if expected.WorkingDirectory <> actual.WorkingDirectory then
+        diffs.Add(CompatibilityCheckDifference.WorkingDirectory(expected.WorkingDirectory, actual.WorkingDirectory))
+
+    if expected.DurationMilliseconds <> actual.DurationMilliseconds then
+        diffs.Add(
+            CompatibilityCheckDifference.DurationMilliseconds(
+                expected.DurationMilliseconds,
+                actual.DurationMilliseconds
+            )
+        )
+
+    if expected.ExitCode <> actual.ExitCode then
+        diffs.Add(CompatibilityCheckDifference.ExitCode(expected.ExitCode, actual.ExitCode))
+
+    if expected.Status <> actual.Status then
+        diffs.Add(CompatibilityCheckDifference.Status(expected.Status, actual.Status))
+
+    if expected.StdoutSha256 <> actual.StdoutSha256 then
+        diffs.Add(CompatibilityCheckDifference.StdoutSha256(expected.StdoutSha256, actual.StdoutSha256))
+
+    if expected.StderrSha256 <> actual.StderrSha256 then
+        diffs.Add(CompatibilityCheckDifference.StderrSha256(expected.StderrSha256, actual.StderrSha256))
+
+    if expected.FailureKind <> actual.FailureKind then
+        diffs.Add(CompatibilityCheckDifference.FailureKind(expected.FailureKind, actual.FailureKind))
+
     List.ofSeq diffs
 
 /// Compare two complete compatibility documents field by field
 /// Returns a list of differences for validation reporting
-let compareCompatibilityProjection (expected: CanonicalEvidence) (actual: CanonicalEvidence) : CompatibilityDifference list =
+let compareCompatibilityProjection
+    (expected: CanonicalEvidence)
+    (actual: CanonicalEvidence)
+    : CompatibilityDifference list =
     let diffs = ResizeArray()
 
     // Top-level field comparisons
     if expected.SchemaVersion <> actual.SchemaVersion then
         diffs.Add(CompatibilityDifference.SchemaVersion(expected.SchemaVersion, actual.SchemaVersion))
+
     if expected.ProviderName <> actual.ProviderName then
         diffs.Add(CompatibilityDifference.ProviderName(expected.ProviderName, actual.ProviderName))
+
     if expected.ProviderVersion <> actual.ProviderVersion then
         diffs.Add(CompatibilityDifference.ProviderVersion(expected.ProviderVersion, actual.ProviderVersion))
+
     if expected.TestedCommitOid <> actual.TestedCommitOid then
         diffs.Add(CompatibilityDifference.TestedCommitOid(expected.TestedCommitOid, actual.TestedCommitOid))
+
     if expected.TestedTreeOid <> actual.TestedTreeOid then
         diffs.Add(CompatibilityDifference.TestedTreeOid(expected.TestedTreeOid, actual.TestedTreeOid))
+
     if expected.ObjectFormat <> actual.ObjectFormat then
         diffs.Add(CompatibilityDifference.ObjectFormat(expected.ObjectFormat, actual.ObjectFormat))
+
     if expected.ActiveScopeActId <> actual.ActiveScopeActId then
         diffs.Add(CompatibilityDifference.ActiveScopeActId(expected.ActiveScopeActId, actual.ActiveScopeActId))
+
     if expected.ActiveScopePointerBlobOid <> actual.ActiveScopePointerBlobOid then
-        diffs.Add(CompatibilityDifference.ActiveScopePointerBlobOid(expected.ActiveScopePointerBlobOid, actual.ActiveScopePointerBlobOid))
+        diffs.Add(
+            CompatibilityDifference.ActiveScopePointerBlobOid(
+                expected.ActiveScopePointerBlobOid,
+                actual.ActiveScopePointerBlobOid
+            )
+        )
+
     if expected.ScopeDeclarationPath <> actual.ScopeDeclarationPath then
-        diffs.Add(CompatibilityDifference.ScopeDeclarationPath(expected.ScopeDeclarationPath, actual.ScopeDeclarationPath))
+        diffs.Add(
+            CompatibilityDifference.ScopeDeclarationPath(expected.ScopeDeclarationPath, actual.ScopeDeclarationPath)
+        )
+
     if expected.DeclarationBlobOid <> actual.DeclarationBlobOid then
         diffs.Add(CompatibilityDifference.DeclarationBlobOid(expected.DeclarationBlobOid, actual.DeclarationBlobOid))
+
     if expected.BaselineCommitOid <> actual.BaselineCommitOid then
         diffs.Add(CompatibilityDifference.BaselineCommitOid(expected.BaselineCommitOid, actual.BaselineCommitOid))
+
     if expected.OverallStatus <> actual.OverallStatus then
         diffs.Add(CompatibilityDifference.OverallStatus(expected.OverallStatus, actual.OverallStatus))
+
     if expected.SemanticSha256 <> actual.SemanticSha256 then
         diffs.Add(CompatibilityDifference.SemanticSha256(expected.SemanticSha256, actual.SemanticSha256))
 
@@ -275,12 +326,14 @@ let compareCompatibilityProjection (expected: CanonicalEvidence) (actual: Canoni
 
     // Detect duplicate IDs in expected (before Set/Map construction)
     let expectedIdGroups = expected.Checks |> List.groupBy (fun c -> c.Id)
+
     for checkId, group in expectedIdGroups do
         if group.Length > 1 then
             diffs.Add(CompatibilityDifference.DuplicateExpectedCheckId(checkId, group.Length))
 
     // Detect duplicate IDs in actual (before Set/Map construction)
     let actualIdGroups = actual.Checks |> List.groupBy (fun c -> c.Id)
+
     for checkId, group in actualIdGroups do
         if group.Length > 1 then
             diffs.Add(CompatibilityDifference.DuplicateActualCheckId(checkId, group.Length))
@@ -291,11 +344,13 @@ let compareCompatibilityProjection (expected: CanonicalEvidence) (actual: Canoni
 
     // Find missing checks (in expected but not in actual) - always run
     let missingChecks = expectedIds - actualIds
+
     for missingId in missingChecks do
         diffs.Add(CompatibilityDifference.MissingCheck(missingId))
 
     // Find unknown checks (in actual but not in expected) - always run
     let unknownChecks = actualIds - expectedIds
+
     for unknownId in unknownChecks do
         diffs.Add(CompatibilityDifference.UnknownCheck(unknownId))
 
@@ -311,6 +366,7 @@ let compareCompatibilityProjection (expected: CanonicalEvidence) (actual: Canoni
             | None -> ()
             | Some expectedCheck ->
                 let checkDiffs = compareCompatibilityCheck expectedCheck actualCheck
+
                 for diff in checkDiffs do
                     diffs.Add(CompatibilityDifference.CheckDifference(expectedId, diff))
 
@@ -343,43 +399,63 @@ type AggregateDifference =
 
 /// Compare two aggregate documents field by field
 /// Returns a list of differences for validation reporting
-let compareAggregate (expected: EvidenceRecords.CanonicalExecutionAggregate) (actual: EvidenceRecords.CanonicalExecutionAggregate) : AggregateDifference list =
+let compareAggregate
+    (expected: EvidenceRecords.CanonicalExecutionAggregate)
+    (actual: EvidenceRecords.CanonicalExecutionAggregate)
+    : AggregateDifference list =
     let diffs = ResizeArray()
 
     if expected.SchemaVersion <> actual.SchemaVersion then
         diffs.Add(AggregateDifference.SchemaVersion(expected.SchemaVersion, actual.SchemaVersion))
+
     if expected.SubjectCommitOid <> actual.SubjectCommitOid then
         diffs.Add(AggregateDifference.SubjectCommitOid(expected.SubjectCommitOid, actual.SubjectCommitOid))
+
     if expected.SubjectTreeOid <> actual.SubjectTreeOid then
         diffs.Add(AggregateDifference.SubjectTreeOid(expected.SubjectTreeOid, actual.SubjectTreeOid))
+
     if expected.RecordsTotal <> actual.RecordsTotal then
         diffs.Add(AggregateDifference.RecordsTotal(expected.RecordsTotal, actual.RecordsTotal))
+
     if expected.RecordsPassed <> actual.RecordsPassed then
         diffs.Add(AggregateDifference.RecordsPassed(expected.RecordsPassed, actual.RecordsPassed))
+
     if expected.RecordsFailed <> actual.RecordsFailed then
         diffs.Add(AggregateDifference.RecordsFailed(expected.RecordsFailed, actual.RecordsFailed))
+
     if expected.RecordsUnavailable <> actual.RecordsUnavailable then
         diffs.Add(AggregateDifference.RecordsUnavailable(expected.RecordsUnavailable, actual.RecordsUnavailable))
+
     if expected.TestsTotal <> actual.TestsTotal then
         diffs.Add(AggregateDifference.TestsTotal(expected.TestsTotal, actual.TestsTotal))
+
     if expected.TestsPassed <> actual.TestsPassed then
         diffs.Add(AggregateDifference.TestsPassed(expected.TestsPassed, actual.TestsPassed))
+
     if expected.TestsIgnored <> actual.TestsIgnored then
         diffs.Add(AggregateDifference.TestsIgnored(expected.TestsIgnored, actual.TestsIgnored))
+
     if expected.TestsFailed <> actual.TestsFailed then
         diffs.Add(AggregateDifference.TestsFailed(expected.TestsFailed, actual.TestsFailed))
+
     if expected.TestsErrored <> actual.TestsErrored then
         diffs.Add(AggregateDifference.TestsErrored(expected.TestsErrored, actual.TestsErrored))
+
     if expected.RequiredChecksTotal <> actual.RequiredChecksTotal then
         diffs.Add(AggregateDifference.RequiredChecksTotal(expected.RequiredChecksTotal, actual.RequiredChecksTotal))
+
     if expected.RequiredChecksPassed <> actual.RequiredChecksPassed then
         diffs.Add(AggregateDifference.RequiredChecksPassed(expected.RequiredChecksPassed, actual.RequiredChecksPassed))
+
     if expected.RequiredChecksFailed <> actual.RequiredChecksFailed then
         diffs.Add(AggregateDifference.RequiredChecksFailed(expected.RequiredChecksFailed, actual.RequiredChecksFailed))
+
     if expected.RecordIds <> actual.RecordIds then
         diffs.Add(AggregateDifference.RecordIds(expected.RecordIds, actual.RecordIds))
+
     if expected.OverallStatus <> actual.OverallStatus then
         diffs.Add(AggregateDifference.OverallStatus(expected.OverallStatus, actual.OverallStatus))
+
     if expected.SemanticSha256 <> actual.SemanticSha256 then
         diffs.Add(AggregateDifference.SemanticSha256(expected.SemanticSha256, actual.SemanticSha256))
 
@@ -388,54 +464,57 @@ let compareAggregate (expected: EvidenceRecords.CanonicalExecutionAggregate) (ac
 /// Render an AggregateDifference to a human-readable string.
 let aggregateDifferenceToString (d: AggregateDifference) : string =
     match d with
-    | AggregateDifference.SchemaVersion (expected, actual) ->
+    | AggregateDifference.SchemaVersion(expected, actual) ->
         sprintf "schema_version: expected=%d actual=%d" expected actual
-    | AggregateDifference.SubjectCommitOid (expected, actual) ->
+    | AggregateDifference.SubjectCommitOid(expected, actual) ->
         sprintf "subject_commit_oid: expected=%s actual=%s" expected actual
-    | AggregateDifference.SubjectTreeOid (expected, actual) ->
+    | AggregateDifference.SubjectTreeOid(expected, actual) ->
         sprintf "subject_tree_oid: expected=%s actual=%s" expected actual
-    | AggregateDifference.RecordsTotal (expected, actual) ->
+    | AggregateDifference.RecordsTotal(expected, actual) ->
         sprintf "records_total: expected=%d actual=%d" expected actual
-    | AggregateDifference.RecordsPassed (expected, actual) ->
+    | AggregateDifference.RecordsPassed(expected, actual) ->
         sprintf "records_passed: expected=%d actual=%d" expected actual
-    | AggregateDifference.RecordsFailed (expected, actual) ->
+    | AggregateDifference.RecordsFailed(expected, actual) ->
         sprintf "records_failed: expected=%d actual=%d" expected actual
-    | AggregateDifference.RecordsUnavailable (expected, actual) ->
+    | AggregateDifference.RecordsUnavailable(expected, actual) ->
         sprintf "records_unavailable: expected=%d actual=%d" expected actual
-    | AggregateDifference.TestsTotal (expected, actual) ->
-        sprintf "tests_total: expected=%d actual=%d" expected actual
-    | AggregateDifference.TestsPassed (expected, actual) ->
-        sprintf "tests_passed: expected=%d actual=%d" expected actual
-    | AggregateDifference.TestsIgnored (expected, actual) ->
+    | AggregateDifference.TestsTotal(expected, actual) -> sprintf "tests_total: expected=%d actual=%d" expected actual
+    | AggregateDifference.TestsPassed(expected, actual) -> sprintf "tests_passed: expected=%d actual=%d" expected actual
+    | AggregateDifference.TestsIgnored(expected, actual) ->
         sprintf "tests_ignored: expected=%d actual=%d" expected actual
-    | AggregateDifference.TestsFailed (expected, actual) ->
-        sprintf "tests_failed: expected=%d actual=%d" expected actual
-    | AggregateDifference.TestsErrored (expected, actual) ->
+    | AggregateDifference.TestsFailed(expected, actual) -> sprintf "tests_failed: expected=%d actual=%d" expected actual
+    | AggregateDifference.TestsErrored(expected, actual) ->
         sprintf "tests_errored: expected=%d actual=%d" expected actual
-    | AggregateDifference.RequiredChecksTotal (expected, actual) ->
+    | AggregateDifference.RequiredChecksTotal(expected, actual) ->
         sprintf "required_checks_total: expected=%d actual=%d" expected actual
-    | AggregateDifference.RequiredChecksPassed (expected, actual) ->
+    | AggregateDifference.RequiredChecksPassed(expected, actual) ->
         sprintf "required_checks_passed: expected=%d actual=%d" expected actual
-    | AggregateDifference.RequiredChecksFailed (expected, actual) ->
+    | AggregateDifference.RequiredChecksFailed(expected, actual) ->
         sprintf "required_checks_failed: expected=%d actual=%d" expected actual
-    | AggregateDifference.RecordIds (expected, actual) ->
+    | AggregateDifference.RecordIds(expected, actual) ->
         sprintf "record_ids: expected=%s actual=%s" (String.concat "," expected) (String.concat "," actual)
-    | AggregateDifference.OverallStatus (expected, actual) ->
-        sprintf "overall_status: expected=%s actual=%s"
-            (EvidenceRecords.recordStatusToken expected) (EvidenceRecords.recordStatusToken actual)
-    | AggregateDifference.SemanticSha256 (expected, actual) ->
+    | AggregateDifference.OverallStatus(expected, actual) ->
+        sprintf
+            "overall_status: expected=%s actual=%s"
+            (EvidenceRecords.recordStatusToken expected)
+            (EvidenceRecords.recordStatusToken actual)
+    | AggregateDifference.SemanticSha256(expected, actual) ->
         sprintf "semantic_sha256: expected=%s actual=%s" expected actual
 
 /// Enumerate the document's top-level JSON property names. This
 /// runs alongside the deserializer so the field allow-list and the
 /// forbidden set can both be enforced.
 let collectRawJsonKeys (raw: string) : string list =
-    let mutable keys : string list = []
+    let mutable keys: string list = []
+
     try
         use doc = JsonDocument.Parse(raw)
         let root = doc.RootElement
+
         if root.ValueKind = JsonValueKind.Object then
             for p in root.EnumerateObject() do
                 keys <- p.Name :: keys
-    with _ -> ()
+    with _ ->
+        ()
+
     keys

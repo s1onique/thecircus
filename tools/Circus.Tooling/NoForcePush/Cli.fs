@@ -28,7 +28,10 @@ let helpText () : string =
 /// Parse the no-force-push subcommand.
 let parse (argv: string list) : Result<Command, string> =
     match argv with
-    | [] | [ "help" ] | [ "-h" ] | [ "--help" ] -> Ok HelpCmd
+    | []
+    | [ "help" ]
+    | [ "-h" ]
+    | [ "--help" ] -> Ok HelpCmd
     | "verify" :: rest ->
         match rest with
         | [] -> Ok(VerifyCmd "human")
@@ -38,7 +41,12 @@ let parse (argv: string list) : Result<Command, string> =
         | _ -> Error "unexpected arguments after 'verify'"
 
     | "pre-push" :: rest ->
-        let rec parseArgs (args: string list) (repo: string option) (remoteName: string option) (remoteUrl: string option) =
+        let rec parseArgs
+            (args: string list)
+            (repo: string option)
+            (remoteName: string option)
+            (remoteUrl: string option)
+            =
             match args with
             | "--repo" :: path :: tail ->
                 match repo with
@@ -92,6 +100,7 @@ let resolveRepoRoot () : Result<string, string> =
         // Try parent directories
         let rec findRoot (path: string) : string option =
             let gitDir = Path.Combine(path, ".git")
+
             if Directory.Exists gitDir then Some path
             elif path = "/" then None
             else findRoot (Directory.GetParent(path).FullName)
@@ -105,10 +114,8 @@ let runVerify (repoRoot: string) (format: string) : int =
     let result = StaticPolicy.verify repoRoot
 
     match format.ToLowerInvariant() with
-    | "json" ->
-        stdout.WriteLine(Rendering.renderStaticPolicyJson result)
-    | _ ->
-        stdout.WriteLine(Rendering.renderStaticPolicyHuman result)
+    | "json" -> stdout.WriteLine(Rendering.renderStaticPolicyJson result)
+    | _ -> stdout.WriteLine(Rendering.renderStaticPolicyHuman result)
 
     if List.isEmpty result.Diagnostics && List.isEmpty result.OperationalErrors then
         ExitCode.pass
@@ -133,23 +140,21 @@ let run (argv: string list) : int =
     | Ok cmd ->
         match cmd with
         | HelpCmd ->
-            stdout.WriteLine(helpText())
+            stdout.WriteLine(helpText ())
             ExitCode.pass
 
         | VerifyCmd format ->
-            match resolveRepoRoot() with
+            match resolveRepoRoot () with
             | Ok root -> runVerify root format
             | Error msg ->
                 stderr.WriteLine(sprintf "Error: %s" msg)
                 ExitCode.operationalError
 
-        | PrePushCmd(repo, remoteName, remoteUrl) ->
-            runPrePush repo remoteName remoteUrl
+        | PrePushCmd(repo, remoteName, remoteUrl) -> runPrePush repo remoteName remoteUrl
 
-        | GitHubRulesCmd(repository, branch) ->
-            runGitHubRules repository branch
+        | GitHubRulesCmd(repository, branch) -> runGitHubRules repository branch
 
     | Error msg ->
         stderr.WriteLine(sprintf "Error: %s" msg)
-        stderr.WriteLine(helpText())
+        stderr.WriteLine(helpText ())
         ExitCode.operationalError

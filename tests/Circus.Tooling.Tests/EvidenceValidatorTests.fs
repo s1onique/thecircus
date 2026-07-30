@@ -15,11 +15,20 @@ let private evidencePath = "evidence.json"
 let private basePayload subject tree generatedAfter payloadHash extraProperties =
     "{"
     + "\"schema_version\":1,"
-    + "\"tested_subject_commit_oid\":" + JsonSerializer.Serialize subject + ","
-    + "\"tested_subject_tree_oid\":" + JsonSerializer.Serialize tree + ","
-    + "\"evidence_generated_after_subject\":" + (if generatedAfter then "true" else "false") + ","
-    + "\"evidence_payload_sha256\":" + JsonSerializer.Serialize payloadHash + ","
-    + "\"evidence_payload_sha256_input_placeholder\":" + JsonSerializer.Serialize Sha256Placeholder
+    + "\"tested_subject_commit_oid\":"
+    + JsonSerializer.Serialize subject
+    + ","
+    + "\"tested_subject_tree_oid\":"
+    + JsonSerializer.Serialize tree
+    + ","
+    + "\"evidence_generated_after_subject\":"
+    + (if generatedAfter then "true" else "false")
+    + ","
+    + "\"evidence_payload_sha256\":"
+    + JsonSerializer.Serialize payloadHash
+    + ","
+    + "\"evidence_payload_sha256_input_placeholder\":"
+    + JsonSerializer.Serialize Sha256Placeholder
     + extraProperties
     + "}\n"
 
@@ -37,12 +46,11 @@ let private withComputedHash subject tree generatedAfter extraProperties =
         "\"evidence_payload_sha256\":\"" + computed + "\""
     )
 
-type private EvidenceFixture = {
-    Repository: TempGitRepository
-    Subject: string
-    SubjectTree: string
-    Evidence: string
-}
+type private EvidenceFixture =
+    { Repository: TempGitRepository
+      Subject: string
+      SubjectTree: string
+      Evidence: string }
 
 let private createSimpleFixture payloadBuilder =
     let repository = new TempGitRepository("evidence-validator")
@@ -67,11 +75,9 @@ let private withSimpleFixture payloadBuilder action =
     finally
         (fixture.Repository :> IDisposable).Dispose()
 
-let private validPayload subject tree =
-    withComputedHash subject tree true ""
+let private validPayload subject tree = withComputedHash subject tree true ""
 
-let private expectFailure outcome message =
-    Expect.isFalse (isPass outcome) message
+let private expectFailure outcome message = Expect.isFalse (isPass outcome) message
 
 let private smokeTranscript tests passed failed errored exitCode =
     let names =
@@ -123,12 +129,23 @@ let private createSmokeFixture scanTests =
         ",\"direct\":{\"hermetic\":{"
         + "\"expecto_summary\":{\"tests\":5,\"passed\":5,\"failed\":0,\"errored\":0},"
         + "\"exit_code\":0,"
-        + "\"transcript_path\":" + JsonSerializer.Serialize transcriptPath + ","
-        + "\"transcript_blob_oid\":" + JsonSerializer.Serialize transcriptBlob + ","
-        + "\"output_sha256\":" + JsonSerializer.Serialize transcriptHash + ","
-        + "\"scan_path\":" + JsonSerializer.Serialize scanPath + ","
-        + "\"scan_blob_oid\":" + JsonSerializer.Serialize scanBlob + ","
-        + "\"scan_sha256\":" + JsonSerializer.Serialize scanHash
+        + "\"transcript_path\":"
+        + JsonSerializer.Serialize transcriptPath
+        + ","
+        + "\"transcript_blob_oid\":"
+        + JsonSerializer.Serialize transcriptBlob
+        + ","
+        + "\"output_sha256\":"
+        + JsonSerializer.Serialize transcriptHash
+        + ","
+        + "\"scan_path\":"
+        + JsonSerializer.Serialize scanPath
+        + ","
+        + "\"scan_blob_oid\":"
+        + JsonSerializer.Serialize scanBlob
+        + ","
+        + "\"scan_sha256\":"
+        + JsonSerializer.Serialize scanHash
         + "}}"
 
     repository.Write(evidencePath, withComputedHash subject tree true smoke)
@@ -147,8 +164,13 @@ let tests =
               let fixture = createSmokeFixture 5
 
               try
-                  let outcome = validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
-                  Expect.isTrue (isPass outcome) (sprintf "valid outcome failed: %A %A" outcome.Issues outcome.OperationalFailure)
+                  let outcome =
+                      validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
+
+                  Expect.isTrue
+                      (isPass outcome)
+                      (sprintf "valid outcome failed: %A %A" outcome.Issues outcome.OperationalFailure)
+
                   Expect.isTrue outcome.Proof.EvidenceCommitExists "E exists"
                   Expect.isTrue outcome.Proof.EvidencePathExists "E:path exists"
                   Expect.isTrue outcome.Proof.WorkingBytesEqualEvidenceBlob "working bytes equal E blob"
@@ -163,48 +185,49 @@ let tests =
           }
 
           test "subject equal to evidence commit fails" {
-              withSimpleFixture
-                  validPayload
-                  (fun fixture ->
-                      let outcome = validate fixture.Repository.Path evidencePath fixture.Evidence fixture.Evidence
-                      expectFailure outcome "S=E rejected"
-                      Expect.isFalse outcome.Proof.SubjectDiffersFromEvidence "strict inequality proven false")
+              withSimpleFixture validPayload (fun fixture ->
+                  let outcome =
+                      validate fixture.Repository.Path evidencePath fixture.Evidence fixture.Evidence
+
+                  expectFailure outcome "S=E rejected"
+                  Expect.isFalse outcome.Proof.SubjectDiffersFromEvidence "strict inequality proven false")
           }
 
           test "missing evidence commit is operational failure" {
-              withSimpleFixture
-                  validPayload
-                  (fun fixture ->
-                      let missing = String.replicate 40 "0"
-                      let outcome = validate fixture.Repository.Path evidencePath fixture.Subject missing
-                      expectFailure outcome "missing E rejected"
-                      Expect.isSome outcome.OperationalFailure "Git resolution failure is operational")
+              withSimpleFixture validPayload (fun fixture ->
+                  let missing = String.replicate 40 "0"
+                  let outcome = validate fixture.Repository.Path evidencePath fixture.Subject missing
+                  expectFailure outcome "missing E rejected"
+                  Expect.isSome outcome.OperationalFailure "Git resolution failure is operational")
           }
 
           test "missing path in evidence commit fails" {
-              withSimpleFixture
-                  validPayload
-                  (fun fixture ->
-                      let outcome = validate fixture.Repository.Path "missing.json" fixture.Subject fixture.Evidence
-                      expectFailure outcome "missing E:path rejected"
-                      Expect.isSome outcome.OperationalFailure "missing path cannot PASS")
+              withSimpleFixture validPayload (fun fixture ->
+                  let outcome =
+                      validate fixture.Repository.Path "missing.json" fixture.Subject fixture.Evidence
+
+                  expectFailure outcome "missing E:path rejected"
+                  Expect.isSome outcome.OperationalFailure "missing path cannot PASS")
           }
 
           test "working bytes differing from committed blob fail" {
-              withSimpleFixture
-                  validPayload
-                  (fun fixture ->
-                      fixture.Repository.Write(evidencePath, "{}\n")
-                      let outcome = validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
-                      expectFailure outcome "working mutation rejected"
-                      Expect.isFalse outcome.Proof.WorkingBytesEqualEvidenceBlob "byte mismatch proven")
+              withSimpleFixture validPayload (fun fixture ->
+                  fixture.Repository.Write(evidencePath, "{}\n")
+
+                  let outcome =
+                      validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
+
+                  expectFailure outcome "working mutation rejected"
+                  Expect.isFalse outcome.Proof.WorkingBytesEqualEvidenceBlob "byte mismatch proven")
           }
 
           test "wrong subject tree fails" {
               withSimpleFixture
                   (fun subject _tree -> withComputedHash subject (String.replicate 40 "a") true "")
                   (fun fixture ->
-                      let outcome = validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
+                      let outcome =
+                          validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
+
                       expectFailure outcome "wrong subject tree rejected"
                       Expect.isFalse outcome.Proof.SubjectTreeMatches "tree mismatch proven")
           }
@@ -230,21 +253,26 @@ let tests =
               withSimpleFixture
                   (fun subject tree -> basePayload subject tree true (String.replicate 64 "a") ",\"mutated\":true")
                   (fun fixture ->
-                      let outcome = validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
+                      let outcome =
+                          validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
+
                       expectFailure outcome "payload hash mutation rejected"
                       Expect.isFalse outcome.Proof.PayloadHashMatches "payload mutation detected")
           }
 
           test "malformed payload hash fails" {
-              withSimpleFixture
-                  (fun subject tree -> basePayload subject tree true "not-a-hash" "")
-                  (fun fixture ->
-                      let outcome = validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
-                      expectFailure outcome "malformed hash rejected"
+              withSimpleFixture (fun subject tree -> basePayload subject tree true "not-a-hash" "") (fun fixture ->
+                  let outcome =
+                      validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
 
-                      Expect.isTrue
-                          (outcome.Issues |> List.exists (function | InvalidSha256 _ -> true | _ -> false))
-                          "malformed hash issue surfaced")
+                  expectFailure outcome "malformed hash rejected"
+
+                  Expect.isTrue
+                      (outcome.Issues
+                       |> List.exists (function
+                           | InvalidSha256 _ -> true
+                           | _ -> false))
+                      "malformed hash issue surfaced")
           }
 
           test "bounded Git operational failure can never yield PASS" {
@@ -268,7 +296,9 @@ let tests =
               let fixture = createSmokeFixture 4
 
               try
-                  let outcome = validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
+                  let outcome =
+                      validate fixture.Repository.Path evidencePath fixture.Subject fixture.Evidence
+
                   expectFailure outcome "transcript/scan mismatch rejected"
                   Expect.equal outcome.Proof.TranscriptSummaryMatches (Some true) "payload still matches transcript"
                   Expect.equal outcome.Proof.TranscriptAndScanMatch (Some false) "scan mismatch detected"

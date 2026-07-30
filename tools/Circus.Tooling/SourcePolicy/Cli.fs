@@ -57,7 +57,10 @@ let private parseFormat (args: string list) : Result<string, string> =
 /// Top-level parser that also handles the no-force-push subcommand.
 let parseTopLevel (argv: string list) : Result<Command, string> =
     match argv with
-    | [] | [ "help" ] | [ "-h" ] | [ "--help" ] -> Ok HelpCmd
+    | []
+    | [ "help" ]
+    | [ "-h" ]
+    | [ "--help" ] -> Ok HelpCmd
     | [ "version" ] -> Ok VersionCmd
     | "source-policy" :: "verify" :: rest ->
         match parseFormat rest with
@@ -75,30 +78,31 @@ let parseTopLevel (argv: string list) : Result<Command, string> =
     | "fsharp-diagnostics" :: rest -> Ok(FSharpDiagnosticsCmd rest)
     | "evidence-validate" :: rest -> Ok(EvidenceValidateCmd rest)
     | "protected-scope" :: rest -> Ok(ProtectedScopeCmd rest)
-    | _ -> Error "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|canonical-evidence|no-force-push|fsharp-diagnostics|evidence-validate|protected-scope|help|version}"
+    | _ ->
+        Error
+            "usage: circus-tooling {source-policy verify|container-policy verify|gate-summary regenerate|gate-summary verify|gate run|canonical-evidence|no-force-push|fsharp-diagnostics|evidence-validate|protected-scope|help|version}"
 
 /// Legacy parser for backward compatibility (delegates to top-level).
-let parse (argv: string list) : Result<Command, string> =
-    parseTopLevel argv
+let parse (argv: string list) : Result<Command, string> = parseTopLevel argv
 
 let resolveRepoRoot () : Result<string, string> =
     match Inventory.discoverRoot Environment.CurrentDirectory with
     | Inventory.Root r -> Ok r
-    | Inventory.NotARepository ->
-        Error(sprintf "not in a Git repository (cwd=%s)" Environment.CurrentDirectory)
+    | Inventory.NotARepository -> Error(sprintf "not in a Git repository (cwd=%s)" Environment.CurrentDirectory)
 
 let runSourcePolicyVerify (repoRoot: string) : int =
     let cfg = defaultConfig repoRoot
-    let outcome : VerificationOutcome = Verification.verify cfg
-    stdout.WriteLine (HumanReport.renderVerify outcome)
-    if List.isEmpty outcome.Findings then ExitCode.pass
-    else ExitCode.policyFailure
+    let outcome: VerificationOutcome = Verification.verify cfg
+    stdout.WriteLine(HumanReport.renderVerify outcome)
 
-let runContainerPolicy (repoRoot: string) : int =
-    ContainerPolicy.runVerify repoRoot
+    if List.isEmpty outcome.Findings then
+        ExitCode.pass
+    else
+        ExitCode.policyFailure
 
-let runGateSummaryRegenerate (repoRoot: string) : int =
-    GateSummary.runRegenerate repoRoot
+let runContainerPolicy (repoRoot: string) : int = ContainerPolicy.runVerify repoRoot
+
+let runGateSummaryRegenerate (repoRoot: string) : int = GateSummary.runRegenerate repoRoot
 
 let runGateSummaryVerify (repoRoot: string) : int =
     let path = Path.Combine(repoRoot, ".factory", "gate-summary.json")
@@ -152,4 +156,5 @@ let runGate (repoRoot: string) : int =
         stderr.WriteLine(sprintf "gate run: FAIL (regen=%d verify=%d, see gate-summary.json)" regenCode verifyCode)
     else
         stderr.WriteLine(sprintf "gate run: FAIL (operational; regen=%d verify=%d)" regenCode verifyCode)
+
     combined

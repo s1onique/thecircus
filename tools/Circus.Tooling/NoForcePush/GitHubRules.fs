@@ -12,53 +12,47 @@ open System.Text.Json.Serialization
 // GitHub Ruleset API Models
 // ============================================================================
 
-type GhRulesetResponse = {
-    [<JsonPropertyName("rulesets")>]
-    Rulesets: GhRuleset array
-}
+type GhRulesetResponse =
+    { [<JsonPropertyName("rulesets")>]
+      Rulesets: GhRuleset array }
 
-and GhRuleset = {
-    [<JsonPropertyName("id")>]
-    Id: int64
-    [<JsonPropertyName("name")>]
-    Name: string
-    [<JsonPropertyName("source")>]
-    Source: string
-    [<JsonPropertyName("enforcement")>]
-    Enforcement: string
-    [<JsonPropertyName("rules")>]
-    Rules: GhRule array option
-    [<JsonPropertyName("conditions")>]
-    Conditions: GhConditions option
-}
+and GhRuleset =
+    { [<JsonPropertyName("id")>]
+      Id: int64
+      [<JsonPropertyName("name")>]
+      Name: string
+      [<JsonPropertyName("source")>]
+      Source: string
+      [<JsonPropertyName("enforcement")>]
+      Enforcement: string
+      [<JsonPropertyName("rules")>]
+      Rules: GhRule array option
+      [<JsonPropertyName("conditions")>]
+      Conditions: GhConditions option }
 
-and GhRule = {
-    [<JsonPropertyName("type")>]
-    RuleType: string
-    [<JsonPropertyName("parameters")>]
-    Parameters: JsonElement option
-}
+and GhRule =
+    { [<JsonPropertyName("type")>]
+      RuleType: string
+      [<JsonPropertyName("parameters")>]
+      Parameters: JsonElement option }
 
-and GhConditions = {
-    [<JsonPropertyName("ref_name")>]
-    RefName: GhRefNameCondition option
-}
+and GhConditions =
+    { [<JsonPropertyName("ref_name")>]
+      RefName: GhRefNameCondition option }
 
-and GhRefNameCondition = {
-    [<JsonPropertyName("include")>]
-    Include: string array option
-    [<JsonPropertyName("exclude")>]
-    Exclude: string array option
-}
+and GhRefNameCondition =
+    { [<JsonPropertyName("include")>]
+      Include: string array option
+      [<JsonPropertyName("exclude")>]
+      Exclude: string array option }
 
-type GhBypassActor = {
-    [<JsonPropertyName("actor_type")>]
-    ActorType: string
-    [<JsonPropertyName("actor_id")>]
-    ActorId: int64
-    [<JsonPropertyName("bypass_mode")>]
-    BypassMode: string
-}
+type GhBypassActor =
+    { [<JsonPropertyName("actor_type")>]
+      ActorType: string
+      [<JsonPropertyName("actor_id")>]
+      ActorId: int64
+      [<JsonPropertyName("bypass_mode")>]
+      BypassMode: string }
 
 // ============================================================================
 // Result model
@@ -125,6 +119,7 @@ type GhApiSeamImpl() =
                 let output = proc.StandardOutput.ReadToEnd()
                 let stderr = proc.StandardError.ReadToEnd()
                 proc.WaitForExit()
+
                 if proc.ExitCode <> 0 then
                     if stderr.Contains("404") then
                         Error(sprintf "repository '%s' not found" repositoryId)
@@ -140,15 +135,19 @@ type GhApiSeamImpl() =
         member this.GetRulesetByName(repositoryId: string, rulesetName: string) : Result<string, string> =
             try
                 let result = (this :> IGhApiSeam).GetRulesets(repositoryId)
+
                 match result with
                 | Ok json ->
                     let doc = JsonDocument.Parse(json)
                     let rulesets = doc.RootElement.GetProperty("rulesets")
                     let mutable found = None
+
                     for ruleset in rulesets.EnumerateArray() do
                         let name = ruleset.GetProperty("name").GetString()
+
                         if name = rulesetName then
                             found <- Some ruleset
+
                     match found with
                     | Some r ->
                         use stream = new MemoryStream()
@@ -156,8 +155,7 @@ type GhApiSeamImpl() =
                         r.WriteTo(writer)
                         writer.Flush()
                         Ok(Encoding.UTF8.GetString(stream.ToArray()))
-                    | None ->
-                        Error(sprintf "ruleset '%s' not found" rulesetName)
+                    | None -> Error(sprintf "ruleset '%s' not found" rulesetName)
                 | Error e -> Error e
             with ex ->
                 Error(sprintf "failed to get ruleset: %s" ex.Message)
@@ -175,6 +173,7 @@ type GhApiSeamImpl() =
                 let output = proc.StandardOutput.ReadToEnd()
                 let stderr = proc.StandardError.ReadToEnd()
                 proc.WaitForExit()
+
                 if proc.ExitCode <> 0 then
                     if stderr.Contains("404") then
                         Error("bypass information not available (may require admin)")
@@ -187,7 +186,7 @@ type GhApiSeamImpl() =
             with ex ->
                 Error(sprintf "failed to get bypass actors: %s" ex.Message)
 
-let defaultGhApiSeam : IGhApiSeam = GhApiSeamImpl() :> IGhApiSeam
+let defaultGhApiSeam: IGhApiSeam = GhApiSeamImpl() :> IGhApiSeam
 
 // ============================================================================
 // Ruleset analysis
@@ -202,8 +201,13 @@ let rulesetAppliesToBranch (ruleset: GhRuleset) (branch: string) : bool =
             | Some patterns ->
                 patterns
                 |> Array.exists (fun pattern ->
-                    let regex = System.Text.RegularExpressions.Regex(
-                        "^" + System.Text.RegularExpressions.Regex.Escape(pattern).Replace("\\*", ".*") + "$")
+                    let regex =
+                        System.Text.RegularExpressions.Regex(
+                            "^"
+                            + System.Text.RegularExpressions.Regex.Escape(pattern).Replace("\\*", ".*")
+                            + "$"
+                        )
+
                     regex.IsMatch(branch))
             | None -> true
         | None -> true
@@ -211,16 +215,12 @@ let rulesetAppliesToBranch (ruleset: GhRuleset) (branch: string) : bool =
 
 let rulesetBlocksNonFastForward (ruleset: GhRuleset) : bool =
     match ruleset.Rules with
-    | Some rules ->
-        rules
-        |> Array.exists (fun r -> r.RuleType = "non_fast_forward")
+    | Some rules -> rules |> Array.exists (fun r -> r.RuleType = "non_fast_forward")
     | None -> false
 
 let rulesetBlocksDeletion (ruleset: GhRuleset) : bool =
     match ruleset.Rules with
-    | Some rules ->
-        rules
-        |> Array.exists (fun r -> r.RuleType = "delete_ref")
+    | Some rules -> rules |> Array.exists (fun r -> r.RuleType = "delete_ref")
     | None -> false
 
 let parseBypassActors (json: string) : Result<GhBypassActor array, string> =
@@ -228,6 +228,7 @@ let parseBypassActors (json: string) : Result<GhBypassActor array, string> =
         let opts = JsonSerializerOptions()
         opts.PropertyNameCaseInsensitive <- true
         let actors = JsonSerializer.Deserialize<GhBypassActor array>(json, opts)
+
         match actors with
         | null -> Ok [||]
         | _ -> Ok actors
@@ -237,29 +238,22 @@ let parseBypassActors (json: string) : Result<GhBypassActor array, string> =
 let hasCriticalBypass (actors: GhBypassActor array) : (string * string) option =
     actors
     |> Array.tryFind (fun a ->
-        a.BypassMode = "always" ||
-        (a.ActorType = "RepositoryRole" && a.BypassMode <> "exempt"))
+        a.BypassMode = "always"
+        || (a.ActorType = "RepositoryRole" && a.BypassMode <> "exempt"))
     |> Option.map (fun a -> (a.ActorType, a.BypassMode))
 
 // ============================================================================
 // Main verification
 // ============================================================================
 
-let verifyRulesets
-    (repositoryId: string)
-    (branch: string)
-    (seam: IGhApiSeam option)
-    : RulesetResult =
+let verifyRulesets (repositoryId: string) (branch: string) (seam: IGhApiSeam option) : RulesetResult =
 
     let gh = defaultArg seam defaultGhApiSeam
 
     match gh.GetRulesets(repositoryId) with
-    | Error e when e.Contains("not found") ->
-        RulesetNotFound(repositoryId, branch)
-    | Error e when e.Contains("authentication") ->
-        AuthFailure(e)
-    | Error e ->
-        NetworkFailure(e)
+    | Error e when e.Contains("not found") -> RulesetNotFound(repositoryId, branch)
+    | Error e when e.Contains("authentication") -> AuthFailure(e)
+    | Error e -> NetworkFailure(e)
     | Ok json ->
         try
             let opts = JsonSerializerOptions()
@@ -268,21 +262,17 @@ let verifyRulesets
 
             let applicableRulesets =
                 response.Rulesets
-                |> Array.filter (fun rs ->
-                    rs.Source = "repository" &&
-                    rulesetAppliesToBranch rs branch)
+                |> Array.filter (fun rs -> rs.Source = "repository" && rulesetAppliesToBranch rs branch)
 
             if Array.isEmpty applicableRulesets then
                 RulesetNotFound(repositoryId, branch)
             else
                 let hasEnabled =
-                    applicableRulesets
-                    |> Array.exists (fun rs -> rs.Enforcement = "enabled")
+                    applicableRulesets |> Array.exists (fun rs -> rs.Enforcement = "enabled")
 
                 if not hasEnabled then
                     let hasEvaluate =
-                        applicableRulesets
-                        |> Array.exists (fun rs -> rs.Enforcement = "evaluate")
+                        applicableRulesets |> Array.exists (fun rs -> rs.Enforcement = "evaluate")
 
                     if hasEvaluate then
                         RulesetEvaluateOnly(repositoryId, branch)
@@ -306,13 +296,11 @@ let verifyRulesets
                             RulesMissingDeletionRule(repositoryId, branch)
                         else
                             let enabledRulesets =
-                                applicableRulesets
-                                |> Array.filter (fun rs -> rs.Enforcement = "enabled")
+                                applicableRulesets |> Array.filter (fun rs -> rs.Enforcement = "enabled")
 
                             let bypassResults =
                                 enabledRulesets
-                                |> Array.map (fun rs ->
-                                    gh.GetRulesetBypassActors(repositoryId, rs.Id))
+                                |> Array.map (fun rs -> gh.GetRulesetBypassActors(repositoryId, rs.Id))
 
                             let criticalBypasses =
                                 bypassResults
@@ -329,17 +317,26 @@ let verifyRulesets
                             if not (List.isEmpty criticalBypasses) then
                                 let (at, bm) = List.head criticalBypasses
                                 RulesHasBypassActor(repositoryId, branch, at, bm)
-                            else if bypassResults |> Array.exists (function
+                            else if
+                                bypassResults
+                                |> Array.exists (function
                                     | Error e when e.Contains("unavailable") -> true
-                                    | _ -> false) then
+                                    | _ -> false)
+                            then
                                 BypassEvidenceIncomplete(
-                                    sprintf "bypass evidence incomplete for %s:%s" repositoryId branch)
+                                    sprintf "bypass evidence incomplete for %s:%s" repositoryId branch
+                                )
                             else
                                 let normalizedJson = normalizeJsonForEvidence json
                                 let evidenceHash = computeEvidenceHash normalizedJson
+
                                 let details =
-                                    sprintf "rulesets=%d enforcement=enabled blocks_nff=%b blocks_deletion=%b"
-                                        applicableRulesets.Length blocksNff blocksDeletion
+                                    sprintf
+                                        "rulesets=%d enforcement=enabled blocks_nff=%b blocks_deletion=%b"
+                                        applicableRulesets.Length
+                                        blocksNff
+                                        blocksDeletion
+
                                 RulesVerified(repositoryId, branch, evidenceHash, details)
         with ex ->
             MalformedJson(sprintf "parse error: %s" ex.Message)
@@ -377,7 +374,15 @@ let runVerify (repositoryId: string) (branch: string) (seam: IGhApiSeam option) 
         1
 
     | RulesHasBypassActor(repo, br, actorType, bypassMode) ->
-        stderr.WriteLine(sprintf "FAIL: rulesets have critical bypass actor (type=%s, mode=%s) for %s:%s" actorType bypassMode repo br)
+        stderr.WriteLine(
+            sprintf
+                "FAIL: rulesets have critical bypass actor (type=%s, mode=%s) for %s:%s"
+                actorType
+                bypassMode
+                repo
+                br
+        )
+
         1
 
     | RepositoryMismatch(expected, actual) ->

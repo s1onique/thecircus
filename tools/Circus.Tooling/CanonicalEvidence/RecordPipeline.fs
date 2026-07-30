@@ -34,10 +34,9 @@ open Circus.Tooling.ScopeAuthority.Domain
 // re-exported from EvidenceRecords module above.
 // -----------------------------------------------------------------------------
 
-type RecordValidationResult = {
-    Valid: bool
-    Issues: RecordValidationIssue list
-}
+type RecordValidationResult =
+    { Valid: bool
+      Issues: RecordValidationIssue list }
 
 // -----------------------------------------------------------------------------
 // Record pipeline failures
@@ -64,7 +63,7 @@ let recordPipelineFailureToString (f: RecordPipelineFailure) : string =
     | RecordPipelineFailure.DefinitionMissingResult id -> sprintf "definition has no matching result: %s" id
     | RecordPipelineFailure.ResultMissingDefinition id -> sprintf "result has no matching definition: %s" id
     | RecordPipelineFailure.EmptyCommand id -> sprintf "empty command for check: %s" id
-    | RecordPipelineFailure.RecordIdentityMismatch (id, expected, actual) ->
+    | RecordPipelineFailure.RecordIdentityMismatch(id, expected, actual) ->
         sprintf "record identity mismatch for %s: expected=%s actual=%s" id expected actual
     | RecordPipelineFailure.RecordValidationFailed issues ->
         sprintf "record validation failed: %s" (String.concat "; " (List.map recordValidationIssueToString issues))
@@ -89,13 +88,19 @@ let validateBijection
     else
         // Check for duplicate definition IDs
         let defIds = definitions |> List.map (fun d -> d.Id)
-        let defIdCounts = defIds |> List.countBy id |> List.filter (fun (_, count) -> count > 1)
+
+        let defIdCounts =
+            defIds |> List.countBy id |> List.filter (fun (_, count) -> count > 1)
+
         match defIdCounts with
         | (id, _) :: _ -> Result.Error(RecordPipelineFailure.DuplicateDefinitionId id)
         | [] ->
             // Check for duplicate result IDs
             let resIds = results |> List.map (fun r -> r.Id)
-            let resIdCounts = resIds |> List.countBy id |> List.filter (fun (_, count) -> count > 1)
+
+            let resIdCounts =
+                resIds |> List.countBy id |> List.filter (fun (_, count) -> count > 1)
+
             match resIdCounts with
             | (id, _) :: _ -> Result.Error(RecordPipelineFailure.DuplicateResultId id)
             | [] ->
@@ -105,22 +110,24 @@ let validateBijection
 
                 // Check each definition has a result
                 let missingResult =
-                    definitions
-                    |> List.tryFind (fun d -> not (Set.contains d.Id resIdSet))
+                    definitions |> List.tryFind (fun d -> not (Set.contains d.Id resIdSet))
+
                 match missingResult with
                 | Some d -> Result.Error(RecordPipelineFailure.DefinitionMissingResult d.Id)
                 | None ->
                     // Check each result has a definition
-                    let missingDef =
-                        results
-                        |> List.tryFind (fun r -> not (Set.contains r.Id defIdSet))
+                    let missingDef = results |> List.tryFind (fun r -> not (Set.contains r.Id defIdSet))
+
                     match missingDef with
                     | Some r -> Result.Error(RecordPipelineFailure.ResultMissingDefinition r.Id)
                     | None ->
                         // Check counts match
                         if defIds.Length <> resIds.Length then
-                            Result.Error(RecordPipelineFailure.DefinitionMissingResult
-                                (sprintf "count mismatch: %d definitions, %d results" defIds.Length resIds.Length))
+                            Result.Error(
+                                RecordPipelineFailure.DefinitionMissingResult(
+                                    sprintf "count mismatch: %d definitions, %d results" defIds.Length resIds.Length
+                                )
+                            )
                         else
                             Result.Ok()
 
@@ -142,15 +149,16 @@ let mapStatusToRecordStatus (status: EvidenceStatus) : RecordStatus =
 /// Captures the full execution context for a single check, including
 /// its own pre-execution timestamp. The clock is sampled immediately
 /// before RunCheck, not after.
-type ExecutedCanonicalCheck = {
-    /// The check definition that was executed.
-    Definition: EvidenceCheckDefinition
-    /// The result produced by RunCheck.
-    Result: EvidenceCheckResult
-    /// The UTC timestamp sampled immediately before RunCheck was called.
-    /// This is the actual start time of this specific check.
-    StartedAt: DateTimeOffset
-}
+type ExecutedCanonicalCheck =
+    {
+        /// The check definition that was executed.
+        Definition: EvidenceCheckDefinition
+        /// The result produced by RunCheck.
+        Result: EvidenceCheckResult
+        /// The UTC timestamp sampled immediately before RunCheck was called.
+        /// This is the actual start time of this specific check.
+        StartedAt: DateTimeOffset
+    }
 
 // -----------------------------------------------------------------------------
 // Per-check record conversion
@@ -170,8 +178,7 @@ let convertExecutedCheckToRecord
 
     // Validate command is non-empty
     match result.CommandArgv with
-    | [] ->
-        Result.Error(RecordPipelineFailure.EmptyCommand result.Id)
+    | [] -> Result.Error(RecordPipelineFailure.EmptyCommand result.Id)
     | executable :: arguments ->
         let record =
             createEvidenceRecord
@@ -203,9 +210,9 @@ let convertExecutedCheckToRecord
 
         // Verify record identity recomputes correctly
         let recomputedId = computeEvidenceId record
+
         if recomputedId <> record.EvidenceId then
-            Result.Error(RecordPipelineFailure.RecordIdentityMismatch(
-                result.Id, record.EvidenceId, recomputedId))
+            Result.Error(RecordPipelineFailure.RecordIdentityMismatch(result.Id, record.EvidenceId, recomputedId))
         else
             Result.Ok record
 
@@ -218,18 +225,16 @@ let convertExecutedChecksToRecords
     (workingTreeClean: bool)
     : Result<CanonicalExecutionEvidence list, RecordPipelineFailure> =
     // Convert each executed check to a record
-    let mutable records : CanonicalExecutionEvidence list = []
-    let mutable failure : RecordPipelineFailure option = None
+    let mutable records: CanonicalExecutionEvidence list = []
+    let mutable failure: RecordPipelineFailure option = None
 
     for executed in executedChecks do
         match failure with
         | Some _ -> ()
         | None ->
             match convertExecutedCheckToRecord executed subjectCommitOid subjectTreeOid workingTreeClean with
-            | Ok record ->
-                records <- record :: records
-            | Error err ->
-                failure <- Some err
+            | Ok record -> records <- record :: records
+            | Error err -> failure <- Some err
 
     match failure with
     | Some f -> Result.Error f
@@ -249,9 +254,14 @@ let convertCheckResultsToRecords
     : Result<CanonicalExecutionEvidence list, RecordPipelineFailure> =
     // Build executed checks with shared timestamp (legacy behavior)
     let executedChecks =
-        List.map2 (fun def res -> { Definition = def; Result = res; StartedAt = startedAt })
+        List.map2
+            (fun def res ->
+                { Definition = def
+                  Result = res
+                  StartedAt = startedAt })
             definitions
             results
+
     convertExecutedChecksToRecords executedChecks subjectCommitOid subjectTreeOid workingTreeClean
 
 // -----------------------------------------------------------------------------
@@ -293,6 +303,7 @@ let validateRecords
 
             // Verify evidence ID recomputes
             let recomputedId = computeEvidenceId r
+
             if recomputedId <> r.EvidenceId then
                 issues.Add(RecordValidationIssue.EvidenceIdMismatch(r.CheckId, r.EvidenceId, recomputedId))
 
@@ -314,7 +325,8 @@ let validateRecords
             if kv.Value > 1 then
                 issues.Add(RecordValidationIssue.DuplicateCheckId kv.Key)
 
-    { Valid = issues.Count = 0; Issues = List.ofSeq issues }
+    { Valid = issues.Count = 0
+      Issues = List.ofSeq issues }
 
 // -----------------------------------------------------------------------------
 // Compatibility projection
@@ -330,71 +342,70 @@ let buildCompatibilityProjection
     let checks =
         records
         |> List.map (fun r ->
-            {
-                Id = r.CheckId
-                CommandArgv = r.Command :: r.Arguments
-                WorkingDirectory = r.WorkingDirectory
-                DurationMilliseconds = r.DurationMs
-                ExitCode = r.ExitCode
-                Status =
-                    match r.Result with
-                    | RecordPass -> EvidenceStatus.Pass
-                    | RecordFail -> EvidenceStatus.Fail
-                    | RecordUnavailable -> EvidenceStatus.Unavailable
-                StdoutSha256 = r.StdoutSha256
-                StderrSha256 = r.StderrSha256
-                FailureKind = r.FailureKind
-            })
+            { Id = r.CheckId
+              CommandArgv = r.Command :: r.Arguments
+              WorkingDirectory = r.WorkingDirectory
+              DurationMilliseconds = r.DurationMs
+              ExitCode = r.ExitCode
+              Status =
+                match r.Result with
+                | RecordPass -> EvidenceStatus.Pass
+                | RecordFail -> EvidenceStatus.Fail
+                | RecordUnavailable -> EvidenceStatus.Unavailable
+              StdoutSha256 = r.StdoutSha256
+              StderrSha256 = r.StderrSha256
+              FailureKind = r.FailureKind })
         |> sortChecksDeterministic
 
     let overallStatus =
         if aggregate.RequiredChecksFailed > 0 then
             EvidenceStatus.Fail
-        elif aggregate.RequiredChecksTotal > 0 && aggregate.RequiredChecksPassed = aggregate.RequiredChecksTotal then
+        elif
+            aggregate.RequiredChecksTotal > 0
+            && aggregate.RequiredChecksPassed = aggregate.RequiredChecksTotal
+        then
             EvidenceStatus.Pass
         elif aggregate.RequiredChecksTotal = 0 then
             EvidenceStatus.Pass
         else
             EvidenceStatus.Fail
 
-    let doc = {
-        SchemaVersion = SchemaVersionValue
-        ProviderName = ProviderNameValue
-        ProviderVersion = ProviderVersionValue
-        TestedCommitOid = aggregate.SubjectCommitOid
-        TestedTreeOid = aggregate.SubjectTreeOid
-        ObjectFormat = objectFormat
-        ActiveScopeActId = scope.ActId
-        ActiveScopePointerBlobOid = scope.PointerBlobOid
-        ScopeDeclarationPath = scope.DeclarationPath
-        DeclarationBlobOid = scope.DeclarationBlobOid
-        BaselineCommitOid = scope.BaselineCommitOid
-        Checks = checks
-        OverallStatus = overallStatus
-        SemanticSha256 = ""
-    }
+    let doc =
+        { SchemaVersion = SchemaVersionValue
+          ProviderName = ProviderNameValue
+          ProviderVersion = ProviderVersionValue
+          TestedCommitOid = aggregate.SubjectCommitOid
+          TestedTreeOid = aggregate.SubjectTreeOid
+          ObjectFormat = objectFormat
+          ActiveScopeActId = scope.ActId
+          ActiveScopePointerBlobOid = scope.PointerBlobOid
+          ScopeDeclarationPath = scope.DeclarationPath
+          DeclarationBlobOid = scope.DeclarationBlobOid
+          BaselineCommitOid = scope.BaselineCommitOid
+          Checks = checks
+          OverallStatus = overallStatus
+          SemanticSha256 = "" }
+
     withSemanticHash doc
 
 // -----------------------------------------------------------------------------
 // Provider result type (for use by Provider.fs after compilation)
 // -----------------------------------------------------------------------------
 
-type CanonicalEvidenceProviderResult = {
-    SubjectCommitOid: string
-    SubjectTreeOid: string
-    ObjectFormat: string
-    Records: CanonicalExecutionEvidence list
-    Aggregate: CanonicalExecutionAggregate
-    CompatibilityProjection: CanonicalEvidence
-}
+type CanonicalEvidenceProviderResult =
+    { SubjectCommitOid: string
+      SubjectTreeOid: string
+      ObjectFormat: string
+      Records: CanonicalExecutionEvidence list
+      Aggregate: CanonicalExecutionAggregate
+      CompatibilityProjection: CanonicalEvidence }
 
 /// Internal execution stage record for the provider
-type CanonicalCheckExecution = {
-    CommitOid: string
-    TreeOid: string
-    ObjectFormat: string
-    WorkingTreeClean: bool
-    StartedAt: DateTimeOffset
-    Definitions: EvidenceCheckDefinition list
-    Results: EvidenceCheckResult list
-}
+type CanonicalCheckExecution =
+    { CommitOid: string
+      TreeOid: string
+      ObjectFormat: string
+      WorkingTreeClean: bool
+      StartedAt: DateTimeOffset
+      Definitions: EvidenceCheckDefinition list
+      Results: EvidenceCheckResult list }

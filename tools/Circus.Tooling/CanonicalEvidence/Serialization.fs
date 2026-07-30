@@ -31,8 +31,7 @@ open Circus.Tooling.CanonicalEvidence.Domain
 // UTF-8 without BOM
 // -----------------------------------------------------------------------------
 
-let private utf8NoBom : Encoding =
-    new UTF8Encoding(false)
+let private utf8NoBom: Encoding = new UTF8Encoding(false)
 
 // -----------------------------------------------------------------------------
 // Manual serializer
@@ -50,8 +49,7 @@ let private utf8NoBom : Encoding =
 // is stable across runs.
 // -----------------------------------------------------------------------------
 
-let private renderStatusToken (s: EvidenceStatus) : string =
-    escapeJsonString (statusToken s)
+let private renderStatusToken (s: EvidenceStatus) : string = escapeJsonString (statusToken s)
 
 let private renderCheckResult (c: EvidenceCheckResult) : string =
     let sb = StringBuilder()
@@ -77,8 +75,7 @@ let private renderCheckResult (c: EvidenceCheckResult) : string =
     sb.ToString()
 
 let private sortedChecks (checks: EvidenceCheckResult list) : EvidenceCheckResult list =
-    checks
-    |> List.sortBy (fun c -> c.Id, c.CommandArgv)
+    checks |> List.sortBy (fun c -> c.Id, c.CommandArgv)
 
 /// Render the canonicalisation form (the bytes used to derive the
 /// semantic hash). Excludes the ``semantic_sha256`` field itself.
@@ -110,10 +107,11 @@ let renderCanonicalisationForm (e: CanonicalEvidence) : string =
     sb.Append ",\"checks\":[" |> ignore
     let sorted = sortedChecks e.Checks
     let mutable first = true
+
     for c in sorted do
-        if first then first <- false
-        else sb.Append "," |> ignore
+        if first then first <- false else sb.Append "," |> ignore
         sb.Append(renderCheckResult c) |> ignore
+
     sb.Append "]" |> ignore
     sb.Append ",\"overall_status\":" |> ignore
     sb.Append(renderStatusToken e.OverallStatus) |> ignore
@@ -144,34 +142,57 @@ let renderWireJson (e: CanonicalEvidence) : string =
 let writeAtomic (path: string) (e: CanonicalEvidence) : string =
     let body = renderWireJson e
     let dir = Path.GetDirectoryName path
+
     if not (String.IsNullOrEmpty dir) && not (Directory.Exists dir) then
         Directory.CreateDirectory dir |> ignore
+
     let tmp =
         let guid = Guid.NewGuid().ToString("n")
         Path.Combine(dir, (Path.GetFileName path) + ".tmp." + guid)
+
     let bytes = utf8NoBom.GetBytes(body + "\n")
     File.WriteAllBytes(tmp, bytes)
+
     let written =
-        try File.ReadAllBytes tmp
+        try
+            File.ReadAllBytes tmp
         with ex ->
-            try File.Delete tmp with | _ -> ()
+            try
+                File.Delete tmp
+            with _ ->
+                ()
+
             raise ex
+
     let hash = Circus.Tooling.FSharpDiagnostics.Hashing.sha256Hex written
+
     if File.Exists path then
         let backup = path + ".bak"
-        if File.Exists backup then File.Delete backup
+
+        if File.Exists backup then
+            File.Delete backup
+
         File.Move(path, backup)
+
         try
             File.Move(tmp, path)
             File.Delete backup
         with ex ->
             if File.Exists backup then
-                if File.Exists path then File.Delete path
+                if File.Exists path then
+                    File.Delete path
+
                 File.Move(backup, path)
-            try File.Delete tmp with | _ -> ()
+
+            try
+                File.Delete tmp
+            with _ ->
+                ()
+
             raise ex
     else
         File.Move(tmp, path)
+
     hash
 
 // -----------------------------------------------------------------------------
@@ -209,14 +230,14 @@ let private parseJsonInt64 (el: JsonElement) (name: string) : int64 =
 let private parseJsonIntOption (el: JsonElement) (name: string) : int option =
     match getProperty el name with
     | Some found when found.ValueKind = JsonValueKind.Null -> None
-    | Some found when found.ValueKind = JsonValueKind.Number -> Some (found.GetInt32())
+    | Some found when found.ValueKind = JsonValueKind.Number -> Some(found.GetInt32())
     | Some _ -> raise (InvalidOperationException(sprintf "field %s must be a number or null" name))
     | None -> None
 
 let private parseJsonStringOption (el: JsonElement) (name: string) : string option =
     match getProperty el name with
     | Some found when found.ValueKind = JsonValueKind.Null -> None
-    | Some found when found.ValueKind = JsonValueKind.String -> Some (found.GetString())
+    | Some found when found.ValueKind = JsonValueKind.String -> Some(found.GetString())
     | Some _ -> raise (InvalidOperationException(sprintf "field %s must be a string or null" name))
     | None -> None
 
@@ -224,11 +245,13 @@ let private parseJsonStringArray (el: JsonElement) (name: string) : string[] =
     match getProperty el name with
     | Some found when found.ValueKind = JsonValueKind.Array ->
         let items = ResizeArray<string>()
+
         for item in found.EnumerateArray() do
             if item.ValueKind = JsonValueKind.String then
                 items.Add(item.GetString())
             else
                 raise (InvalidOperationException(sprintf "field %s must be an array of strings" name))
+
         items.ToArray()
     | Some _ -> raise (InvalidOperationException(sprintf "field %s must be an array" name))
     | None -> raise (InvalidOperationException(sprintf "missing required field: %s" name))
@@ -239,32 +262,34 @@ let private parseJsonElement (raw: string) : Result<JsonDocument, string> =
         opts.AllowTrailingCommas <- false
         opts.CommentHandling <- JsonCommentHandling.Disallow
         opts.MaxDepth <- 64
-        Ok (JsonDocument.Parse(raw, opts))
+        Ok(JsonDocument.Parse(raw, opts))
     with ex ->
         Error(sprintf "json parse failed: %s" ex.Message)
 
 let private parseCheckResult (el: JsonElement) : EvidenceCheckResult =
     let argv = parseJsonStringArray el "command_argv" |> Array.toList
     let exitCode = parseJsonIntOption el "exit_code"
+
     let status =
         let statusStr = parseJsonString el "status"
+
         match tryParseStatus statusStr with
         | Some s -> s
         | None -> Fail
+
     let stdoutHash = parseJsonStringOption el "stdout_sha256"
     let stderrHash = parseJsonStringOption el "stderr_sha256"
     let failureKind = parseJsonStringOption el "failure_kind"
-    {
-        Id = parseJsonString el "id"
-        CommandArgv = argv
-        WorkingDirectory = parseJsonString el "working_directory"
-        DurationMilliseconds = parseJsonInt64 el "duration_ms"
-        ExitCode = exitCode
-        Status = status
-        StdoutSha256 = stdoutHash
-        StderrSha256 = stderrHash
-        FailureKind = failureKind
-    }
+
+    { Id = parseJsonString el "id"
+      CommandArgv = argv
+      WorkingDirectory = parseJsonString el "working_directory"
+      DurationMilliseconds = parseJsonInt64 el "duration_ms"
+      ExitCode = exitCode
+      Status = status
+      StdoutSha256 = stdoutHash
+      StderrSha256 = stderrHash
+      FailureKind = failureKind }
 
 let private deserializeJson (raw: string) : Result<CanonicalEvidence, string> =
     match parseJsonElement raw with
@@ -272,32 +297,36 @@ let private deserializeJson (raw: string) : Result<CanonicalEvidence, string> =
     | Ok doc ->
         try
             let root = doc.RootElement
+
             match getProperty root "checks" with
             | Some checksArrEl when checksArrEl.ValueKind = JsonValueKind.Array ->
                 let checks = ResizeArray<EvidenceCheckResult>()
+
                 for item in checksArrEl.EnumerateArray() do
                     checks.Add(parseCheckResult item)
+
                 let overallStr = parseJsonString root "overall_status"
+
                 let overall =
                     match tryParseStatus overallStr with
                     | Some s -> s
                     | None -> Fail
-                Ok {
-                    SchemaVersion = parseJsonInt root "schema_version"
-                    ProviderName = parseJsonString root "provider_name"
-                    ProviderVersion = parseJsonString root "provider_version"
-                    TestedCommitOid = parseJsonString root "tested_commit_oid"
-                    TestedTreeOid = parseJsonString root "tested_tree_oid"
-                    ObjectFormat = parseJsonString root "object_format"
-                    ActiveScopeActId = parseJsonString root "active_scope_act_id"
-                    ActiveScopePointerBlobOid = parseJsonString root "active_scope_pointer_blob_oid"
-                    ScopeDeclarationPath = parseJsonString root "scope_declaration_path"
-                    DeclarationBlobOid = parseJsonString root "declaration_blob_oid"
-                    BaselineCommitOid = parseJsonString root "baseline_commit_oid"
-                    Checks = checks |> Seq.toList
-                    OverallStatus = overall
-                    SemanticSha256 = parseJsonString root "semantic_sha256"
-                }
+
+                Ok
+                    { SchemaVersion = parseJsonInt root "schema_version"
+                      ProviderName = parseJsonString root "provider_name"
+                      ProviderVersion = parseJsonString root "provider_version"
+                      TestedCommitOid = parseJsonString root "tested_commit_oid"
+                      TestedTreeOid = parseJsonString root "tested_tree_oid"
+                      ObjectFormat = parseJsonString root "object_format"
+                      ActiveScopeActId = parseJsonString root "active_scope_act_id"
+                      ActiveScopePointerBlobOid = parseJsonString root "active_scope_pointer_blob_oid"
+                      ScopeDeclarationPath = parseJsonString root "scope_declaration_path"
+                      DeclarationBlobOid = parseJsonString root "declaration_blob_oid"
+                      BaselineCommitOid = parseJsonString root "baseline_commit_oid"
+                      Checks = checks |> Seq.toList
+                      OverallStatus = overall
+                      SemanticSha256 = parseJsonString root "semantic_sha256" }
             | Some _ -> Error "checks must be an array"
             | None -> Error "missing required field: checks"
         with ex ->
@@ -307,11 +336,9 @@ let private deserializeJson (raw: string) : Result<CanonicalEvidence, string> =
 /// caller is responsible for invoking the schema validator AFTER
 /// this step; deserialization alone does not enforce the
 /// supported-check catalog or the OID width.
-let parseWireJson (raw: string) : Result<CanonicalEvidence, string> =
-    deserializeJson raw
+let parseWireJson (raw: string) : Result<CanonicalEvidence, string> = deserializeJson raw
 
 /// Round-trip of the wire JSON. The intent is parity: serializing
 /// then parsing must equal the parsed-and-normalized form, and the
 /// semantic hash must match.
-let wireJsonOf (e: CanonicalEvidence) : string =
-    renderWireJson e
+let wireJsonOf (e: CanonicalEvidence) : string = renderWireJson e

@@ -44,66 +44,63 @@ let tryParseStatus (token: string) : EvidenceStatus option =
 // Check definitions
 // -----------------------------------------------------------------------------
 
-type EvidenceCheckDefinition = {
-    Id: string
-    Executable: string
-    Arguments: string list
-    WorkingDirectory: string
-    Required: bool
-    Timeout: TimeSpan
-    StdoutLimitBytes: int
-    StderrLimitBytes: int
-}
+type EvidenceCheckDefinition =
+    { Id: string
+      Executable: string
+      Arguments: string list
+      WorkingDirectory: string
+      Required: bool
+      Timeout: TimeSpan
+      StdoutLimitBytes: int
+      StderrLimitBytes: int }
 
 // -----------------------------------------------------------------------------
 // Check results
 // -----------------------------------------------------------------------------
 
-type EvidenceCheckResult = {
-    Id: string
-    CommandArgv: string list
-    WorkingDirectory: string
-    DurationMilliseconds: int64
-    ExitCode: int option
-    Status: EvidenceStatus
-    StdoutSha256: string option
-    StderrSha256: string option
-    FailureKind: string option
-}
+type EvidenceCheckResult =
+    { Id: string
+      CommandArgv: string list
+      WorkingDirectory: string
+      DurationMilliseconds: int64
+      ExitCode: int option
+      Status: EvidenceStatus
+      StdoutSha256: string option
+      StderrSha256: string option
+      FailureKind: string option }
 
 // -----------------------------------------------------------------------------
 // Canonical evidence
 // -----------------------------------------------------------------------------
 
-type CanonicalEvidence = {
-    SchemaVersion: int
-    ProviderName: string
-    ProviderVersion: string
-    TestedCommitOid: string
-    TestedTreeOid: string
-    ObjectFormat: string
-    ActiveScopeActId: string
-    ActiveScopePointerBlobOid: string
-    ScopeDeclarationPath: string
-    DeclarationBlobOid: string
-    BaselineCommitOid: string
-    Checks: EvidenceCheckResult list
-    OverallStatus: EvidenceStatus
-    SemanticSha256: string
-}
+type CanonicalEvidence =
+    { SchemaVersion: int
+      ProviderName: string
+      ProviderVersion: string
+      TestedCommitOid: string
+      TestedTreeOid: string
+      ObjectFormat: string
+      ActiveScopeActId: string
+      ActiveScopePointerBlobOid: string
+      ScopeDeclarationPath: string
+      DeclarationBlobOid: string
+      BaselineCommitOid: string
+      Checks: EvidenceCheckResult list
+      OverallStatus: EvidenceStatus
+      SemanticSha256: string }
 
 // -----------------------------------------------------------------------------
 // Constants
 // -----------------------------------------------------------------------------
 
 [<Literal>]
-let SchemaVersionValue : int = 1
+let SchemaVersionValue: int = 1
 
 [<Literal>]
-let ProviderNameValue : string = "circus-canonical-evidence"
+let ProviderNameValue: string = "circus-canonical-evidence"
 
 [<Literal>]
-let ProviderVersionValue : string = "1.0.0"
+let ProviderVersionValue: string = "1.0.0"
 
 // -----------------------------------------------------------------------------
 // Supported check IDs (the canonical check set)
@@ -113,38 +110,33 @@ let ProviderVersionValue : string = "1.0.0"
 // document are sorted by ID regardless.
 // -----------------------------------------------------------------------------
 
-let SupportedCheckIds : string list =
-    [
-        "tooling-build"
-        "tooling-tests-build"
-        "postgres-runner-authority-tests"
-        "bounded-process-tests"
-        "git-adapter-tests"
-        "repair-episodes-tests"
-        "fsharp-diagnostics-tests"
-        "repair-episodes-gate"
-        "committed-range-diff-check"
-        "protected-scope"
-    ]
+let SupportedCheckIds: string list =
+    [ "tooling-build"
+      "tooling-tests-build"
+      "postgres-runner-authority-tests"
+      "bounded-process-tests"
+      "git-adapter-tests"
+      "repair-episodes-tests"
+      "fsharp-diagnostics-tests"
+      "repair-episodes-gate"
+      "committed-range-diff-check"
+      "protected-scope" ]
 
-let SupportedCheckIdSet : Set<string> =
-    Set.ofList SupportedCheckIds
+let SupportedCheckIdSet: Set<string> = Set.ofList SupportedCheckIds
 
-let isSupportedCheckId (id: string) : bool =
-    Set.contains id SupportedCheckIdSet
+let isSupportedCheckId (id: string) : bool = Set.contains id SupportedCheckIdSet
 
 // -----------------------------------------------------------------------------
 // OID validation
 // -----------------------------------------------------------------------------
 
 [<Literal>]
-let Sha1Width : int = 40
+let Sha1Width: int = 40
 
 [<Literal>]
-let Sha256Width : int = 64
+let Sha256Width: int = 64
 
-let supportedObjectFormats : Set<string> =
-    Set.ofList [ "sha1"; "sha256" ]
+let supportedObjectFormats: Set<string> = Set.ofList [ "sha1"; "sha256" ]
 
 let parseObjectFormat (token: string) : string option =
     match token with
@@ -162,17 +154,24 @@ let private isLowerHex (c: char) : bool =
     (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
 
 let isValidOid (objectFormat: string) (oid: string) : bool =
-    if isNull oid then false
-    elif String.IsNullOrWhiteSpace oid then false
+    if isNull oid then
+        false
+    elif String.IsNullOrWhiteSpace oid then
+        false
     else
         let expectedWidth = objectFormatWidth objectFormat
-        if expectedWidth < 0 then false
-        elif oid.Length <> expectedWidth then false
+
+        if expectedWidth < 0 then
+            false
+        elif oid.Length <> expectedWidth then
+            false
         else
             let mutable ok = true
+
             for c in oid do
                 if not (isLowerHex c) then
                     ok <- false
+
             ok
 
 // -----------------------------------------------------------------------------
@@ -188,21 +187,21 @@ let isValidOid (objectFormat: string) (oid: string) : bool =
 let computeOverallStatus (checks: EvidenceCheckResult list) : EvidenceStatus =
     let mutable failed = false
     let mutable unavailable = false
+
     for c in checks do
         match c.Status with
         | Fail -> failed <- true
         | Unavailable -> unavailable <- true
         | Pass -> ()
-    if failed || unavailable then Fail
-    else Pass
+
+    if failed || unavailable then Fail else Pass
 
 // -----------------------------------------------------------------------------
 // Deterministic ordering
 // -----------------------------------------------------------------------------
 
 let sortChecksDeterministic (checks: EvidenceCheckResult list) : EvidenceCheckResult list =
-    checks
-    |> List.sortBy (fun c -> c.Id, c.CommandArgv)
+    checks |> List.sortBy (fun c -> c.Id, c.CommandArgv)
 
 // -----------------------------------------------------------------------------
 // Self-referential / post-publication fields
@@ -215,32 +214,31 @@ let sortChecksDeterministic (checks: EvidenceCheckResult list) : EvidenceCheckRe
 // pre-publication file.
 // -----------------------------------------------------------------------------
 
-let ForbiddenIdentityFields : string list =
-    [
-        "tag_object_oid"
-        "tag_target_oid"
-        "tag_target_tree_oid"
-        "tag_peeled_commit_oid"
-        "tag_peeled_tree_oid"
-        "remote_tag_object_oid"
-        "push_target_oid"
-        "publication_oid"
-        "transcript_blob_oid"
-        "correction02_commit_oid"
-        "correction02_tree_oid"
-        "final_head_oid"
-        "origin_main_oid"
-    ]
+let ForbiddenIdentityFields: string list =
+    [ "tag_object_oid"
+      "tag_target_oid"
+      "tag_target_tree_oid"
+      "tag_peeled_commit_oid"
+      "tag_peeled_tree_oid"
+      "remote_tag_object_oid"
+      "push_target_oid"
+      "publication_oid"
+      "transcript_blob_oid"
+      "correction02_commit_oid"
+      "correction02_tree_oid"
+      "final_head_oid"
+      "origin_main_oid" ]
 
-let ForbiddenIdentityFieldSet : Set<string> =
-    Set.ofList ForbiddenIdentityFields
+let ForbiddenIdentityFieldSet: Set<string> = Set.ofList ForbiddenIdentityFields
 
 let firstForbiddenIdentityField (jsonKeys: string list) : string option =
-    let mutable found : string option = None
+    let mutable found: string option = None
+
     for k in jsonKeys do
         match found with
         | None when Set.contains k ForbiddenIdentityFieldSet -> found <- Some k
         | _ -> ()
+
     found
 
 // -----------------------------------------------------------------------------
@@ -251,15 +249,23 @@ let firstForbiddenIdentityField (jsonKeys: string list) : string option =
 let internal escapeJsonString (s: string) : string =
     let sb = StringBuilder(s.Length + 2)
     sb.Append '"' |> ignore
+
     for c in s do
-        if c = '\\' then sb.Append("\\\\") |> ignore
-        elif c = '"' then sb.Append("\\\"") |> ignore
-        elif c = '\n' then sb.Append("\\n") |> ignore
-        elif c = '\r' then sb.Append("\\r") |> ignore
-        elif c = '\t' then sb.Append("\\t") |> ignore
+        if c = '\\' then
+            sb.Append("\\\\") |> ignore
+        elif c = '"' then
+            sb.Append("\\\"") |> ignore
+        elif c = '\n' then
+            sb.Append("\\n") |> ignore
+        elif c = '\r' then
+            sb.Append("\\r") |> ignore
+        elif c = '\t' then
+            sb.Append("\\t") |> ignore
         elif int c < 0x20 then
             sb.AppendFormat(CultureInfo.InvariantCulture, "\\u{0:x4}", int c) |> ignore
-        else sb.Append c |> ignore
+        else
+            sb.Append c |> ignore
+
     sb.Append '"' |> ignore
     sb.ToString()
 
@@ -287,8 +293,7 @@ let internal optInt64Str (v: int64 option) : string =
 let internal strListJson (vs: string list) : string =
     "[" + (vs |> List.map escapeJsonString |> String.concat ",") + "]"
 
-let internal renderStatusToken (s: EvidenceStatus) : string =
-    escapeJsonString (statusToken s)
+let internal renderStatusToken (s: EvidenceStatus) : string = escapeJsonString (statusToken s)
 
 let internal renderCanonicalisationForm (e: CanonicalEvidence) : string =
     let sb = StringBuilder()
@@ -316,12 +321,14 @@ let internal renderCanonicalisationForm (e: CanonicalEvidence) : string =
     sb.Append ",\"baseline_commit_oid\":" |> ignore
     sb.Append(escapeJsonString e.BaselineCommitOid) |> ignore
     sb.Append ",\"checks\":[" |> ignore
+
     let sortedChecks =
         e.Checks |> List.sortBy (fun c -> c.Id, c.CommandArgv) |> List.toSeq
+
     let mutable first = true
+
     for c in sortedChecks do
-        if first then first <- false
-        else sb.Append "," |> ignore
+        if first then first <- false else sb.Append "," |> ignore
         sb.Append "{\"id\":" |> ignore
         sb.Append(escapeJsonString c.Id) |> ignore
         sb.Append ",\"command_argv\":" |> ignore
@@ -341,6 +348,7 @@ let internal renderCanonicalisationForm (e: CanonicalEvidence) : string =
         sb.Append ",\"failure_kind\":" |> ignore
         sb.Append(optStr c.FailureKind) |> ignore
         sb.Append "}" |> ignore
+
     sb.Append "]" |> ignore
     sb.Append ",\"overall_status\":" |> ignore
     sb.Append(renderStatusToken e.OverallStatus) |> ignore
@@ -363,4 +371,5 @@ let computeSemanticHash (e: CanonicalEvidence) : string =
     sha256OfUtf8 canon
 
 let withSemanticHash (e: CanonicalEvidence) : CanonicalEvidence =
-    { e with SemanticSha256 = computeSemanticHash e }
+    { e with
+        SemanticSha256 = computeSemanticHash e }

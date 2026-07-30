@@ -24,50 +24,49 @@ open Circus.Tooling.FSharpDiagnostics.Paths
 exception BinlogExtractionFailure of string
 
 /// Pre-replay record of the binlog artefact.
-type PreReplayRecord = {
-    FilePath: string
-    ByteLength: int64
-    Sha256: string
-}
+type PreReplayRecord =
+    { FilePath: string
+      ByteLength: int64
+      Sha256: string }
 
 /// One extracted diagnostic event with all build context.
-type ExtractedEvent = {
-    EventOrdinal: int64
-    Severity: DiagnosticSeverity
-    Subcategory: string option
-    Code: string option
-    File: string option
-    ProjectFile: string option
-    LineNumber: int option
-    ColumnNumber: int option
-    EndLineNumber: int option
-    EndColumnNumber: int option
-    Message: string
-    SenderName: string option
-    Timestamp: string option
-    NodeId: int option
-    ProjectContextId: int option
-    TargetId: int option
-    TaskId: int option
-}
+type ExtractedEvent =
+    { EventOrdinal: int64
+      Severity: DiagnosticSeverity
+      Subcategory: string option
+      Code: string option
+      File: string option
+      ProjectFile: string option
+      LineNumber: int option
+      ColumnNumber: int option
+      EndLineNumber: int option
+      EndColumnNumber: int option
+      Message: string
+      SenderName: string option
+      Timestamp: string option
+      NodeId: int option
+      ProjectContextId: int option
+      TargetId: int option
+      TaskId: int option }
 
 /// Full extraction result.
-type ExtractionResult = {
-    PreReplay: PreReplayRecord
-    Events: ExtractedEvent list
-}
+type ExtractionResult =
+    { PreReplay: PreReplayRecord
+      Events: ExtractedEvent list }
 
 /// Hash the binlog before replay.  Failure to read the file raises.
 let hashBinlog (path: string) : PreReplayRecord =
     if not (File.Exists path) then
         raise (BinlogExtractionFailure(sprintf "binlog not found: %s" path))
+
     try
         let info = FileInfo path
+
         { FilePath = path
           ByteLength = info.Length
           Sha256 = sha256OfFile path }
-    with
-    | ex -> raise (BinlogExtractionFailure(sprintf "binlog hash failed for %s: %s" path ex.Message))
+    with ex ->
+        raise (BinlogExtractionFailure(sprintf "binlog hash failed for %s: %s" path ex.Message))
 
 // -----------------------------------------------------------------------------
 // Reflection helpers
@@ -76,10 +75,9 @@ let hashBinlog (path: string) : PreReplayRecord =
 let private tryLoadType (assemblyName: string) (typeName: string) : System.Type option =
     try
         let asm = Assembly.Load(AssemblyName(assemblyName))
-        asm.GetType(typeName)
-        |> Option.ofObj
-    with
-    | _ -> None
+        asm.GetType(typeName) |> Option.ofObj
+    with _ ->
+        None
 
 /// Resolve Microsoft.Build assemblies via reflection.  Returns the replay
 /// type, the error-event type, and the warning-event type.  Returns None
@@ -87,28 +85,33 @@ let private tryLoadType (assemblyName: string) (typeName: string) : System.Type 
 let private resolveMsBuildTypes () : (System.Type * System.Type * System.Type) option =
     let replayType =
         tryLoadType "Microsoft.Build" "Microsoft.Build.Logging.BinaryLogReplayEventSource"
+
     let errorType =
         match tryLoadType "Microsoft.Build.Framework" "Microsoft.Build.Framework.BuildErrorEventArgs" with
         | Some t -> Some t
         | None -> tryLoadType "Microsoft.Build" "Microsoft.Build.Framework.BuildErrorEventArgs"
+
     let warningType =
         match tryLoadType "Microsoft.Build.Framework" "Microsoft.Build.Framework.BuildWarningEventArgs" with
         | Some t -> Some t
         | None -> tryLoadType "Microsoft.Build" "Microsoft.Build.Framework.BuildWarningEventArgs"
+
     match replayType, errorType, warningType with
-    | Some r, Some e, Some w -> Some (r, e, w)
+    | Some r, Some e, Some w -> Some(r, e, w)
     | _ -> None
 
 /// Unwrap a boxed value of unknown underlying type to int option.  Handles
 /// boxed Int32, Int64, and Double.
 let private unboxIntOpt (v: obj) : int option =
-    if isNull v then None
-    elif v :? System.DBNull then None
+    if isNull v then
+        None
+    elif v :? System.DBNull then
+        None
     else
         try
             Some(System.Convert.ToInt32(v, System.Globalization.CultureInfo.InvariantCulture))
-        with
-        | _ -> None
+        with _ ->
+            None
 
 let private unboxStringOpt (v: obj) : string option =
     if isNull v then None
@@ -116,32 +119,40 @@ let private unboxStringOpt (v: obj) : string option =
     else Some(string v)
 
 let private unboxDateTimeOpt (v: obj) : string option =
-    if isNull v then None
-    elif v :? System.DBNull then None
+    if isNull v then
+        None
+    elif v :? System.DBNull then
+        None
     else
         try
-            let dt = System.Convert.ToDateTime(v, System.Globalization.CultureInfo.InvariantCulture)
+            let dt =
+                System.Convert.ToDateTime(v, System.Globalization.CultureInfo.InvariantCulture)
+
             let dto = System.DateTimeOffset(dt, System.TimeSpan.Zero)
             Some(dto.ToString("O", System.Globalization.CultureInfo.InvariantCulture))
-        with
-        | _ -> None
+        with _ ->
+            None
 
 /// Extract fields from a BuildErrorEventArgs / BuildWarningEventArgs via
 /// reflection so we don't bind to a specific Microsoft.Build version.
 let private extractFromEvent (eventType: System.Type) (argsObj: obj) : ExtractedEvent =
     let flags = BindingFlags.Public ||| BindingFlags.Instance
+
     let getOpt (name: string) : obj =
         match eventType.GetProperty(name, flags) with
         | null -> null
         | p -> p.GetValue(argsObj)
+
     let message =
         let v = getOpt "Message"
         if isNull v then "" else string v
+
     let severity =
         if eventType.Name = "BuildErrorEventArgs" then
             Circus.Tooling.FSharpDiagnostics.Domain.Error
         else
             Circus.Tooling.FSharpDiagnostics.Domain.Warning
+
     { EventOrdinal = 0L
       Severity = severity
       Subcategory = unboxStringOpt (getOpt "Subcategory")
@@ -169,12 +180,12 @@ let private extractFromEvent (eventType: System.Type) (argsObj: obj) : Extracted
 /// caller we run on.  All event appends are deterministic and ordered.
 type private Collector() =
     let events = System.Collections.Generic.List<ExtractedEvent>()
-    member _.Snapshot () = events.ToArray() |> Array.toList
+    member _.Snapshot() = events.ToArray() |> Array.toList
 
     /// Reflection-friendly member that accepts a single BuildErrorEventArgs
     /// instance (or null) and appends an ExtractedEvent.  Used both as the
     /// OnError handler and as a forwarder for OnWarning via type switch.
-    member this.HandleError (args: obj) =
+    member this.HandleError(args: obj) =
         match args with
         | null -> ()
         | a ->
@@ -182,7 +193,7 @@ type private Collector() =
             let extracted = extractFromEvent t a
             events.Add extracted
 
-    member this.HandleWarning (args: obj) =
+    member this.HandleWarning(args: obj) =
         match args with
         | null -> ()
         | a ->
@@ -193,22 +204,21 @@ type private Collector() =
 /// Replay a binlog through Microsoft.Build.  All recoverable errors raise.
 let extractFromBinlog (path: string) : ExtractionResult =
     let pre = hashBinlog path
+
     match resolveMsBuildTypes () with
-    | None ->
-        raise
-            (BinlogExtractionFailure(
-                "Microsoft.Build logging types not available; cannot replay binlog."))
-    | Some (replayType, _, _) ->
+    | None -> raise (BinlogExtractionFailure("Microsoft.Build logging types not available; cannot replay binlog."))
+    | Some(replayType, _, _) ->
         try
             let flags = BindingFlags.Public ||| BindingFlags.Instance
             let ctor = replayType.GetConstructor([| typeof<string> |])
+
             if isNull ctor then
-                raise
-                    (BinlogExtractionFailure(
-                        "BinaryLogReplayEventSource constructor not found."))
+                raise (BinlogExtractionFailure("BinaryLogReplayEventSource constructor not found."))
+
             let replay = ctor.Invoke([| box path |])
             // Configure fail-closed forward compatibility when the property exists.
             let fcProp = replayType.GetProperty("ForwardCompatibility", flags)
+
             if not (isNull fcProp) then
                 try
                     // Failure to set forward compatibility is treated as fatal
@@ -219,6 +229,7 @@ let extractFromBinlog (path: string) : ExtractionResult =
                     // the most fail-closed value available.  When the enum is
                     // not recognised we fall back to raising.
                     let names = System.Enum.GetNames(enumType)
+
                     let chosenValue =
                         if names |> Array.contains "Error" then
                             System.Enum.Parse(enumType, "Error") |> box
@@ -227,49 +238,55 @@ let extractFromBinlog (path: string) : ExtractionResult =
                         else
                             // Last-resort: numeric 2 if available; otherwise
                             // surface the failure.
-                            raise
-                                (BinlogExtractionFailure(
+                            raise (
+                                BinlogExtractionFailure(
                                     sprintf
                                         "ForwardCompatibility enum has no fail-closed value (names: %s)"
-                                        (String.concat "," names)))
+                                        (String.concat "," names)
+                                )
+                            )
+
                     fcProp.SetValue(replay, chosenValue) |> ignore
                 with
                 | :? BinlogExtractionFailure -> reraise ()
                 | _ -> ()
+
             let collector = Collector()
             let collectorType = collector.GetType()
             let handleError = collectorType.GetMethod("HandleError", flags)
             let handleWarning = collectorType.GetMethod("HandleWarning", flags)
             let onErrorEvent = replayType.GetEvent("OnError", flags)
             let onWarningEvent = replayType.GetEvent("OnWarning", flags)
+
             let errorDel =
-                System.Delegate.CreateDelegate(
-                    onErrorEvent.EventHandlerType, collector, handleError)
+                System.Delegate.CreateDelegate(onErrorEvent.EventHandlerType, collector, handleError)
+
             let warningDel =
-                System.Delegate.CreateDelegate(
-                    onWarningEvent.EventHandlerType, collector, handleWarning)
+                System.Delegate.CreateDelegate(onWarningEvent.EventHandlerType, collector, handleWarning)
+
             onErrorEvent.AddEventHandler(replay, errorDel)
             onWarningEvent.AddEventHandler(replay, warningDel)
             let replayMethod = replayType.GetMethod("Replay", flags)
+
             if isNull replayMethod then
-                raise
-                    (BinlogExtractionFailure(
-                        "BinaryLogReplayEventSource.Replay method not found."))
+                raise (BinlogExtractionFailure("BinaryLogReplayEventSource.Replay method not found."))
+
             try
                 replayMethod.Invoke(replay, [||]) |> ignore
-            with
-            | :? System.Reflection.TargetInvocationException as tie ->
+            with :? System.Reflection.TargetInvocationException as tie ->
                 let inner =
-                    if isNull tie.InnerException then "unknown"
-                    else tie.InnerException.Message
-                raise
-                    (BinlogExtractionFailure(
-                        sprintf "binlog replay failed: %s" inner))
+                    if isNull tie.InnerException then
+                        "unknown"
+                    else
+                        tie.InnerException.Message
+
+                raise (BinlogExtractionFailure(sprintf "binlog replay failed: %s" inner))
             // Annotate events with deterministic ordinals based on order
             // emitted during replay (Replay fires handlers in build order).
             let snapshot =
-                collector.Snapshot ()
+                collector.Snapshot()
                 |> List.mapi (fun i ev -> { ev with EventOrdinal = int64 (i + 1) })
+
             { PreReplay = pre; Events = snapshot }
         with
         | :? BinlogExtractionFailure -> reraise ()
@@ -285,7 +302,9 @@ let private renderBuildContext (e: ExtractedEvent) : BuildContext option =
         || e.ProjectContextId.IsSome
         || e.TargetId.IsSome
         || e.TaskId.IsSome
-    if not any then None
+
+    if not any then
+        None
     else
         Some
             { NodeId = e.NodeId
@@ -309,12 +328,15 @@ let toOccurrences
             match e.File with
             | Some f -> Some(resolveThroughAliases aliases f)
             | None -> None
+
         let resolvedProject =
             match e.ProjectFile with
             | Some f -> Some(resolveThroughAliases aliases f)
             | None -> None
+
         let rawMsg = e.Message
         let normalizedMsg = normalizeMessage aliases rawMsg
+
         { SchemaVersion = OccurrenceSchemaVersion
           ExtractorVersion = extractorVersion
           CaptureId = captureId
@@ -368,8 +390,9 @@ let fromSyntheticEvents
     (events: ExtractedEvent list)
     : ExtractionResult * DiagnosticOccurrence list =
     let pre = hashBinlog path
+
     let ordered =
-        events
-        |> List.mapi (fun i ev -> { ev with EventOrdinal = int64 (i + 1) })
+        events |> List.mapi (fun i ev -> { ev with EventOrdinal = int64 (i + 1) })
+
     let occs = toOccurrences captureId aliases extractorVersion ordered
     { PreReplay = pre; Events = ordered }, occs
