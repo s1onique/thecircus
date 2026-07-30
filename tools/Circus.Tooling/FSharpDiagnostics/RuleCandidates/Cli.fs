@@ -151,8 +151,8 @@ let renderError (err: EngineError) : string =
     | EngineError.PublicationFailed details -> "Publication failed: " + details
     | EngineError.DuplicateInputIdentities (kind, ids) ->
         sprintf "Duplicate %A identities found: %s" kind (String.concat ", " ids)
-    | EngineError.EmptyInputIdentity (kind, idx) ->
-        sprintf "Empty %A identity at index %d" kind idx
+    | EngineError.InvalidInputIdentity (kind, idx, field, reason) ->
+        sprintf "Invalid %A identity at index %d: field '%s' is %s" kind idx field reason
     | EngineError.Internal msg -> "Internal error: " + msg
 
 // -----------------------------------------------------------------------------

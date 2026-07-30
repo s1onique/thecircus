@@ -24,10 +24,25 @@ type InputIdentityKind =
     | ChangeSetIdentity
     | VerificationEvidenceIdentity
 
-/// Represents a single transition's identity: episode + exact fingerprint.
-/// Used for duplicate detection across multi-transition episodes.
-let transitionIdentity (t: DiagnosticTransition) : string =
-    t.EpisodeId + "\x1F" + t.ExactFingerprint
+/// Typed transition identity using structural equality.
+[<StructuralEquality; StructuralComparison>]
+type TransitionIdentityKey = {
+    EpisodeId: string
+    ExactFingerprint: string
+}
+
+/// Creates a typed transition identity from a DiagnosticTransition.
+let makeTransitionIdentityKey (t: DiagnosticTransition) : TransitionIdentityKey =
+    { EpisodeId = t.EpisodeId
+      ExactFingerprint = t.ExactFingerprint }
+
+/// Renders a transition identity as a human-readable string.
+let renderTransitionIdentity (key: TransitionIdentityKey) : string =
+    sprintf "episode=%s;fingerprint=%s" key.EpisodeId key.ExactFingerprint
+
+/// String conversion for transition identity (used in duplicate detection).
+let transitionIdentityString (t: DiagnosticTransition) : string =
+    t.EpisodeId + "|" + t.ExactFingerprint
 
 type EngineError =
     | EpisodeLoadFailed of errors: string list
@@ -38,8 +53,42 @@ type EngineError =
     | CandidateGenerationFailed of details: string
     | PublicationFailed of details: string
     | DuplicateInputIdentities of kind: InputIdentityKind * identities: string list
-    | EmptyInputIdentity of kind: InputIdentityKind * itemIndex: int
+    | InvalidInputIdentity of kind: InputIdentityKind * itemIndex: int * field: string * reason: string
     | Internal of message: string
+
+// -----------------------------------------------------------------------------
+// Identity validation helpers
+// -----------------------------------------------------------------------------
+
+/// Validates that an episode identity is non-empty.
+let private validateEpisodeIdentity (index: int) (ep: RepairEpisode) : EngineError option =
+    if String.IsNullOrEmpty ep.EpisodeId then
+        Some(InvalidInputIdentity(EpisodeIdentity, index, "EpisodeId", "empty"))
+    else
+        None
+
+/// Validates that a transition identity is non-empty.
+let private validateTransitionIdentity (index: int) (t: DiagnosticTransition) : EngineError option =
+    if String.IsNullOrEmpty t.EpisodeId then
+        Some(InvalidInputIdentity(TransitionIdentity, index, "EpisodeId", "empty"))
+    elif String.IsNullOrEmpty t.ExactFingerprint then
+        Some(InvalidInputIdentity(TransitionIdentity, index, "ExactFingerprint", "empty"))
+    else
+        None
+
+/// Validates that a change-set identity is non-empty.
+let private validateChangeSetIdentity (index: int) (cs: GitChangeSet) : EngineError option =
+    if String.IsNullOrEmpty cs.ChangeSetId then
+        Some(InvalidInputIdentity(ChangeSetIdentity, index, "ChangeSetId", "empty"))
+    else
+        None
+
+/// Validates that a verification evidence identity is non-empty.
+let private validateVerificationIdentity (index: int) (lv: LocatedVerificationEvidence) : EngineError option =
+    if String.IsNullOrEmpty lv.Evidence.EvidenceId then
+        Some(InvalidInputIdentity(VerificationEvidenceIdentity, index, "EvidenceId", "empty"))
+    else
+        None
 
 // -----------------------------------------------------------------------------
 // Fixed prose templates
@@ -175,37 +224,83 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
     match runEpisodeEngine repoRoot defaultEngineOptions with
     | EpisodeEngineExecution.Failed failure -> Error(mapEpisodeEngineFailure failure)
     | EpisodeEngineExecution.Completed result ->
-        // Check episode duplicates
-        match checkForDuplicates EpisodeIdentity (fun (ep: RepairEpisode) -> ep.EpisodeId) result.RepairEpisodes with
+        // Validate episode identities are non-empty
+        match
+            result.RepairEpisodes
+            |> List.mapi (fun idx ep -> validateEpisodeIdentity idx ep)
+            |> List.choose id
+            |> function
+                | [] -> Ok()
+                | errs -> Error(errs.Head)
+        with
         | Error e -> Error e
         | Ok () ->
-            // Check transition duplicates by (EpisodeId, ExactFingerprint)
-            match checkForDuplicates TransitionIdentity transitionIdentity result.Transitions with
+            // Check episode duplicates
+            match checkForDuplicates EpisodeIdentity (fun (ep: RepairEpisode) -> ep.EpisodeId) result.RepairEpisodes with
             | Error e -> Error e
             | Ok () ->
-                // Build change-set map with duplicate detection
+                // Validate transition identities are non-empty
                 match
-                    buildUniqueMap
-                        ChangeSetIdentity
-                        (fun (cs: GitChangeSet) -> cs.ChangeSetId)
-                        result.ChangeSets
+                    result.Transitions
+                    |> List.mapi (fun idx t -> validateTransitionIdentity idx t)
+                    |> List.choose id
+                    |> function
+                        | [] -> Ok()
+                        | errs -> Error(errs.Head)
                 with
                 | Error e -> Error e
-                | Ok cssMap ->
-                    // Build verification map with duplicate detection
+                | Ok () ->
+                    // Check transition duplicates by (EpisodeId, ExactFingerprint)
                     match
-                        buildUniqueMap
-                            VerificationEvidenceIdentity
-                            (fun (lv: LocatedVerificationEvidence) -> lv.Evidence.EvidenceId)
-                            result.Verification
+                        checkForDuplicates TransitionIdentity transitionIdentityString result.Transitions
                     with
                     | Error e -> Error e
-                    | Ok evidMap ->
-                        Ok
-                            { Episodes = result.RepairEpisodes
-                              Transitions = result.Transitions
-                              ChangeSets = cssMap
-                              VerificationEvidence = evidMap }
+                    | Ok () ->
+                        // Validate change-set identities are non-empty
+                        match
+                            result.ChangeSets
+                            |> List.mapi (fun idx cs -> validateChangeSetIdentity idx cs)
+                            |> List.choose id
+                            |> function
+                                | [] -> Ok()
+                                | errs -> Error(errs.Head)
+                        with
+                        | Error e -> Error e
+                        | Ok () ->
+                            // Build change-set map with duplicate detection
+                            match
+                                buildUniqueMap
+                                    ChangeSetIdentity
+                                    (fun (cs: GitChangeSet) -> cs.ChangeSetId)
+                                    result.ChangeSets
+                            with
+                            | Error e -> Error e
+                            | Ok cssMap ->
+                                // Validate verification identities are non-empty
+                                match
+                                    result.Verification
+                                    |> List.mapi (fun idx lv -> validateVerificationIdentity idx lv)
+                                    |> List.choose id
+                                    |> function
+                                        | [] -> Ok()
+                                        | errs -> Error(errs.Head)
+                                with
+                                | Error e -> Error e
+                                | Ok () ->
+                                    // Build verification map with duplicate detection
+                                    match
+                                        buildUniqueMap
+                                            VerificationEvidenceIdentity
+                                            (fun (lv: LocatedVerificationEvidence) -> lv.Evidence.EvidenceId)
+                                            result.Verification
+                                    with
+                                    | Error e -> Error e
+                                    | Ok evidMap ->
+                                        Ok
+                                            { Episodes = result.RepairEpisodes
+                                              Transitions = result.Transitions
+                                              ChangeSets = cssMap
+                                              VerificationEvidence = evidMap }
 
 // Single entry point - no backward-compatible wrappers to avoid multiple engine calls
 let loadAllInputs (repoRoot: string) : Result<RuleCandidateInputs, EngineError> =
