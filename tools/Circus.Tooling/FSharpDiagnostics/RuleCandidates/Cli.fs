@@ -149,6 +149,8 @@ let renderError (err: EngineError) : string =
     | EngineError.NoEligibleEpisodes -> "No eligible episodes for candidate extraction"
     | EngineError.CandidateGenerationFailed details -> "Candidate generation failed: " + details
     | EngineError.PublicationFailed details -> "Publication failed: " + details
+    | EngineError.DuplicateInputIdentities (kind, ids) ->
+        sprintf "Duplicate %A identities found: %s" kind (String.concat ", " ids)
     | EngineError.Internal msg -> "Internal error: " + msg
 
 // -----------------------------------------------------------------------------

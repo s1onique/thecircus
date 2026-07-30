@@ -18,6 +18,12 @@ open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Serialization
 // Engine errors
 // -----------------------------------------------------------------------------
 
+type InputIdentityKind =
+    | EpisodeIdentity
+    | TransitionIdentity
+    | ChangeSetIdentity
+    | VerificationEvidenceIdentity
+
 type EngineError =
     | EpisodeLoadFailed of errors: string list
     | VerificationEvidenceLoadFailed of errors: string list
@@ -26,6 +32,7 @@ type EngineError =
     | NoEligibleEpisodes
     | CandidateGenerationFailed of details: string
     | PublicationFailed of details: string
+    | DuplicateInputIdentities of kind: InputIdentityKind * identities: string list
     | Internal of message: string
 
 // -----------------------------------------------------------------------------
@@ -99,24 +106,32 @@ let publishCandidates (repoRoot: string) (result: ExtractionResult) : bool =
 // Duplicate detection helper
 // -----------------------------------------------------------------------------
 
-/// Fails if duplicate identities are found, otherwise returns map.
-let private buildUniqueMap
+/// Fails with typed error if duplicate identities are found.
+let private checkForDuplicates
+    (kind: InputIdentityKind)
     (identity: 'a -> string)
     (items: 'a list)
-    : Result<Map<string, 'a>, EngineError> =
+    : Result<unit, EngineError> =
     let duplicates =
         items
         |> List.countBy identity
         |> List.filter (fun (_, count) -> count > 1)
 
     if not duplicates.IsEmpty then
-        let dupList = duplicates |> List.map fst |> String.concat ", "
-        Error(
-            EngineError.Internal(
-                sprintf "Duplicate identities found: %s" dupList
-            )
-        )
+        let dupList = duplicates |> List.map fst |> List.sort |> String.concat ", "
+        Error(DuplicateInputIdentities(kind, dupList.Split(',') |> Array.toList))
     else
+        Ok()
+
+/// Builds a unique map, first checking for duplicates.
+let private buildUniqueMap
+    (kind: InputIdentityKind)
+    (identity: 'a -> string)
+    (items: 'a list)
+    : Result<Map<string, 'a>, EngineError> =
+    match checkForDuplicates kind identity items with
+    | Error e -> Error e
+    | Ok () ->
         items
         |> List.map (fun item -> identity item, item)
         |> Map.ofList
@@ -149,22 +164,37 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
     match runEpisodeEngine repoRoot defaultEngineOptions with
     | EpisodeEngineExecution.Failed failure -> Error(mapEpisodeEngineFailure failure)
     | EpisodeEngineExecution.Completed result ->
-        // Build maps with duplicate detection
-        match buildUniqueMap (fun (cs: GitChangeSet) -> cs.ChangeSetId) result.ChangeSets with
+        // Check episode duplicates
+        match checkForDuplicates EpisodeIdentity (fun (ep: RepairEpisode) -> ep.EpisodeId) result.RepairEpisodes with
         | Error e -> Error e
-        | Ok cssMap ->
-            match
-                buildUniqueMap
-                    (fun (lv: LocatedVerificationEvidence) -> lv.Evidence.EvidenceId)
-                    result.Verification
-            with
+        | Ok () ->
+            // Check transition duplicates by EpisodeId
+            match checkForDuplicates TransitionIdentity (fun (t: DiagnosticTransition) -> t.EpisodeId) result.Transitions with
             | Error e -> Error e
-            | Ok evidMap ->
-                Ok
-                    { Episodes = result.RepairEpisodes
-                      Transitions = result.Transitions
-                      ChangeSets = cssMap
-                      VerificationEvidence = evidMap }
+            | Ok () ->
+                // Build change-set map with duplicate detection
+                match
+                    buildUniqueMap
+                        ChangeSetIdentity
+                        (fun (cs: GitChangeSet) -> cs.ChangeSetId)
+                        result.ChangeSets
+                with
+                | Error e -> Error e
+                | Ok cssMap ->
+                    // Build verification map with duplicate detection
+                    match
+                        buildUniqueMap
+                            VerificationEvidenceIdentity
+                            (fun (lv: LocatedVerificationEvidence) -> lv.Evidence.EvidenceId)
+                            result.Verification
+                    with
+                    | Error e -> Error e
+                    | Ok evidMap ->
+                        Ok
+                            { Episodes = result.RepairEpisodes
+                              Transitions = result.Transitions
+                              ChangeSets = cssMap
+                              VerificationEvidence = evidMap }
 
 // Single entry point - no backward-compatible wrappers to avoid multiple engine calls
 let loadAllInputs (repoRoot: string) : Result<RuleCandidateInputs, EngineError> =
