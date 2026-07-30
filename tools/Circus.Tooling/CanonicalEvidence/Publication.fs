@@ -222,16 +222,31 @@ type CleanupOutcome =
     | CleanupSucceeded
     | CleanupFailed of CleanupFailure
 
+/// Staging directory state after publication attempt.
+type StagingState =
+    | StagingRemoved
+    | StagingMayRemain
+
 /// Final publication outcome with typed primary and cleanup separation.
 type PublicationOutcome = {
+    /// Overall success: both primary publication and cleanup succeeded.
     Success: bool
     SnapshotPath: string
     RecordsCount: int
     AggregateSha256: string
     PreviousSnapshotPreserved: bool
+    /// State of the live snapshot after publication attempt.
     LiveSnapshotState: LiveSnapshotState
+    /// State of the staging directory after publication attempt.
+    StagingState: StagingState
+    /// Primary publication failure, if any.
     Failure: PublicationFailure option
+    /// Cleanup failure, if any. Never masks primary failure.
     CleanupFailure: CleanupFailure option
+    /// Number of cleanup invocations (should be exactly 1 for correct behavior).
+    CleanupInvocationCount: int
+    /// Number of atomic replacement invocations (0 or 1).
+    ReplacementInvocationCount: int
 }
 
 /// Legacy field for backward compatibility: maps LiveSnapshotState to boolean.
@@ -417,7 +432,7 @@ let publishSnapshot (outputRoot: string) (records: CanonicalExecutionEvidence li
         Directory.Exists dir
 
     if not (ensureOutputDir outputRoot) then
-        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None }
+        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
     else
         let previousSnapshot = snapshotExistingFiles outputRoot snapshotFiles
         let guid = Guid.NewGuid().ToString("n")
@@ -451,7 +466,7 @@ let publishSnapshot (outputRoot: string) (records: CanonicalExecutionEvidence li
 
             if not validation.Valid then
                 safeDeleteDir stagingDir
-                { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; Failure = Some(SnapshotValidationFailed validation.Issues); CleanupFailure = None }
+                { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotValidationFailed validation.Issues); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
             else
                 try
                     for f in snapshotFiles do
@@ -461,15 +476,15 @@ let publishSnapshot (outputRoot: string) (records: CanonicalExecutionEvidence li
                             if File.Exists dst then File.Delete dst
                             File.Move(src, dst)
                     safeDeleteDir stagingDir
-                    { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; Failure = None; CleanupFailure = None }
+                    { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = None; CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 1 }
                 with ex ->
                     let restored = restoreSnapshot outputRoot previousSnapshot
                     safeDeleteDir stagingDir
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message)); CleanupFailure = None }
+                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 1 }
         with ex ->
             let restored = restoreSnapshot outputRoot previousSnapshot
             if Directory.Exists stagingDir then safeDeleteDir stagingDir
-            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message)); CleanupFailure = None }
+            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) ex.Message)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
 
 /// Publish a canonical evidence snapshot using the exact provider-computed compatibility projection.
 /// This ensures single compatibility authority: the provider owns the projection bytes and
@@ -489,7 +504,7 @@ let publishSnapshotWithCompatibilityProjection
         Directory.Exists dir
 
     if not (ensureOutputDir outputRoot) then
-        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None }
+        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
     else
         let previousSnapshot = snapshotExistingFiles outputRoot snapshotFiles
         let guid = Guid.NewGuid().ToString("n")
@@ -536,15 +551,15 @@ let publishSnapshotWithCompatibilityProjection
             match parsedCompat with
             | Error detail ->
                 safeDeleteDir stagingDir
-                { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; Failure = Some(SnapshotCompatibilityWriteFailed detail); CleanupFailure = None }
+                { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed detail); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
             | Ok parsed ->
                 // Verify commit/tree match aggregate
                 if parsed.TestedCommitOid <> aggregate.SubjectCommitOid then
                     safeDeleteDir stagingDir
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; Failure = Some(SnapshotCompatibilityWriteFailed(sprintf "commit mismatch: projection=%s aggregate=%s" parsed.TestedCommitOid aggregate.SubjectCommitOid)); CleanupFailure = None }
+                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed(sprintf "commit mismatch: projection=%s aggregate=%s" parsed.TestedCommitOid aggregate.SubjectCommitOid)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
                 elif parsed.TestedTreeOid <> aggregate.SubjectTreeOid then
                     safeDeleteDir stagingDir
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; Failure = Some(SnapshotCompatibilityWriteFailed(sprintf "tree mismatch: projection=%s aggregate=%s" parsed.TestedTreeOid aggregate.SubjectTreeOid)); CleanupFailure = None }
+                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotCompatibilityWriteFailed(sprintf "tree mismatch: projection=%s aggregate=%s" parsed.TestedTreeOid aggregate.SubjectTreeOid)); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
                 else
                     // Validate snapshot
                     let snap = { Records = records; Aggregate = aggregate; Artifacts = []; Timestamp = "" }
@@ -552,7 +567,7 @@ let publishSnapshotWithCompatibilityProjection
 
                     if not validation.Valid then
                         safeDeleteDir stagingDir
-                        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; Failure = Some(SnapshotValidationFailed validation.Issues); CleanupFailure = None }
+                        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = ""; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = Some(SnapshotValidationFailed validation.Issues); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
                     else
                         try
                             for f in snapshotFiles do
@@ -562,17 +577,17 @@ let publishSnapshotWithCompatibilityProjection
                                     if File.Exists dst then File.Delete dst
                                     File.Move(src, dst)
                             safeDeleteDir stagingDir
-                            { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; Failure = None; CleanupFailure = None }
+                            { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha; PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved; Failure = None; CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 1 }
                         with ex ->
                             let restored = restoreSnapshot outputRoot previousSnapshot
                             safeDeleteDir stagingDir
                             { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-                              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message))); CleanupFailure = None }
+                              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message))); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 1 }
         with ex ->
             let restored = restoreSnapshot outputRoot previousSnapshot
             if Directory.Exists stagingDir then safeDeleteDir stagingDir
             { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message))); CleanupFailure = None }
+              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged); StagingState = StagingRemoved; Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message))); CleanupFailure = None; CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
 
 // -----------------------------------------------------------------------------
 // Staged round-trip validation
@@ -900,35 +915,32 @@ let private validateCompatibilityEvidence
                     ()
     List.ofSeq failures
 
-/// Stage and publish a snapshot with full round-trip validation.
+// =============================================================================
+// Dependency-injected staged publication with typed cleanup boundary
+// =============================================================================
+
+/// Stage and publish a snapshot with dependency injection for cleanup.
 ///
-/// This function implements the complete staged publication pipeline:
-///   1. Render all four files to a staging directory
-///   2. Optionally apply mutation (for corruption testing)
-///   3. Reread all files from disk using canonical UTF-8
-///   4. Validate each file strictly
-///   5. Verify consistency across files
-///   6. Atomically replace the live snapshot or preserve on failure
-///
-/// The mutationFn parameter allows callers to modify staged files before
-/// validation. This enables corruption testing. Pass None for production.
-let stageAndPublishSnapshot
+/// This version uses a single terminal cleanup boundary via invokeCleanup,
+/// enabling exactly-once cleanup semantics and test injection.
+let rec stageAndPublishSnapshotWithDependencies
+    (dependencies: CleanupDependencies)
     (outputRoot: string)
     (records: CanonicalExecutionEvidence list)
     (aggregate: CanonicalExecutionAggregate)
     (compatibilityProjection: CanonicalEvidence)
-    (mutationFn: (string -> Result<unit, string>) option)
+    (mutationHook: (string -> Result<unit, string>) option)
     : PublicationOutcome =
     let snapshotFiles = ["records.jsonl"; "aggregate.json"; "artifacts.jsonl"; "canonical-evidence.json"]
     let recordsCount = List.length records
     let semanticSha = aggregate.SemanticSha256
 
+    // External counters for exactly-once proof
+    let cleanupCallCount = ResizeArray()
+    let replacementCallCount = ResizeArray()
+
     // Snapshot existing files for rollback
     let previousSnapshot = snapshotExistingFiles outputRoot snapshotFiles
-
-    // Check if live snapshot may have changed during staging
-    let liveSnapshotMayHaveChanged () =
-        snapshotExistingFiles outputRoot snapshotFiles <> previousSnapshot
 
     // Ensure output directory
     let ensureOutputDir dir =
@@ -937,9 +949,9 @@ let stageAndPublishSnapshot
 
     if not (ensureOutputDir outputRoot) then
         { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-          PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
-          Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None }
-
+          PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged; StagingState = StagingRemoved;
+          Failure = Some(SnapshotStagingFailed "cannot create output directory"); CleanupFailure = None;
+          CleanupInvocationCount = 0; ReplacementInvocationCount = 0 }
     else
         // Create staging directory with unique name
         let guid = Guid.NewGuid().ToString("n")
@@ -975,304 +987,210 @@ let stageAndPublishSnapshot
             File.WriteAllBytes(Path.Combine(stagingDir, "canonical-evidence.json"), compatBytes)
 
             // Phase 2: Mutation seam - run mutation if provided
-            match mutationFn with
+            match mutationHook with
             | Some mutateFn ->
                 match mutateFn stagingDir with
                 | Result.Error detail ->
-                    safeDeleteDir stagingDir
+                    // Single terminal cleanup boundary
+                    let cleanupFailure = invokeCleanup dependencies stagingDir
+                    cleanupCallCount.Add(1)
                     { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
                       PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
-                      Failure = Some(SnapshotStagingFailed detail); CleanupFailure = None }
+                      StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
+                      Failure = Some(SnapshotStagingFailed detail); CleanupFailure = cleanupFailure;
+                      CleanupInvocationCount = cleanupCallCount.Count; ReplacementInvocationCount = replacementCallCount.Count }
                 | Result.Ok () ->
-                    // Mutation succeeded, continue with validation
-                    // Phase 3: Reread all four files from disk
-                    let recordsDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "records.jsonl"))
-                    let aggregateDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "aggregate.json"))
-                    let artifactsDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "artifacts.jsonl"))
-                    let compatDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "canonical-evidence.json"))
-
-                    // Phase 4-8: Strict validation
-                    let allFailures = ResizeArray()
-
-                    // Validate records.jsonl
-                    match recordsDiskBytes with
-                    | Result.Error detail ->
-                        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("records.jsonl", detail))
-                    | Ok bytes ->
-                        let recordFailures = parseAndValidateRecordsJsonl "records.jsonl" bytes
-                        allFailures.AddRange(recordFailures)
-
-                    // Parse records for later validation (collect from previous step)
-                    // CRITICAL: If records parsing fails, do NOT derive aggregate from an empty list.
-                    // Aggregate derivation is SKIPPED when record parsing fails - this prevents
-                    // parse errors from silently creating false aggregate mismatches.
-                    let parsedRecordsResult =
-                        match recordsDiskBytes with
-                        | Result.Ok bytes ->
-                            let text = strictUtf8.GetString bytes
-                            let normalizedText = text.Replace("\r\n", "\n")
-                            let lines = normalizedText.Split([|'\n'|], StringSplitOptions.None)
-                            let parsed = ResizeArray()
-                            let hadParseErrors = ref false
-                            for line in lines do
-                                if not (String.IsNullOrEmpty line) then
-                                    match parseEvidenceWireJsonStrict line with
-                                    | Result.Ok r -> parsed.Add(r)
-                                    | Result.Error _ -> hadParseErrors := true
-                            if !hadParseErrors then
-                                Error "record parsing had errors, skipping aggregate derivation"
-                            else
-                                Ok(List.ofSeq parsed)
-                        | Result.Error _ -> Error "record read failed, skipping aggregate derivation"
-
-                    // Validate aggregate.json
-                    // Only derive aggregate if all records parsed successfully.
-                    // On parse failure, aggregate validation is SKIPPED - this is the correct
-                    // behavior: parse failures produce RecordParseFailed, not field mismatches.
-                    match aggregateDiskBytes with
-                    | Result.Error detail ->
-                        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
-                    | Ok bytes ->
-                        match parsedRecordsResult with
-                        | Error _ ->
-                            // Records had parse errors - aggregate derivation is skipped.
-                            // The RecordParseFailed failures are already in allFailures.
-                            // We do NOT run aggregate comparison against an empty/incomplete record list.
-                            ()
-                        | Ok parsedRecords ->
-                            let recomputedAggregate =
-                                computeAggregate aggregate.SubjectCommitOid aggregate.SubjectTreeOid parsedRecords
-                                |> finalizeAggregate
-                            let aggregateFailures = parseAndValidateAggregateJson "aggregate.json" bytes recomputedAggregate
-                            allFailures.AddRange(aggregateFailures)
-
-                    // Validate artifacts.jsonl
-                    match artifactsDiskBytes, recordsDiskBytes, aggregateDiskBytes, compatDiskBytes with
-                    | Result.Ok artBytes, Result.Ok recBytes, Result.Ok aggBytes, Result.Ok comBytes ->
-                        let artifactFailures =
-                            parseAndValidateArtifactsJsonl "artifacts.jsonl" artBytes
-                                "records.jsonl" recBytes "aggregate.json" aggBytes
-                                "canonical-evidence.json" comBytes
-                        allFailures.AddRange(artifactFailures)
-                    | Result.Error detail, _, _, _ ->
-                        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("artifacts.jsonl", detail))
-                    | _, Result.Error detail, _, _ ->
-                        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("records.jsonl", detail))
-                    | _, _, Result.Error detail, _ ->
-                        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
-                    | _, _, _, Result.Error detail ->
-                        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
-
-                    // Validate compatibility evidence against records
-                    // Only validate if records parsed successfully
-                    match compatDiskBytes with
-                    | Result.Error detail ->
-                        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
-                    | Ok bytes ->
-                        match parsedRecordsResult with
-                        | Error _ ->
-                            // Records had parse errors - compatibility validation with records is skipped
-                            ()
-                        | Ok parsedRecords ->
-                            let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes compatibilityProjection parsedRecords aggregate
-                            allFailures.AddRange(compatFailures)
-
-                    // Phase 9: Handle validation result
-                    if allFailures.Count > 0 then
-                        // Attempt cleanup, preserving cleanup failure details
-                        let mutable cleanupFailure = None
-                        try
-                            safeDeleteDir stagingDir
-                        with ex ->
-                            cleanupFailure <- Some (mkCleanupFailure (stagingDir) (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)))
-
-                        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-                          PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
-                          Failure = Some(SnapshotStagedValidationFailed(List.ofSeq allFailures));
-                          CleanupFailure = cleanupFailure }
-                    else
-                        // Phase 10: Atomically replace live snapshot
-                        try
-                            let mutable moveFailed = false
-                            for f in snapshotFiles do
-                                let src = Path.Combine(stagingDir, f)
-                                let dst = Path.Combine(outputRoot, f)
-                                if File.Exists src then
-                                    if File.Exists dst then File.Delete dst
-                                    File.Move(src, dst)
-                                elif File.Exists dst then
-                                    // Missing expected file in staging
-                                    moveFailed <- true
-
-                            if moveFailed then
-                                raise (IOException("not all expected files present in staging"))
-
-                            safeDeleteDir stagingDir
-                            { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha;
-                              PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
-                              Failure = None; CleanupFailure = None }
-                        with ex ->
-                            // Rollback to previous snapshot
-                            let restored = restoreSnapshot outputRoot previousSnapshot
-                            safeDeleteDir stagingDir
-                            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-                              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged);
-                              Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)));
-                              CleanupFailure = None }
+                    // Continue to validation phase
+                    stageAndPublishValidationWithDeps dependencies stagingDir snapshotFiles recordsCount semanticSha
+                        previousSnapshot outputRoot compatibilityProjection records aggregate None
             | None ->
-                // No mutation hook, continue with validation
-                // Phase 3: Reread all four files from disk
-                let recordsDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "records.jsonl"))
-                let aggregateDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "aggregate.json"))
-                let artifactsDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "artifacts.jsonl"))
-                let compatDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "canonical-evidence.json"))
-
-                // Phase 4-8: Strict validation
-                let allFailures = ResizeArray()
-
-                // Validate records.jsonl
-                match recordsDiskBytes with
-                | Result.Error detail ->
-                    allFailures.Add(StagedSnapshotFailure.InvalidUtf8("records.jsonl", detail))
-                | Ok bytes ->
-                    let recordFailures = parseAndValidateRecordsJsonl "records.jsonl" bytes
-                    allFailures.AddRange(recordFailures)
-
-                // Parse records for later validation (collect from previous step)
-                // CRITICAL: If records parsing fails, do NOT derive aggregate from an empty list.
-                // Aggregate derivation is SKIPPED when record parsing fails - this prevents
-                // parse errors from silently creating false aggregate mismatches.
-                let parsedRecordsResult =
-                    match recordsDiskBytes with
-                    | Result.Ok bytes ->
-                        let text = strictUtf8.GetString bytes
-                        let normalizedText = text.Replace("\r\n", "\n")
-                        let lines = normalizedText.Split([|'\n'|], StringSplitOptions.None)
-                        let parsed = ResizeArray()
-                        let hadParseErrors = ref false
-                        for line in lines do
-                            if not (String.IsNullOrEmpty line) then
-                                match parseEvidenceWireJsonStrict line with
-                                | Result.Ok r -> parsed.Add(r)
-                                | Result.Error _ -> hadParseErrors := true
-                        if !hadParseErrors then
-                            Error "record parsing had errors, skipping aggregate derivation"
-                        else
-                            Ok(List.ofSeq parsed)
-                    | Result.Error _ -> Error "record read failed, skipping aggregate derivation"
-
-                // Validate aggregate.json
-                // Only derive aggregate if all records parsed successfully.
-                // On parse failure, aggregate validation is SKIPPED - this is the correct
-                // behavior: parse failures produce RecordParseFailed, not field mismatches.
-                match aggregateDiskBytes with
-                | Result.Error detail ->
-                    allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
-                | Ok bytes ->
-                    match parsedRecordsResult with
-                    | Error _ ->
-                        // Records had parse errors - aggregate derivation is skipped.
-                        // The RecordParseFailed failures are already in allFailures.
-                        // We do NOT run aggregate comparison against an empty/incomplete record list.
-                        ()
-                    | Ok parsedRecords ->
-                        let recomputedAggregate =
-                            computeAggregate aggregate.SubjectCommitOid aggregate.SubjectTreeOid parsedRecords
-                            |> finalizeAggregate
-                        let aggregateFailures = parseAndValidateAggregateJson "aggregate.json" bytes recomputedAggregate
-                        allFailures.AddRange(aggregateFailures)
-
-                // Validate artifacts.jsonl
-                match artifactsDiskBytes, recordsDiskBytes, aggregateDiskBytes, compatDiskBytes with
-                | Result.Ok artBytes, Result.Ok recBytes, Result.Ok aggBytes, Result.Ok comBytes ->
-                    let artifactFailures =
-                        parseAndValidateArtifactsJsonl "artifacts.jsonl" artBytes
-                            "records.jsonl" recBytes "aggregate.json" aggBytes
-                            "canonical-evidence.json" comBytes
-                    allFailures.AddRange(artifactFailures)
-                | Result.Error detail, _, _, _ ->
-                    allFailures.Add(StagedSnapshotFailure.InvalidUtf8("artifacts.jsonl", detail))
-                | _, Result.Error detail, _, _ ->
-                    allFailures.Add(StagedSnapshotFailure.InvalidUtf8("records.jsonl", detail))
-                | _, _, Result.Error detail, _ ->
-                    allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
-                | _, _, _, Result.Error detail ->
-                    allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
-
-                // Validate compatibility evidence against records
-                // Only validate if records parsed successfully
-                match compatDiskBytes with
-                | Result.Error detail ->
-                    allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
-                | Ok bytes ->
-                    match parsedRecordsResult with
-                    | Error _ ->
-                        // Records had parse errors - compatibility validation with records is skipped
-                        ()
-                    | Ok parsedRecords ->
-                        let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes compatibilityProjection parsedRecords aggregate
-                        allFailures.AddRange(compatFailures)
-
-                // Phase 9: Handle validation result
-                if allFailures.Count > 0 then
-                    // Attempt cleanup, preserving cleanup failure details
-                    let mutable cleanupFailure = None
-                    try
-                        safeDeleteDir stagingDir
-                    with ex ->
-                        cleanupFailure <- Some (mkCleanupFailure (stagingDir) (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)))
-
-                    { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-                      PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
-                      Failure = Some(SnapshotStagedValidationFailed(List.ofSeq allFailures));
-                      CleanupFailure = cleanupFailure }
-                else
-                    // Phase 10: Atomically replace live snapshot
-                    try
-                        let mutable moveFailed = false
-                        for f in snapshotFiles do
-                            let src = Path.Combine(stagingDir, f)
-                            let dst = Path.Combine(outputRoot, f)
-                            if File.Exists src then
-                                if File.Exists dst then File.Delete dst
-                                File.Move(src, dst)
-                            elif File.Exists dst then
-                                // Missing expected file in staging
-                                moveFailed <- true
-
-                        if moveFailed then
-                            raise (IOException("not all expected files present in staging"))
-
-                        safeDeleteDir stagingDir
-                        { Success = true; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha;
-                          PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
-                          Failure = None; CleanupFailure = None }
-                    with ex ->
-                        // Rollback to previous snapshot
-                        let restored = restoreSnapshot outputRoot previousSnapshot
-                        safeDeleteDir stagingDir
-                        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
-                          PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged);
-                          Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)));
-                          CleanupFailure = None }
+                // Continue to validation phase with no mutation
+                stageAndPublishValidationWithDeps dependencies stagingDir snapshotFiles recordsCount semanticSha
+                    previousSnapshot outputRoot compatibilityProjection records aggregate None
         with ex ->
             // Attempt cleanup, preserving cleanup failure details
-            let mutable cleanupFailure = None
-            try
-                safeDeleteDir stagingDir
-            with ex2 ->
-                cleanupFailure <- Some (mkCleanupFailure (stagingDir) (sprintf "%s: %s" (ex2.GetType().Name) (ex2.Message)))
+            let cleanupFailure = invokeCleanup dependencies stagingDir
+            cleanupCallCount.Add(1)
             { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
               PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
+              StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
               Failure = Some(SnapshotStagingFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)));
-              CleanupFailure = cleanupFailure }
+              CleanupFailure = cleanupFailure;
+              CleanupInvocationCount = cleanupCallCount.Count; ReplacementInvocationCount = replacementCallCount.Count }
+
+/// Internal validation phase with dependency injection.
+/// Executes phases 3-10 with proper cleanup boundary.
+and stageAndPublishValidationWithDeps
+    (dependencies: CleanupDependencies)
+    (stagingDir: string)
+    (snapshotFiles: string list)
+    (recordsCount: int)
+    (semanticSha: string)
+    (previousSnapshot: Map<string, byte array option>)
+    (outputRoot: string)
+    (compatibilityProjection: CanonicalEvidence)
+    (records: CanonicalExecutionEvidence list)
+    (aggregate: CanonicalExecutionAggregate)
+    (existingFailures: ResizeArray<StagedSnapshotFailure> option)
+    : PublicationOutcome =
+    let cleanupCallCount = ResizeArray()
+    let replacementCallCount = ResizeArray()
+
+    // Phase 3: Reread all four files from disk
+    let recordsDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "records.jsonl"))
+    let aggregateDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "aggregate.json"))
+    let artifactsDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "artifacts.jsonl"))
+    let compatDiskBytes = readFileCanonicalUtf8 (Path.Combine(stagingDir, "canonical-evidence.json"))
+
+    // Phase 4-8: Strict validation
+    let allFailures =
+        match existingFailures with
+        | Some existing -> existing
+        | None -> ResizeArray()
+
+    // Validate records.jsonl
+    match recordsDiskBytes with
+    | Result.Error detail ->
+        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("records.jsonl", detail))
+    | Ok bytes ->
+        let recordFailures = parseAndValidateRecordsJsonl "records.jsonl" bytes
+        allFailures.AddRange(recordFailures)
+
+    // Parse records for later validation
+    let parsedRecordsResult =
+        match recordsDiskBytes with
+        | Result.Ok bytes ->
+            let text = strictUtf8.GetString bytes
+            let normalizedText = text.Replace("\r\n", "\n")
+            let lines = normalizedText.Split([|'\n'|], StringSplitOptions.None)
+            let parsed = ResizeArray()
+            let hadParseErrors = ref false
+            for line in lines do
+                if not (String.IsNullOrEmpty line) then
+                    match parseEvidenceWireJsonStrict line with
+                    | Result.Ok r -> parsed.Add(r)
+                    | Result.Error _ -> hadParseErrors := true
+            // FIX P0: Use .Value to read reference cell, and fix condition
+            if hadParseErrors.Value then
+                Error "record parsing had errors, skipping aggregate derivation"
+            else
+                Ok(List.ofSeq parsed)
+        | Result.Error _ -> Error "record read failed, skipping aggregate derivation"
+
+    // Validate aggregate.json
+    match aggregateDiskBytes with
+    | Result.Error detail ->
+        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
+    | Ok bytes ->
+        match parsedRecordsResult with
+        | Error _ -> ()
+        | Ok parsedRecords ->
+            let recomputedAggregate =
+                computeAggregate aggregate.SubjectCommitOid aggregate.SubjectTreeOid parsedRecords
+                |> finalizeAggregate
+            let aggregateFailures = parseAndValidateAggregateJson "aggregate.json" bytes recomputedAggregate
+            allFailures.AddRange(aggregateFailures)
+
+    // Validate artifacts.jsonl
+    match artifactsDiskBytes, recordsDiskBytes, aggregateDiskBytes, compatDiskBytes with
+    | Result.Ok artBytes, Result.Ok recBytes, Result.Ok aggBytes, Result.Ok comBytes ->
+        let artifactFailures =
+            parseAndValidateArtifactsJsonl "artifacts.jsonl" artBytes
+                "records.jsonl" recBytes "aggregate.json" aggBytes
+                "canonical-evidence.json" comBytes
+        allFailures.AddRange(artifactFailures)
+    | Result.Error detail, _, _, _ ->
+        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("artifacts.jsonl", detail))
+    | _, Result.Error detail, _, _ ->
+        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("records.jsonl", detail))
+    | _, _, Result.Error detail, _ ->
+        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("aggregate.json", detail))
+    | _, _, _, Result.Error detail ->
+        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
+
+    // Validate compatibility evidence
+    match compatDiskBytes with
+    | Result.Error detail ->
+        allFailures.Add(StagedSnapshotFailure.InvalidUtf8("canonical-evidence.json", detail))
+    | Ok bytes ->
+        match parsedRecordsResult with
+        | Error _ -> ()
+        | Ok parsedRecords ->
+            let compatFailures = validateCompatibilityEvidence "canonical-evidence.json" bytes compatibilityProjection parsedRecords aggregate
+            allFailures.AddRange(compatFailures)
+
+    // Phase 9: Handle validation result with single terminal cleanup boundary
+    if allFailures.Count > 0 then
+        let cleanupFailure = invokeCleanup dependencies stagingDir
+        cleanupCallCount.Add(1)
+        { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
+          PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotUnchanged;
+          StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
+          Failure = Some(SnapshotStagedValidationFailed(List.ofSeq allFailures));
+          CleanupFailure = cleanupFailure;
+          CleanupInvocationCount = cleanupCallCount.Count; ReplacementInvocationCount = replacementCallCount.Count }
+    else
+        // Phase 10: Atomically replace live snapshot
+        try
+            replacementCallCount.Add(1)
+            let mutable moveFailed = false
+            for f in snapshotFiles do
+                let src = Path.Combine(stagingDir, f)
+                let dst = Path.Combine(outputRoot, f)
+                if File.Exists src then
+                    if File.Exists dst then File.Delete dst
+                    File.Move(src, dst)
+                elif File.Exists dst then
+                    moveFailed <- true
+
+            if moveFailed then
+                raise (IOException("not all expected files present in staging"))
+
+            // Single terminal cleanup boundary after successful replacement
+            let cleanupFailure = invokeCleanup dependencies stagingDir
+            cleanupCallCount.Add(1)
+            // FIX P0: Primary did NOT fail - cleanup failure should NOT be in Failure field.
+            // Failure = None because publication succeeded. CleanupFailure carries the cleanup error.
+            { Success = cleanupFailure.IsNone; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = semanticSha;
+              PreviousSnapshotPreserved = true; LiveSnapshotState = LiveSnapshotReplaced;
+              StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
+              Failure = None; CleanupFailure = cleanupFailure;
+              CleanupInvocationCount = cleanupCallCount.Count; ReplacementInvocationCount = replacementCallCount.Count }
+        with ex ->
+            // Rollback to previous snapshot
+            let restored = restoreSnapshot outputRoot previousSnapshot
+            // Single terminal cleanup boundary
+            let cleanupFailure = invokeCleanup dependencies stagingDir
+            cleanupCallCount.Add(1)
+            { Success = false; SnapshotPath = outputRoot; RecordsCount = recordsCount; AggregateSha256 = "";
+              PreviousSnapshotPreserved = restored; LiveSnapshotState = (if restored then LiveSnapshotUnchanged else LiveSnapshotMayHaveChanged);
+              StagingState = (if cleanupFailure.IsNone then StagingRemoved else StagingMayRemain);
+              Failure = Some(SnapshotReplacementFailed (sprintf "%s: %s" (ex.GetType().Name) (ex.Message)));
+              CleanupFailure = cleanupFailure;
+              CleanupInvocationCount = cleanupCallCount.Count; ReplacementInvocationCount = replacementCallCount.Count }
 
 /// Publish a snapshot using the staged validation pipeline.
-/// This is the production entry point that uses staged round-trip validation.
+/// This is the production entry point that uses staged round-trip validation
+/// with dependency injection for proper cleanup boundary semantics.
 let publishStagedSnapshot
     (outputRoot: string)
     (records: CanonicalExecutionEvidence list)
     (aggregate: CanonicalExecutionAggregate)
     (compatibilityProjection: CanonicalEvidence)
     : PublicationOutcome =
-    stageAndPublishSnapshot outputRoot records aggregate compatibilityProjection None
+    stageAndPublishSnapshotWithDependencies defaultCleanupDependencies outputRoot records aggregate compatibilityProjection None
+
+/// Stage and publish a snapshot with full round-trip validation.
+///
+/// This function delegates to stageAndPublishSnapshotWithDependencies for
+/// consistent cleanup boundary semantics. The mutationFn parameter allows
+/// callers to modify staged files before validation for corruption testing.
+/// Pass None for production use.
+let stageAndPublishSnapshot
+    (outputRoot: string)
+    (records: CanonicalExecutionEvidence list)
+    (aggregate: CanonicalExecutionAggregate)
+    (compatibilityProjection: CanonicalEvidence)
+    (mutationFn: (string -> Result<unit, string>) option)
+    : PublicationOutcome =
+    stageAndPublishSnapshotWithDependencies defaultCleanupDependencies outputRoot records aggregate compatibilityProjection mutationFn
