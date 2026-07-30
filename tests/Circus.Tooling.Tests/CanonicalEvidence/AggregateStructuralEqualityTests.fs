@@ -5,11 +5,14 @@ module Circus.Tooling.Tests.CanonicalEvidence.AggregateStructuralEqualityTests
 //
 // ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER01-REAL-RECORD-PIPELINE01-CORRECTION07-CORRECTION04
 //
-// Tests for exact aggregate structural equality:
+// Tests for exact aggregate structural equality using production comparator:
 //   - Pure typed comparison authority covers every aggregate field
-//   - Record IDs list comparison (by exact content, not order)
-//   - Every aggregate mutation is rejected
+//   - RecordIds comparison is exact and order-sensitive
+//   - Every aggregate mutation is rejected with exact typed differences
 //   - Published aggregate equals provider projection exactly
+//
+// The production comparator is imported from Validation.compareAggregate to ensure
+// test and production code share the same comparison authority.
 // =============================================================================
 
 open System
@@ -18,100 +21,35 @@ open Expecto
 
 open Circus.Tooling.CanonicalEvidence.EvidenceRecords
 open Circus.Tooling.CanonicalEvidence.RecordPipeline
+open Circus.Tooling.CanonicalEvidence.Validation
 open Circus.Tooling.Tests.CanonicalEvidence.PublicationFixture
 
 // -----------------------------------------------------------------------------
-// AggregateDifference type
+// Helper: check for specific AggregateDifference case
 // -----------------------------------------------------------------------------
 
-[<RequireQualifiedAccess>]
-type AggregateDifference =
-    | SchemaVersion of expected: int * actual: int
-    | SubjectCommitOid of expected: string * actual: string
-    | SubjectTreeOid of expected: string * actual: string
-    | RecordsTotal of expected: int * actual: int
-    | RecordsPassed of expected: int * actual: int
-    | RecordsFailed of expected: int * actual: int
-    | RecordsUnavailable of expected: int * actual: int
-    | TestsTotal of expected: int * actual: int
-    | TestsPassed of expected: int * actual: int
-    | TestsIgnored of expected: int * actual: int
-    | TestsFailed of expected: int * actual: int
-    | TestsErrored of expected: int * actual: int
-    | RequiredChecksTotal of expected: int * actual: int
-    | RequiredChecksPassed of expected: int * actual: int
-    | RequiredChecksFailed of expected: int * actual: int
-    | RecordIds of expected: string list * actual: string list
-    | OverallStatus of expected: RecordStatus * actual: RecordStatus
-    | SemanticSha256 of expected: string * actual: string
-
-// -----------------------------------------------------------------------------
-// Pure aggregate comparison authority
-// -----------------------------------------------------------------------------
-
-let compareAggregateProjection
-    (expected: CanonicalExecutionAggregate)
-    (actual: CanonicalExecutionAggregate)
-    : AggregateDifference list =
-    let diffs = ResizeArray()
-    
-    if expected.SchemaVersion <> actual.SchemaVersion then
-        diffs.Add(AggregateDifference.SchemaVersion(expected.SchemaVersion, actual.SchemaVersion))
-    if expected.SubjectCommitOid <> actual.SubjectCommitOid then
-        diffs.Add(AggregateDifference.SubjectCommitOid(expected.SubjectCommitOid, actual.SubjectCommitOid))
-    if expected.SubjectTreeOid <> actual.SubjectTreeOid then
-        diffs.Add(AggregateDifference.SubjectTreeOid(expected.SubjectTreeOid, actual.SubjectTreeOid))
-    if expected.RecordsTotal <> actual.RecordsTotal then
-        diffs.Add(AggregateDifference.RecordsTotal(expected.RecordsTotal, actual.RecordsTotal))
-    if expected.RecordsPassed <> actual.RecordsPassed then
-        diffs.Add(AggregateDifference.RecordsPassed(expected.RecordsPassed, actual.RecordsPassed))
-    if expected.RecordsFailed <> actual.RecordsFailed then
-        diffs.Add(AggregateDifference.RecordsFailed(expected.RecordsFailed, actual.RecordsFailed))
-    if expected.RecordsUnavailable <> actual.RecordsUnavailable then
-        diffs.Add(AggregateDifference.RecordsUnavailable(expected.RecordsUnavailable, actual.RecordsUnavailable))
-    if expected.TestsTotal <> actual.TestsTotal then
-        diffs.Add(AggregateDifference.TestsTotal(expected.TestsTotal, actual.TestsTotal))
-    if expected.TestsPassed <> actual.TestsPassed then
-        diffs.Add(AggregateDifference.TestsPassed(expected.TestsPassed, actual.TestsPassed))
-    if expected.TestsIgnored <> actual.TestsIgnored then
-        diffs.Add(AggregateDifference.TestsIgnored(expected.TestsIgnored, actual.TestsIgnored))
-    if expected.TestsFailed <> actual.TestsFailed then
-        diffs.Add(AggregateDifference.TestsFailed(expected.TestsFailed, actual.TestsFailed))
-    if expected.TestsErrored <> actual.TestsErrored then
-        diffs.Add(AggregateDifference.TestsErrored(expected.TestsErrored, actual.TestsErrored))
-    if expected.RequiredChecksTotal <> actual.RequiredChecksTotal then
-        diffs.Add(AggregateDifference.RequiredChecksTotal(expected.RequiredChecksTotal, actual.RequiredChecksTotal))
-    if expected.RequiredChecksPassed <> actual.RequiredChecksPassed then
-        diffs.Add(AggregateDifference.RequiredChecksPassed(expected.RequiredChecksPassed, actual.RequiredChecksPassed))
-    if expected.RequiredChecksFailed <> actual.RequiredChecksFailed then
-        diffs.Add(AggregateDifference.RequiredChecksFailed(expected.RequiredChecksFailed, actual.RequiredChecksFailed))
-    if expected.RecordIds <> actual.RecordIds then
-        diffs.Add(AggregateDifference.RecordIds(expected.RecordIds, actual.RecordIds))
-    if expected.OverallStatus <> actual.OverallStatus then
-        diffs.Add(AggregateDifference.OverallStatus(expected.OverallStatus, actual.OverallStatus))
-    if expected.SemanticSha256 <> actual.SemanticSha256 then
-        diffs.Add(AggregateDifference.SemanticSha256(expected.SemanticSha256, actual.SemanticSha256))
-    
-    List.ofSeq diffs
-
-// -----------------------------------------------------------------------------
-// Helper functions
-// -----------------------------------------------------------------------------
-
-let private hasSchemaVersionDiff (diffs: AggregateDifference list) : bool =
-    diffs |> List.exists (function | AggregateDifference.SchemaVersion _ -> true | _ -> false)
-
-let private hasSubjectCommitOidDiff (diffs: AggregateDifference list) : bool =
-    diffs |> List.exists (function | AggregateDifference.SubjectCommitOid _ -> true | _ -> false)
-
-let private hasRecordIdsDiff (diffs: AggregateDifference list) : bool =
-    diffs |> List.exists (function | AggregateDifference.RecordIds _ -> true | _ -> false)
-
-let private hasOverallStatusDiff (diffs: AggregateDifference list) : bool =
-    diffs |> List.exists (function | AggregateDifference.OverallStatus _ -> true | _ -> false)
-
-let private hasSemanticSha256Diff (diffs: AggregateDifference list) : bool =
-    diffs |> List.exists (function | AggregateDifference.SemanticSha256 _ -> true | _ -> false)
+let private containsDiff (diffs: AggregateDifference list) (expected: AggregateDifference) : bool =
+    diffs |> List.exists (fun d ->
+        match expected, d with
+        | AggregateDifference.SchemaVersion (e0, a0), AggregateDifference.SchemaVersion (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.SubjectCommitOid (e0, a0), AggregateDifference.SubjectCommitOid (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.SubjectTreeOid (e0, a0), AggregateDifference.SubjectTreeOid (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.RecordsTotal (e0, a0), AggregateDifference.RecordsTotal (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.RecordsPassed (e0, a0), AggregateDifference.RecordsPassed (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.RecordsFailed (e0, a0), AggregateDifference.RecordsFailed (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.RecordsUnavailable (e0, a0), AggregateDifference.RecordsUnavailable (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.TestsTotal (e0, a0), AggregateDifference.TestsTotal (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.TestsPassed (e0, a0), AggregateDifference.TestsPassed (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.TestsIgnored (e0, a0), AggregateDifference.TestsIgnored (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.TestsFailed (e0, a0), AggregateDifference.TestsFailed (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.TestsErrored (e0, a0), AggregateDifference.TestsErrored (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.RequiredChecksTotal (e0, a0), AggregateDifference.RequiredChecksTotal (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.RequiredChecksPassed (e0, a0), AggregateDifference.RequiredChecksPassed (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.RequiredChecksFailed (e0, a0), AggregateDifference.RequiredChecksFailed (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.RecordIds (e0, a0), AggregateDifference.RecordIds (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.OverallStatus (e0, a0), AggregateDifference.OverallStatus (e1, a1) -> e0 = e1 && a0 = a1
+        | AggregateDifference.SemanticSha256 (e0, a0), AggregateDifference.SemanticSha256 (e1, a1) -> e0 = e1 && a0 = a1
+        | _ -> false)
 
 // -----------------------------------------------------------------------------
 // Test group: ExactStructuralEquality
@@ -121,7 +59,8 @@ let exactStructuralEqualityTests =
     testList "ExactStructuralEquality" [
         testCase "identical aggregates produce empty difference list" <| fun () ->
             let fixture = createValidPublicationFixture ()
-            let diffs = compareAggregateProjection fixture.Aggregate fixture.Aggregate
+            // Use production comparator from Validation module
+            let diffs = compareAggregate fixture.Aggregate fixture.Aggregate
             Expect.isEmpty diffs "identical aggregates should have no differences"
 
         testCase "semantic hash equality does not mask structural difference" <| fun () ->
@@ -130,9 +69,10 @@ let exactStructuralEqualityTests =
             let mutated = { fixture.Aggregate with SubjectCommitOid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
             let withValidHash = finalizeAggregate mutated
             // The semantic hash is now valid, but the structural comparison must still detect the difference
-            let diffs = compareAggregateProjection fixture.Aggregate withValidHash
+            let diffs = compareAggregate fixture.Aggregate withValidHash
             Expect.isNonEmpty diffs "structural difference must be detected even with valid hash"
-            Expect.isTrue (hasSubjectCommitOidDiff diffs) "SubjectCommitOid difference should be reported"
+            let expected = AggregateDifference.SubjectCommitOid(fixture.Aggregate.SubjectCommitOid, withValidHash.SubjectCommitOid)
+            Expect.isTrue (containsDiff diffs expected) "SubjectCommitOid difference should be reported with exact values"
     ]
 
 // -----------------------------------------------------------------------------
@@ -141,55 +81,142 @@ let exactStructuralEqualityTests =
 
 let fieldMutationsTests =
     testList "FieldMutations" [
-        testCase "schema_version mutation is detected" <| fun () ->
+        testCase "schema_version mutation is detected with exact values" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let mutated = { fixture.Aggregate with SchemaVersion = 999 }
-            let diffs = compareAggregateProjection fixture.Aggregate mutated
+            let diffs = compareAggregate fixture.Aggregate mutated
             Expect.isNonEmpty diffs "schema_version mutation should be detected"
-            Expect.isTrue (hasSchemaVersionDiff diffs) "SchemaVersion difference should be reported"
+            let expected = AggregateDifference.SchemaVersion(fixture.Aggregate.SchemaVersion, 999)
+            Expect.isTrue (containsDiff diffs expected) "SchemaVersion difference should be reported with exact values"
 
-        testCase "subject_commit_oid mutation is detected" <| fun () ->
+        testCase "subject_commit_oid mutation is detected with exact values" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let mutated = { fixture.Aggregate with SubjectCommitOid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
-            let diffs = compareAggregateProjection fixture.Aggregate mutated
+            let diffs = compareAggregate fixture.Aggregate mutated
             Expect.isNonEmpty diffs "subject_commit_oid mutation should be detected"
+            let expected = AggregateDifference.SubjectCommitOid(fixture.Aggregate.SubjectCommitOid, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            Expect.isTrue (containsDiff diffs expected) "SubjectCommitOid difference should be reported with exact values"
 
-        testCase "subject_tree_oid mutation is detected" <| fun () ->
+        testCase "subject_tree_oid mutation is detected with exact values" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let mutated = { fixture.Aggregate with SubjectTreeOid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
-            let diffs = compareAggregateProjection fixture.Aggregate mutated
+            let diffs = compareAggregate fixture.Aggregate mutated
             Expect.isNonEmpty diffs "subject_tree_oid mutation should be detected"
+            let expected = AggregateDifference.SubjectTreeOid(fixture.Aggregate.SubjectTreeOid, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            Expect.isTrue (containsDiff diffs expected) "SubjectTreeOid difference should be reported with exact values"
 
-        testCase "records_total mutation is detected" <| fun () ->
+        testCase "records_total mutation is detected with exact values" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let mutated = { fixture.Aggregate with RecordsTotal = fixture.Aggregate.RecordsTotal + 1 }
-            let diffs = compareAggregateProjection fixture.Aggregate mutated
+            let diffs = compareAggregate fixture.Aggregate mutated
             Expect.isNonEmpty diffs "records_total mutation should be detected"
+            let expected = AggregateDifference.RecordsTotal(fixture.Aggregate.RecordsTotal, fixture.Aggregate.RecordsTotal + 1)
+            Expect.isTrue (containsDiff diffs expected) "RecordsTotal difference should be reported with exact values"
 
-        testCase "records_passed mutation is detected" <| fun () ->
+        testCase "records_passed mutation is detected with exact values" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let mutated = { fixture.Aggregate with RecordsPassed = fixture.Aggregate.RecordsPassed + 1 }
-            let diffs = compareAggregateProjection fixture.Aggregate mutated
+            let diffs = compareAggregate fixture.Aggregate mutated
             Expect.isNonEmpty diffs "records_passed mutation should be detected"
+            let expected = AggregateDifference.RecordsPassed(fixture.Aggregate.RecordsPassed, fixture.Aggregate.RecordsPassed + 1)
+            Expect.isTrue (containsDiff diffs expected) "RecordsPassed difference should be reported with exact values"
 
-        testCase "records_failed mutation is detected" <| fun () ->
+        testCase "records_failed mutation is detected with exact values" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let mutated = { fixture.Aggregate with RecordsFailed = fixture.Aggregate.RecordsFailed + 1 }
-            let diffs = compareAggregateProjection fixture.Aggregate mutated
+            let diffs = compareAggregate fixture.Aggregate mutated
             Expect.isNonEmpty diffs "records_failed mutation should be detected"
+            let expected = AggregateDifference.RecordsFailed(fixture.Aggregate.RecordsFailed, fixture.Aggregate.RecordsFailed + 1)
+            Expect.isTrue (containsDiff diffs expected) "RecordsFailed difference should be reported with exact values"
 
-        testCase "overall_status mutation is detected" <| fun () ->
+        testCase "records_unavailable mutation is detected with exact values" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let mutated = { fixture.Aggregate with RecordsUnavailable = fixture.Aggregate.RecordsUnavailable + 1 }
+            let diffs = compareAggregate fixture.Aggregate mutated
+            Expect.isNonEmpty diffs "records_unavailable mutation should be detected"
+            let expected = AggregateDifference.RecordsUnavailable(fixture.Aggregate.RecordsUnavailable, fixture.Aggregate.RecordsUnavailable + 1)
+            Expect.isTrue (containsDiff diffs expected) "RecordsUnavailable difference should be reported with exact values"
+
+        testCase "tests_total mutation is detected with exact values" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let mutated = { fixture.Aggregate with TestsTotal = fixture.Aggregate.TestsTotal + 1 }
+            let diffs = compareAggregate fixture.Aggregate mutated
+            Expect.isNonEmpty diffs "tests_total mutation should be detected"
+            let expected = AggregateDifference.TestsTotal(fixture.Aggregate.TestsTotal, fixture.Aggregate.TestsTotal + 1)
+            Expect.isTrue (containsDiff diffs expected) "TestsTotal difference should be reported with exact values"
+
+        testCase "tests_passed mutation is detected with exact values" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let mutated = { fixture.Aggregate with TestsPassed = fixture.Aggregate.TestsPassed + 1 }
+            let diffs = compareAggregate fixture.Aggregate mutated
+            Expect.isNonEmpty diffs "tests_passed mutation should be detected"
+            let expected = AggregateDifference.TestsPassed(fixture.Aggregate.TestsPassed, fixture.Aggregate.TestsPassed + 1)
+            Expect.isTrue (containsDiff diffs expected) "TestsPassed difference should be reported with exact values"
+
+        testCase "tests_ignored mutation is detected with exact values" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let mutated = { fixture.Aggregate with TestsIgnored = fixture.Aggregate.TestsIgnored + 1 }
+            let diffs = compareAggregate fixture.Aggregate mutated
+            Expect.isNonEmpty diffs "tests_ignored mutation should be detected"
+            let expected = AggregateDifference.TestsIgnored(fixture.Aggregate.TestsIgnored, fixture.Aggregate.TestsIgnored + 1)
+            Expect.isTrue (containsDiff diffs expected) "TestsIgnored difference should be reported with exact values"
+
+        testCase "tests_failed mutation is detected with exact values" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let mutated = { fixture.Aggregate with TestsFailed = fixture.Aggregate.TestsFailed + 1 }
+            let diffs = compareAggregate fixture.Aggregate mutated
+            Expect.isNonEmpty diffs "tests_failed mutation should be detected"
+            let expected = AggregateDifference.TestsFailed(fixture.Aggregate.TestsFailed, fixture.Aggregate.TestsFailed + 1)
+            Expect.isTrue (containsDiff diffs expected) "TestsFailed difference should be reported with exact values"
+
+        testCase "tests_errored mutation is detected with exact values" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let mutated = { fixture.Aggregate with TestsErrored = fixture.Aggregate.TestsErrored + 1 }
+            let diffs = compareAggregate fixture.Aggregate mutated
+            Expect.isNonEmpty diffs "tests_errored mutation should be detected"
+            let expected = AggregateDifference.TestsErrored(fixture.Aggregate.TestsErrored, fixture.Aggregate.TestsErrored + 1)
+            Expect.isTrue (containsDiff diffs expected) "TestsErrored difference should be reported with exact values"
+
+        testCase "required_checks_total mutation is detected with exact values" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let mutated = { fixture.Aggregate with RequiredChecksTotal = fixture.Aggregate.RequiredChecksTotal + 1 }
+            let diffs = compareAggregate fixture.Aggregate mutated
+            Expect.isNonEmpty diffs "required_checks_total mutation should be detected"
+            let expected = AggregateDifference.RequiredChecksTotal(fixture.Aggregate.RequiredChecksTotal, fixture.Aggregate.RequiredChecksTotal + 1)
+            Expect.isTrue (containsDiff diffs expected) "RequiredChecksTotal difference should be reported with exact values"
+
+        testCase "required_checks_passed mutation is detected with exact values" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let mutated = { fixture.Aggregate with RequiredChecksPassed = fixture.Aggregate.RequiredChecksPassed + 1 }
+            let diffs = compareAggregate fixture.Aggregate mutated
+            Expect.isNonEmpty diffs "required_checks_passed mutation should be detected"
+            let expected = AggregateDifference.RequiredChecksPassed(fixture.Aggregate.RequiredChecksPassed, fixture.Aggregate.RequiredChecksPassed + 1)
+            Expect.isTrue (containsDiff diffs expected) "RequiredChecksPassed difference should be reported with exact values"
+
+        testCase "required_checks_failed mutation is detected with exact values" <| fun () ->
+            let fixture = createValidPublicationFixture ()
+            let mutated = { fixture.Aggregate with RequiredChecksFailed = fixture.Aggregate.RequiredChecksFailed + 1 }
+            let diffs = compareAggregate fixture.Aggregate mutated
+            Expect.isNonEmpty diffs "required_checks_failed mutation should be detected"
+            let expected = AggregateDifference.RequiredChecksFailed(fixture.Aggregate.RequiredChecksFailed, fixture.Aggregate.RequiredChecksFailed + 1)
+            Expect.isTrue (containsDiff diffs expected) "RequiredChecksFailed difference should be reported with exact values"
+
+        testCase "overall_status mutation is detected with exact values" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let newStatus = if fixture.Aggregate.OverallStatus = RecordPass then RecordFail else RecordPass
             let mutated = { fixture.Aggregate with OverallStatus = newStatus }
-            let diffs = compareAggregateProjection fixture.Aggregate mutated
+            let diffs = compareAggregate fixture.Aggregate mutated
             Expect.isNonEmpty diffs "overall_status mutation should be detected"
+            let expected = AggregateDifference.OverallStatus(fixture.Aggregate.OverallStatus, newStatus)
+            Expect.isTrue (containsDiff diffs expected) "OverallStatus difference should be reported with exact values"
 
-        testCase "semantic_sha256 mutation is detected" <| fun () ->
+        testCase "semantic_sha256 mutation is detected with exact values" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let mutated = { fixture.Aggregate with SemanticSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
-            let diffs = compareAggregateProjection fixture.Aggregate mutated
+            let diffs = compareAggregate fixture.Aggregate mutated
             Expect.isNonEmpty diffs "semantic_sha256 mutation should be detected"
+            let expected = AggregateDifference.SemanticSha256(fixture.Aggregate.SemanticSha256, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            Expect.isTrue (containsDiff diffs expected) "SemanticSha256 difference should be reported with exact values"
     ]
 
 // -----------------------------------------------------------------------------
@@ -200,25 +227,27 @@ let recordIdsComparisonTests =
     testList "RecordIdsComparison" [
         testCase "record_ids order change is detected" <| fun () ->
             let fixture = createValidPublicationFixture ()
-            // Reverse the RecordIds - they should still compare equal since lists are compared by content
+            // Reverse the RecordIds - comparison is order-sensitive
             let reversedRecordIds = List.rev fixture.Aggregate.RecordIds
             let mutated = { fixture.Aggregate with RecordIds = reversedRecordIds }
-            let diffs = compareAggregateProjection fixture.Aggregate mutated
+            let diffs = compareAggregate fixture.Aggregate mutated
             // Lists are compared element-by-element, so order matters
             Expect.isNonEmpty diffs "record_ids order change should be detected"
-            Expect.isTrue (hasRecordIdsDiff diffs) "RecordIds difference should be reported"
+            let expected = AggregateDifference.RecordIds(fixture.Aggregate.RecordIds, reversedRecordIds)
+            Expect.isTrue (containsDiff diffs expected) "RecordIds difference should be reported with exact values"
 
-        testCase "record_ids content comparison is exact" <| fun () ->
+        testCase "record_ids different content is detected" <| fun () ->
             let fixture = createValidPublicationFixture ()
-            // If RecordIds are the same content regardless of order, this should be equal
-            // But our comparison is element-by-element, so we need same order
-            let sameContent = List.sort fixture.Aggregate.RecordIds
-            let mutated = { fixture.Aggregate with RecordIds = sameContent }
-            let diffs = compareAggregateProjection fixture.Aggregate mutated
-            // If original order was already sorted, this would be equal; otherwise different
-            // Just verify the comparison works correctly
-            if fixture.Aggregate.RecordIds <> sameContent then
-                Expect.isNonEmpty diffs "different order should be detected"
+            // Replace first ID with something different
+            let differentIds =
+                match fixture.Aggregate.RecordIds with
+                | [] -> []
+                | _ :: rest -> "different_id_0000000000000000000000000000000000000000000000000000" :: rest
+            let mutated = { fixture.Aggregate with RecordIds = differentIds }
+            let diffs = compareAggregate fixture.Aggregate mutated
+            Expect.isNonEmpty diffs "record_ids different content should be detected"
+            let expected = AggregateDifference.RecordIds(fixture.Aggregate.RecordIds, differentIds)
+            Expect.isTrue (containsDiff diffs expected) "RecordIds difference should be reported with exact values"
     ]
 
 // -----------------------------------------------------------------------------
@@ -230,17 +259,17 @@ let computedFieldsConsistencyTests =
         testCase "aggregate semantic hash recomputes correctly" <| fun () ->
             let fixture = createValidPublicationFixture ()
             let recomputedHash = computeAggregateSemanticHash fixture.Aggregate
-            Expect.equal recomputedHash fixture.Aggregate.SemanticSha256 
+            Expect.equal recomputedHash fixture.Aggregate.SemanticSha256
                 "aggregate semantic hash should recompute to same value"
 
         testCase "aggregate structural comparison detects count changes" <| fun () ->
             let fixture = createValidPublicationFixture ()
             // Directly mutate the counts to verify the aggregate structural comparison detects changes
             let mutatedAggregate = { fixture.Aggregate with RecordsTotal = fixture.Aggregate.RecordsTotal + 1 }
-            let diffs = compareAggregateProjection fixture.Aggregate mutatedAggregate
+            let diffs = compareAggregate fixture.Aggregate mutatedAggregate
             Expect.isNonEmpty diffs "changing aggregate counts should change aggregate"
-            Expect.isTrue (List.exists (function | AggregateDifference.RecordsTotal _ -> true | _ -> false) diffs) 
-                "RecordsTotal difference should be reported"
+            let expected = AggregateDifference.RecordsTotal(fixture.Aggregate.RecordsTotal, fixture.Aggregate.RecordsTotal + 1)
+            Expect.isTrue (containsDiff diffs expected) "RecordsTotal difference should be reported with exact values"
     ]
 
 // -----------------------------------------------------------------------------

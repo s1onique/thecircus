@@ -45,6 +45,7 @@ open System.Globalization
 open System.Text
 
 open Circus.Tooling.FSharpDiagnostics.Hashing
+open Circus.Tooling.CanonicalEvidence.Domain
 
 // -----------------------------------------------------------------------------
 // Status

@@ -78,6 +78,7 @@
     <Compile Include="CanonicalEvidence/PartialReplacementAndRestorationTests.fs" />
     <Compile Include="CanonicalEvidence/ProviderOnceOnlyOrchestrationTests.fs" />
     <Compile Include="CanonicalEvidence/StagedCompatibilityMutationTests.fs" />
+    <Compile Include="CanonicalEvidence/StagedAggregateMutationTests.fs" />
 
     <!-- Dedicated executable authority suites for CORRECTION 03. -->
     <Compile Include="ScopeAuthorityTests.fs" />
