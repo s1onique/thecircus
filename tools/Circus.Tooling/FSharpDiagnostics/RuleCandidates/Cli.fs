@@ -149,6 +149,7 @@ let renderError (err: EngineError) : string =
     | EngineError.NoEligibleEpisodes -> "No eligible episodes for candidate extraction"
     | EngineError.CandidateGenerationFailed details -> "Candidate generation failed: " + details
     | EngineError.PublicationFailed details -> "Publication failed: " + details
+    | EngineError.Internal msg -> "Internal error: " + msg
 
 // -----------------------------------------------------------------------------
 // Run commands

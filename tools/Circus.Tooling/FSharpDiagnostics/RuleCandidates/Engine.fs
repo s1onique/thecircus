@@ -6,6 +6,7 @@ module Circus.Tooling.FSharpDiagnostics.RuleCandidates.Engine
 
 open System
 open System.IO
+open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Engine
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Classification
 open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Domain
@@ -25,6 +26,7 @@ type EngineError =
     | NoEligibleEpisodes
     | CandidateGenerationFailed of details: string
     | PublicationFailed of details: string
+    | Internal of message: string
 
 // -----------------------------------------------------------------------------
 // Fixed prose templates
@@ -94,15 +96,41 @@ let publishCandidates (repoRoot: string) (result: ExtractionResult) : bool =
         false
 
 // -----------------------------------------------------------------------------
-// Stub loaders - actual implementation requires repair-episodes engine integration
+// Production loaders - integrate with existing repair-episodes engine
 // -----------------------------------------------------------------------------
 
-let loadRepairEpisodes (repoRoot: string) : Result<RepairEpisode list, EngineError> = Result.Ok []
-let loadTransitions (repoRoot: string) : Result<DiagnosticTransition list, EngineError> = Result.Ok []
-let loadChangeSets (repoRoot: string) : Result<Map<string, GitChangeSet>, EngineError> = Result.Ok Map.empty
+let private loadFromEpisodeEngine (repoRoot: string) : Result<EpisodeEngineResult, EngineError> =
+    match runEpisodeEngine repoRoot defaultEngineOptions with
+    | EpisodeEngineExecution.Completed result -> Ok result
+    | EpisodeEngineExecution.Failed failure ->
+        let msg =
+            match failure with
+            | EpisodeEngineFailure.VerificationEvidenceLoadFailed errors ->
+                sprintf "Verification evidence load failed: %A" errors
+            | EpisodeEngineFailure.DeclarationLoadFailed issues ->
+                sprintf "Declaration load failed: %A" issues
+            | EpisodeEngineFailure.PublicationFailed (_, msg) ->
+                sprintf "Publication failed: %s" msg
+            | EpisodeEngineFailure.InternalFailure (op, msg) ->
+                sprintf "Internal failure in %s: %s" op msg
+        Error(EngineError.Internal msg)
+
+let loadRepairEpisodes (repoRoot: string) : Result<RepairEpisode list, EngineError> =
+    loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.RepairEpisodes)
+
+let loadTransitions (repoRoot: string) : Result<DiagnosticTransition list, EngineError> =
+    loadFromEpisodeEngine repoRoot |> Result.map (fun r -> r.Transitions)
+
+let loadChangeSets (repoRoot: string) : Result<Map<string, GitChangeSet>, EngineError> =
+    loadFromEpisodeEngine repoRoot
+    |> Result.map (fun r -> r.ChangeSets |> List.map (fun cs -> cs.ChangeSetId, cs) |> Map.ofList)
 
 let loadVerificationEvidence (repoRoot: string) : Result<Map<string, VerificationEvidence>, EngineError> =
-    Result.Ok Map.empty
+    loadFromEpisodeEngine repoRoot
+    |> Result.map (fun r ->
+        r.Verification
+        |> List.map (fun lv -> lv.Evidence.EvidenceId, lv.Evidence)
+        |> Map.ofList)
 
 // -----------------------------------------------------------------------------
 // Candidate building
