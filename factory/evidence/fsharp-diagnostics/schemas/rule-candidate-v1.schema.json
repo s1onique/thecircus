@@ -1,0 +1,154 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circus.local/schemas/fsharp-diagnostics/rule-candidate-v1.schema.json",
+  "title": "F# rule candidate (v1)",
+  "description": "Deterministic rule candidate extracted from qualified repair episodes. CandidateId is a deterministic SHA-256 over canonical encodings of all identity and evidence fields.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "status",
+    "kind",
+    "evidence_strength",
+    "title",
+    "symptom",
+    "applicability",
+    "observation",
+    "proposed_repair",
+    "limitations",
+    "primary_path",
+    "diagnostic_codes",
+    "diagnostic_count",
+    "earliest_line",
+    "changed_paths",
+    "evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "rule-candidate-v1"
+    },
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 hash of canonical encoding of all identity fields"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["proposed", "curated", "accepted", "rejected"],
+      "description": "Current status in the curation pipeline"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["parser_cascade_repair"],
+      "description": "Rule candidate family classification"
+    },
+    "evidence_strength": {
+      "type": "string",
+      "enum": ["single_episode_observed_repair"],
+      "description": "Strength of evidence supporting this candidate"
+    },
+    "title": {
+      "type": "string",
+      "description": "Concise title for the candidate"
+    },
+    "symptom": {
+      "type": "string",
+      "description": "Description of the observed symptom"
+    },
+    "applicability": {
+      "type": "string",
+      "description": "Conditions under which this candidate applies"
+    },
+    "observation": {
+      "type": "string",
+      "description": "Specific observation from the supporting episode"
+    },
+    "proposed_repair": {
+      "type": "string",
+      "description": "Proposed repair strategy"
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Structural limitations of this candidate"
+    },
+    "primary_path": {
+      "type": "string",
+      "description": "Primary file path involved in the repair"
+    },
+    "diagnostic_codes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Diagnostic codes that were resolved"
+    },
+    "diagnostic_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of diagnostic transitions supporting this candidate"
+    },
+    "earliest_line": {
+      "type": ["integer", "null"],
+      "description": "Earliest line number where diagnostics occurred (null if unknown)"
+    },
+    "changed_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Paths changed in the repair commit"
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "episode_id",
+        "episode_key",
+        "change_set_id",
+        "verification_evidence_ids",
+        "transition_ids",
+        "before_commit_oid",
+        "before_tree_oid",
+        "after_commit_oid",
+        "after_tree_oid"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "episode_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "episode_key": {
+          "type": "string"
+        },
+        "change_set_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "verification_evidence_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "transition_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "before_commit_oid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "before_tree_oid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "after_commit_oid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "after_tree_oid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    }
+  }
+}

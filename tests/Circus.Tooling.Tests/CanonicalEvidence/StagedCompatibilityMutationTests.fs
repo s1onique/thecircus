@@ -599,9 +599,7 @@ let rehashedDuplicateCheckIdTests =
                   let rest = originalChecks.Tail
 
                   // Create duplicate with same Id
-                  let duplicateCheck =
-                      { first with
-                          Id = first.Id } // Same ID = duplicate
+                  let duplicateCheck = { first with Id = first.Id } // Same ID = duplicate
 
                   let mutatedChecks = first :: duplicateCheck :: rest
 

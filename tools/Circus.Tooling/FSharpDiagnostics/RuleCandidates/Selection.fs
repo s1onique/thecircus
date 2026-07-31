@@ -72,11 +72,19 @@ let isEpisodeEligible (episode: RepairEpisode) : bool =
 // Transition grouping
 // -----------------------------------------------------------------------------
 
-/// Group transitions by their source path deterministically.
+/// Normalize source path by stripping <REPO> prefix
+let private normalizeSourcePath (path: string) : string =
+    if path.StartsWith("<REPO>/") then
+        path.Substring(7)
+    else
+        path
+
+/// Group transitions by their normalized source path deterministically.
+/// Normalizes <REPO> prefix to match change set paths.
 let groupTransitionsByPath (transitions: DiagnosticTransition list) : Map<string, DiagnosticTransition list> =
-    // Use Map to ensure deterministic ordering
+    // Use Map to ensure deterministic ordering, normalize paths
     transitions
-    |> List.groupBy (fun t -> defaultArg t.SourcePath "")
+    |> List.groupBy (fun t -> normalizeSourcePath (defaultArg t.SourcePath ""))
     |> List.filter (fun (path, _) -> not (System.String.IsNullOrEmpty path))
     |> Map.ofList
 

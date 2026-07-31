@@ -19,7 +19,16 @@ type ClassificationResult =
     | ClassifiedAsParserCascade of groupFacts: TransitionGroupFacts
     | NotClassified of reason: ClassificationFailure
 
+// Normalize a source path by stripping the <REPO> prefix if present
+let private normalizeSourcePath (path: string) : string =
+    if path.StartsWith("<REPO>/") then
+        path.Substring(7) // Length of "<REPO>/" is 7
+    else
+        path
+
 // Check if transition qualifies as repair-supporting
+// For ParserCascadeRepair: allow unassessable parser-family diagnostics
+// since their disappearance IS the repair evidence
 let isRepairSupportingTransition
     (episode: RepairEpisode)
     (changeSet: GitChangeSet)
@@ -29,35 +38,47 @@ let isRepairSupportingTransition
         false
     elif Option.isNone transition.SourcePath then
         false
-    elif
-        not (List.exists (fun (e: GitChangeEntry) -> e.CanonicalPath = transition.SourcePath.Value) changeSet.Entries)
-    then
-        false
     else
-        let entry =
-            List.find (fun (e: GitChangeEntry) -> e.CanonicalPath = transition.SourcePath.Value) changeSet.Entries
+        let normalizedPath = normalizeSourcePath transition.SourcePath.Value
 
-        if entry.ChangeKind = GitChangeKind.Deleted then
-            false
-        elif transition.BeforeOccurrenceCount <= 0 then
-            false
-        elif transition.AfterOccurrenceCount > 0 then
-            false
-        elif transition.TransitionKind = ExactTransitionKind.IntroducedAfter then
-            false
-        elif transition.Assessment = TransitionAssessment.Unassessable then
-            false
-        elif transition.Assessment = TransitionAssessment.Ambiguous then
+        if
+            not (List.exists (fun (e: GitChangeEntry) -> e.CanonicalPath = normalizedPath) changeSet.Entries)
+        then
             false
         else
-            true
+            let entry =
+                List.find (fun (e: GitChangeEntry) -> e.CanonicalPath = normalizedPath) changeSet.Entries
+
+            if entry.ChangeKind = GitChangeKind.Deleted then
+                false
+            elif transition.BeforeOccurrenceCount <= 0 then
+                false
+            elif transition.AfterOccurrenceCount > 0 then
+                false
+            elif transition.TransitionKind = ExactTransitionKind.IntroducedAfter then
+                false
+            // Ambiguous is always excluded - insufficient evidence
+            elif transition.Assessment = TransitionAssessment.Ambiguous then
+                false
+            // Unassessable is ALLOWED for parser-family diagnostics
+            // because their elimination after repair IS the evidence
+            elif transition.Assessment = TransitionAssessment.Unassessable then
+                // Check if this is a parser-family diagnostic
+                match transition.Code with
+                | None -> false // No code means we can't verify it's parser-family
+                | Some code ->
+                    // Allow unassessable parser-family diagnostics
+                    isParserDiagnostic code
+            else
+                true
 
 // Check if path qualifies as repair-supporting
 let isRepairSupportingPath (changeSet: GitChangeSet) (transition: DiagnosticTransition) : bool =
     match transition.SourcePath with
     | None -> false
     | Some path ->
-        match List.tryFind (fun (e: GitChangeEntry) -> e.CanonicalPath = path) changeSet.Entries with
+        let normalizedPath = normalizeSourcePath path
+        match List.tryFind (fun (e: GitChangeEntry) -> e.CanonicalPath = normalizedPath) changeSet.Entries with
         | None -> false
         | Some entry -> entry.ChangeKind <> GitChangeKind.Deleted
 
@@ -74,10 +95,11 @@ let classifyGroup
     if not allSameEpisode then
         NotClassified(UnsupportedTransitionAssessment "mixed_episode_transitions")
     else
-        // Requirement 2: All transitions must share the same path
+        // Requirement 2: All transitions must share the same normalized path
         let paths =
             transitions
             |> List.choose (fun (t: DiagnosticTransition) -> t.SourcePath)
+            |> List.map normalizeSourcePath
             |> List.distinct
 
         if paths.Length <> 1 then
@@ -92,7 +114,7 @@ let classifyGroup
 
             if not (List.isEmpty nonParserCodes) then
                 NotClassified(NonParserCodeFound nonParserCodes.Head)
-            // Requirement 4: Path must exist in change set
+            // Requirement 4: Normalized path must exist in change set
             elif not (List.exists (fun (e: GitChangeEntry) -> e.CanonicalPath = path) changeSet.Entries) then
                 NotClassified(PathNotInChangeSet path)
             else
