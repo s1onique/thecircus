@@ -138,20 +138,11 @@ let mixedEvidenceLoadMappingTests =
                             dupErr "ev-1" ]
                       )
                   )
-              // The duplicate class is always emitted first; the
-              // non-duplicate class retains the upstream JSONL order, so
-              // the two results differ in the order of the
-              // VerificationEvidenceLoadFailed list but agree on the
-              // duplicate.  We assert that the duplicate class is
-              // identical between the two and the non-duplicate class
-              // contains the same set of strings in some order.
-              match forward, reversed with
-              | [ DuplicateInputIdentities(k1, ids1); VerificationEvidenceLoadFailed fwdN ],
-                [ DuplicateInputIdentities(k2, ids2); VerificationEvidenceLoadFailed revN ] ->
-                  Expect.equal k1 k2 "duplicate kind invariant under reversal"
-                  Expect.equal ids1 ids2 "duplicate ids invariant under reversal"
-                  Expect.equal (List.sort fwdN) (List.sort revN) "non-duplicate set is order-invariant"
-                  Expect.equal (List.length fwdN) 3 "non-duplicate length forward"
-                  Expect.equal (List.length revN) 3 "non-duplicate length reversed"
-              | _ -> failwithf "unexpected mapped structure"
+              // Normalization: non-duplicate errors are sorted by a
+              // typed key (kind, source path, line, field) using
+              // ordinal comparison.  The full mapped list must therefore
+              // be byte-identical between forward and reversed input
+              // order — exact equality, not just set equality.
+              Expect.equal forward reversed "mapped result must be invariant under input order"
+              Expect.equal forward.Length 2 "mapped length"
           } ]

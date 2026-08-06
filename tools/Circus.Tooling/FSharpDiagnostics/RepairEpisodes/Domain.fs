@@ -136,10 +136,17 @@ let episodeInputIdentityKindToken (k: EpisodeInputIdentityKind) : string =
     | EpisodeInputIdentityKind.ChangeSet -> "change_set"
     | EpisodeInputIdentityKind.DiagnosticTransition -> "diagnostic_transition"
 
+/// Duplicate identity record.  `OccurrenceIndices` are the 1-based
+/// positions of each duplicate record in the in-memory sorted list
+/// produced by `runEpisodesWithEvidence`, NOT JSONL source lines.
+/// Episodes, change sets, and diagnostic transitions are produced
+/// from declarations + Git resolution + captures and do not have
+/// stable JSONL source-line provenance; this field reflects the
+/// post-computation in-memory position.
 type EpisodeDuplicateIdentity =
     { Kind: EpisodeInputIdentityKind
       Identity: string
-      OccurrenceLines: int list }
+      OccurrenceIndices: int list }
 
 exception GitChangeParseFailure of string
 

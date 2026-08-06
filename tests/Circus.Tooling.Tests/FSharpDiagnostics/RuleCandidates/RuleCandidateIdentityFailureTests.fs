@@ -127,7 +127,7 @@ let private upstreamDuplicateTest
     : unit =
     let dups = detectUpstreamDuplicates episodes changeSets transitions
     match dups with
-    | [ { Kind = k; Identity = id; OccurrenceLines = _ } ] ->
+    | [ { Kind = k; Identity = id; OccurrenceIndices = _ } ] ->
         Expect.equal k expectedKind "upstream duplicate kind"
         Expect.equal id expectedIdentity "upstream duplicate identity"
     | actual ->
@@ -168,7 +168,7 @@ let identityFailureTests =
                       EpisodeEngineFailure.DuplicateInputIdentities(
                           [ { Kind = EpisodeInputIdentityKind.RepairEpisode
                               Identity = epId
-                              OccurrenceLines = [ 1; 2 ] } ]))
+                              OccurrenceIndices = [ 1; 2 ] } ]))
               assertExactDuplicate EpisodeIdentity epId mapped
           }
 
@@ -223,7 +223,7 @@ let identityFailureTests =
                       EpisodeEngineFailure.DuplicateInputIdentities(
                           [ { Kind = EpisodeInputIdentityKind.ChangeSet
                               Identity = csId
-                              OccurrenceLines = [ 1; 2 ] } ]))
+                              OccurrenceIndices = [ 1; 2 ] } ]))
               assertExactDuplicate ChangeSetIdentity csId mapped
           }
 
@@ -276,7 +276,7 @@ let identityFailureTests =
                       EpisodeEngineFailure.DuplicateInputIdentities(
                           [ { Kind = EpisodeInputIdentityKind.DiagnosticTransition
                               Identity = composite
-                              OccurrenceLines = [ 1; 2 ] } ]))
+                              OccurrenceIndices = [ 1; 2 ] } ]))
               assertExactDuplicate TransitionIdentity composite mapped
           }
 

@@ -29,17 +29,17 @@ let private lines123 = [ 1; 2; 3 ]
 let private episodeDup (id: string) (lines: int list) : EpisodeDuplicateIdentity =
     { Kind = EpisodeInputIdentityKind.RepairEpisode
       Identity = id
-      OccurrenceLines = lines }
+      OccurrenceIndices = lines }
 
 let private changeSetDup (id: string) (lines: int list) : EpisodeDuplicateIdentity =
     { Kind = EpisodeInputIdentityKind.ChangeSet
       Identity = id
-      OccurrenceLines = lines }
+      OccurrenceIndices = lines }
 
 let private transitionDup (id: string) (lines: int list) : EpisodeDuplicateIdentity =
     { Kind = EpisodeInputIdentityKind.DiagnosticTransition
       Identity = id
-      OccurrenceLines = lines }
+      OccurrenceIndices = lines }
 
 let assertExactMappedDuplicate
     (expectedKind: InputIdentityKind)
@@ -121,4 +121,30 @@ let upstreamDuplicateMappingTests =
                       )
                   )
               assertExactMappedDuplicate TransitionIdentity [ "aaa|1"; "mmm|1"; "zzz|1" ] mapped
+          }
+
+          // Cross-kind ordering: regardless of the order in which the
+          // adapter sees the upstream kind buckets, the resulting
+          // EngineError list MUST follow the documented order:
+          //   EpisodeIdentity < ChangeSetIdentity < TransitionIdentity
+          test "mixed-kind upstream duplicates emit kinds in canonical rank order" {
+              // Feed the upstream detector results in REVERSE canonical
+              // order.  The adapter must re-rank and emit them in the
+              // documented forward order.
+              let dups =
+                  [ transitionDup "tx-1" [ 1; 2 ]
+                    changeSetDup "cs-1" [ 1; 2 ]
+                    episodeDup "ep-1" [ 1; 2 ] ]
+              let mapped =
+                  mapEpisodeEngineFailure(
+                      EpisodeEngineFailure.DuplicateInputIdentities dups
+                  )
+              match mapped with
+              | [ DuplicateInputIdentities(EpisodeIdentity, _)
+                  DuplicateInputIdentities(ChangeSetIdentity, _)
+                  DuplicateInputIdentities(TransitionIdentity, _) ] -> ()
+              | actual ->
+                  failwithf
+                      "mixed-kind order must be EpisodeIdentity < ChangeSetIdentity < TransitionIdentity, got %A"
+                      actual
           } ]

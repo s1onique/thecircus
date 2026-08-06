@@ -364,6 +364,18 @@ type RuleCandidateInputs =
 // rule-candidate `InputIdentityKind`.  Output order:
 //   EpisodeIdentity, ChangeSetIdentity, TransitionIdentity,
 //   VerificationEvidenceIdentity, then all other evidence errors.
+/// Explicit rank for the rule-candidate InputIdentityKind.  Lower
+/// rank = earlier in the resulting EngineError list.  Matches the
+/// documented output order:
+///   EpisodeIdentity < ChangeSetIdentity < TransitionIdentity
+///   < VerificationEvidenceIdentity
+let private kindRank (k: InputIdentityKind) : int =
+    match k with
+    | InputIdentityKind.EpisodeIdentity -> 0
+    | InputIdentityKind.ChangeSetIdentity -> 1
+    | InputIdentityKind.TransitionIdentity -> 2
+    | InputIdentityKind.VerificationEvidenceIdentity -> 3
+
 let private mapEpisodeInputIdentityKind (k: EpisodeInputIdentityKind) : InputIdentityKind =
     match k with
     | EpisodeInputIdentityKind.RepairEpisode -> EpisodeIdentity
@@ -373,14 +385,17 @@ let private mapEpisodeInputIdentityKind (k: EpisodeInputIdentityKind) : InputIde
 let mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError list =
     match failure with
     | EpisodeEngineFailure.DuplicateInputIdentities dups ->
-        // Group identical upstream kinds, deduplicate identities, sort
-        // ordinally, and emit one DuplicateInputIdentities per kind.
-        // Output order is fixed: RepairEpisode, ChangeSet,
-        // DiagnosticTransition.  The upstream duplicate records are
-        // already grouped and sorted, but we re-aggregate defensively.
+        // Explicit cross-kind ordering.  The adapter is defensive:
+        // it sorts the kind buckets by `compare kindRank` so that
+        // mixed-kind failures always produce the same
+        // `EngineError list` regardless of the upstream grouping
+        // order.  `String.CompareOrdinal` is used for identity
+        // strings because ordinal comparison is independent of
+        // language and culture (Microsoft Learn, StringComparer.Ordinal).
         let grouped =
             dups
             |> List.groupBy (fun d -> mapEpisodeInputIdentityKind d.Kind)
+            |> List.sortBy (fun (kind, _) -> kindRank kind)
             |> List.map (fun (kind, items) ->
                 let ids =
                     items
@@ -390,12 +405,12 @@ let mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError list =
                 DuplicateInputIdentities(kind, ids))
         grouped
     | EpisodeEngineFailure.VerificationEvidenceLoadFailed errors ->
-        // Lossless mapping: partition duplicate evidence-id errors from
-        // every other evidence-load error.  Both semantic classes are
-        // preserved.  Duplicate evidence IDs become a typed
-        // DuplicateInputIdentities; everything else becomes a typed
-        // VerificationEvidenceLoadFailed carrying the exact upstream
-        // strings.
+        // Lossless mapping with deterministic non-duplicate ordering.
+        // Duplicates are partitioned into a typed
+        // DuplicateInputIdentities.  Non-duplicate errors are sorted
+        // by a typed key (kind, source path, line number, field name)
+        // using ordinal comparison so the mapped list is invariant
+        // under input-record order reversal.
         let dups, nonDups =
             errors
             |> List.partition (function
@@ -413,10 +428,43 @@ let mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError list =
                 |> List.distinct
                 |> List.sortWith (fun a b -> String.CompareOrdinal(a, b))
             output.Add(DuplicateInputIdentities(VerificationEvidenceIdentity, ids))
+
+        // Typed key for normalizing non-duplicate errors.  Renders the
+        // case to a stable sortable key using only the fields the DU
+        // guarantees carry.
+        let nonDupKey (e: VerificationEvidenceLoadError) : string =
+            match e with
+            | VerificationEvidenceLoadError.EvidenceFileMissing p -> "missing:" + p
+            | VerificationEvidenceLoadError.EvidenceFileUnreadable(p, _) -> "unreadable:" + p
+            | VerificationEvidenceLoadError.DuplicateEvidenceId _ -> "duplicate:"
+            | VerificationEvidenceLoadError.ConflictingEvidenceRecord _ -> "conflicting:"
+            | VerificationEvidenceLoadError.UnsupportedEvidenceSchemaVersion(p, v) -> "schema:" + p + ":" + v
+            | VerificationEvidenceLoadError.ParseError pe ->
+                match pe with
+                | VerificationEvidenceParseError.MalformedJson(s, l, _) -> "malformed:" + s + ":" + string l
+                | VerificationEvidenceParseError.ExpectedObject(s, l) -> "expected_object:" + s + ":" + string l
+                | VerificationEvidenceParseError.MissingField(s, l, f) -> "missing_field:" + s + ":" + string l + ":" + f
+                | VerificationEvidenceParseError.WrongFieldType(s, l, f, _, _) -> "wrong_type:" + s + ":" + string l + ":" + f
+                | VerificationEvidenceParseError.UnsupportedSchemaVersion(s, l, v) -> "schema_v:" + s + ":" + string l + ":" + v
+                | VerificationEvidenceParseError.UnknownVerificationKind(s, l, v) -> "unknown_kind:" + s + ":" + string l + ":" + v
+                | VerificationEvidenceParseError.UnknownVerificationStatus(s, l, v) -> "unknown_status:" + s + ":" + string l + ":" + v
+                | VerificationEvidenceParseError.InvalidExitCode(s, l, v) -> "invalid_exit:" + s + ":" + string l + ":" + v
+                | VerificationEvidenceParseError.InvalidCommitOid(s, l, f, _) -> "invalid_commit:" + s + ":" + string l + ":" + f
+                | VerificationEvidenceParseError.InvalidTreeOid(s, l, f, _) -> "invalid_tree:" + s + ":" + string l + ":" + f
+                | VerificationEvidenceParseError.InvalidSha256(s, l, f, _) -> "invalid_sha:" + s + ":" + string l + ":" + f
+                | VerificationEvidenceParseError.InvalidEvidenceId(s, l, _) -> "invalid_evidence_id:" + s + ":" + string l
+                | VerificationEvidenceParseError.PlaceholderEvidenceId(s, l, _) -> "placeholder_evidence_id:" + s + ":" + string l
+                | VerificationEvidenceParseError.JsonException(s, l, _) -> "json_exception:" + s + ":" + string l
+                | VerificationEvidenceParseError.DuplicateRawProperty(s, l, p, _) -> "dup_raw_prop:" + s + ":" + string l + ":" + p
+                | VerificationEvidenceParseError.DuplicateSemanticField(s, l, c, a) -> "dup_sem_field:" + s + ":" + string l + ":" + c + ":" + a
+                | VerificationEvidenceParseError.ConflictingSemanticFields(s, l, c, a, _, _) -> "conf_sem_field:" + s + ":" + string l + ":" + c + ":" + a
         match nonDups with
         | [] -> ()
         | _ ->
-            output.Add(VerificationEvidenceLoadFailed(nonDups |> List.map string))
+            let sortedNonDups =
+                nonDups
+                |> List.sortBy nonDupKey
+            output.Add(VerificationEvidenceLoadFailed(sortedNonDups |> List.map string))
         output |> Seq.toList
     | EpisodeEngineFailure.DeclarationLoadFailed issues ->
         [ EngineError.Internal(sprintf "Declaration load failed: %A" issues) ]

@@ -82,6 +82,7 @@
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateIdentityFailureTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateUpstreamDuplicateMappingTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateMixedEvidenceLoadMappingTests.fs" />
+    <Compile Include="FSharpDiagnostics/RepairEpisodes/EpisodeEngineCanonicalPreservationTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateReferenceIntegrityTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateVerificationBindingFailureTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateClassificationCardinalityTests.fs" />

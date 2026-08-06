@@ -81,7 +81,7 @@ let mkTransition (episodeId: string) (fp: string) : DiagnosticTransition =
 
 let assertSingleDuplicate (dups: EpisodeDuplicateIdentity list) (expectedKind: EpisodeInputIdentityKind) (expectedIdentity: string) : unit =
     match dups with
-    | [ { Kind = k; Identity = id; OccurrenceLines = _ } ] ->
+    | [ { Kind = k; Identity = id; OccurrenceIndices = _ } ] ->
         Expect.equal k expectedKind "upstream duplicate kind"
         Expect.equal id expectedIdentity "upstream duplicate identity"
     | actual ->
@@ -130,8 +130,8 @@ let duplicateIdentityTests =
                       []
                       []
               match dups with
-              | [ { Kind = k1; Identity = i1; OccurrenceLines = _ }
-                  { Kind = k2; Identity = i2; OccurrenceLines = _ } ] ->
+              | [ { Kind = k1; Identity = i1; OccurrenceIndices = _ }
+                  { Kind = k2; Identity = i2; OccurrenceIndices = _ } ] ->
                   Expect.equal k1 EpisodeInputIdentityKind.RepairEpisode "first kind"
                   Expect.equal k2 EpisodeInputIdentityKind.RepairEpisode "second kind"
                   Expect.equal i1 id2 "ordinal ascending: aaa first"
@@ -169,9 +169,42 @@ let duplicateIdentityTests =
           }
 
           test "change-set different content with the same ID is detected" {
+              // Two change sets sharing ChangeSetId but with different
+              // semantic fields (different entries / different tree
+              // OIDs) MUST both surface the duplicate identity.  Real
+              // semantic difference matters because the upstream engine
+              // rejects change sets that share an identity regardless
+              // of whether they are byte-identical or merely
+              // content-equivalent.
               let id = "cs-content-id"
-              let csA = mkChangeSet id
-              let csB = { (mkChangeSet id) with Entries = [] }
+              let csA =
+                  { SchemaVersion = GitChangeSetSchemaVersion
+                    ChangeSetId = id
+                    ChangeSetVersion = GitChangeSetSchemaVersion
+                    BeforeTreeOid = "aaaaaaaa" + String.replicate 32 "a"
+                    AfterTreeOid = "bbbbbbbb" + String.replicate 32 "b"
+                    ObjectFormat = Sha1
+                    Entries =
+                      [ { BeforeMode = "100644"
+                          AfterMode = "100644"
+                          BeforeBlobOid = None
+                          AfterBlobOid = Some ("ca" + String.replicate 62 "a")
+                          ChangeKind = Modified
+                          CanonicalPath = "src/A.fs" } ] }
+              let csB =
+                  { SchemaVersion = GitChangeSetSchemaVersion
+                    ChangeSetId = id
+                    ChangeSetVersion = GitChangeSetSchemaVersion
+                    BeforeTreeOid = "cccccccc" + String.replicate 32 "c"
+                    AfterTreeOid = "dddddddd" + String.replicate 32 "d"
+                    ObjectFormat = Sha1
+                    Entries =
+                      [ { BeforeMode = "100755"
+                          AfterMode = "100755"
+                          BeforeBlobOid = Some ("fe" + String.replicate 62 "e")
+                          AfterBlobOid = Some ("ff" + String.replicate 62 "f")
+                          ChangeKind = Added
+                          CanonicalPath = "src/B.fs" } ] }
               let dups = detectUpstreamDuplicates [] [ csA; csB ] []
               assertSingleDuplicate dups EpisodeInputIdentityKind.ChangeSet id
           }
@@ -200,8 +233,8 @@ let duplicateIdentityTests =
                         mkChangeSet id2 ]
                       []
               match dups with
-              | [ { Identity = i1; Kind = k1; OccurrenceLines = _ }
-                  { Identity = i2; Kind = k2; OccurrenceLines = _ } ] ->
+              | [ { Identity = i1; Kind = k1; OccurrenceIndices = _ }
+                  { Identity = i2; Kind = k2; OccurrenceIndices = _ } ] ->
                   Expect.equal k1 EpisodeInputIdentityKind.ChangeSet "first kind"
                   Expect.equal k2 EpisodeInputIdentityKind.ChangeSet "second kind"
                   Expect.equal i1 id2 "ordinal ascending: aaa first"
@@ -275,8 +308,8 @@ let duplicateIdentityTests =
                         mkTransition epIdB fp
                         mkTransition epIdB fp ]
               match dups with
-              | [ { Identity = i1; Kind = k1; OccurrenceLines = _ }
-                  { Identity = i2; Kind = k2; OccurrenceLines = _ } ] ->
+              | [ { Identity = i1; Kind = k1; OccurrenceIndices = _ }
+                  { Identity = i2; Kind = k2; OccurrenceIndices = _ } ] ->
                   Expect.equal k1 EpisodeInputIdentityKind.DiagnosticTransition "first kind"
                   Expect.equal k2 EpisodeInputIdentityKind.DiagnosticTransition "second kind"
                   Expect.equal i1 (epIdA + "|" + fp) "ordinal ascending"

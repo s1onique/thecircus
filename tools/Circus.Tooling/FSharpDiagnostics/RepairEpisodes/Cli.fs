@@ -168,7 +168,7 @@ let private renderEngineFailure (failure: EpisodeEngineFailure) : string =
                     "  duplicate_input_identity: kind=%s identity=%s occurrence_lines=[%s]"
                     (episodeInputIdentityKindToken d.Kind)
                     d.Identity
-                    (d.OccurrenceLines |> List.map string |> String.concat "; ")
+                    (d.OccurrenceIndices |> List.map string |> String.concat "; ")
             )
             |> ignore
 
