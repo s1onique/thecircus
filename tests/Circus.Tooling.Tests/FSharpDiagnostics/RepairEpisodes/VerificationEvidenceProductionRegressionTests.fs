@@ -35,11 +35,12 @@ open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Paths
 
 // Production regression tests live at
 //   tests/Circus.Tooling.Tests/FSharpDiagnostics/RepairEpisodes/*.fs
-// which is one level deeper than the existing rule-candidate tests.
-// __SOURCE_DIRECTORY__ therefore requires five Parent hops (not four)
-// to reach the repository root.
+// The __SOURCE_DIRECTORY__ is therefore FSharpDiagnostics/RepairEpisodes.
+// One Directory.GetParent gives FSharpDiagnostics; three further .Parent
+// hops yield Circus.Tooling.Tests, tests, and finally the repository
+// root (thecircus/).  Total: 1 GetParent + 3 .Parent hops.
 let private repoRoot () : string =
-    Directory.GetParent(__SOURCE_DIRECTORY__).Parent.Parent.Parent.Parent.Parent.FullName
+    Directory.GetParent(__SOURCE_DIRECTORY__).Parent.Parent.Parent.FullName
 
 let private expectedCandidateId =
     "7c470d2b8e3f7b3d67c1e34e44d3644b090a370103d01065810b68d4ee728c89"
