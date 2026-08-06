@@ -9,6 +9,8 @@ module Circus.Tooling.Tests.FSharpDiagnostics.RepairEpisodes.VerificationEvidenc
 
 open System
 open System.IO
+open System.Security.Cryptography
+open System.Text
 
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Engine
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
@@ -25,19 +27,27 @@ let validCommitOid = String.replicate 40 "a"
 /// Valid 40-character tree OID
 let validTreeOid = String.replicate 40 "a"
 
-/// Generate a unique valid 64-character SHA-256 evidence ID.
-/// The result is always exactly 64 lowercase hex characters.
-let evidenceId (suffix: string) =
-    // 64-char base; callers' `suffix` is appended but truncated if longer
-    // than 4 chars (4 chars give 2^16 = 65,536 unique IDs per test run).
-    let base64 =
-        "000100020003000400050006000700080009000a000b000c000d000e000f0010001100120013001400150016"
-    let trimmedSuffix =
-        if suffix.Length <= 4 then
-            suffix
-        else
-            suffix.Substring(0, 4)
-    (base64 + trimmedSuffix).Substring(0, 64)
+/// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01:
+/// Spec §13 - deterministic evidence ID generation for test fixtures.
+/// The framing is:
+///   sha256( UTF8("verification-evidence-alias-fixture-v1") + NUL + UTF8(testCaseKey) )
+/// This guarantees:
+///   * output length is exactly 64 lowercase hexadecimal characters
+///   * the same test_case_key always produces the same ID
+///   * different test_case_key values produce different IDs
+///   * the result is independent of any global counter, timestamp, GUID, or filesystem path
+let evidenceId (testCaseKey: string) : string =
+    let prefix = Encoding.UTF8.GetBytes "verification-evidence-alias-fixture-v1"
+    let nul = [| byte 0 |]
+    let keyBytes = Encoding.UTF8.GetBytes testCaseKey
+
+    use h = SHA256.Create()
+    let hash = h.ComputeHash(Array.concat [ prefix; nul; keyBytes ])
+
+    hash
+    |> Array.map (fun b -> b.ToString("x2"))
+    |> String.concat ""
+    |> fun s -> if s.Length <> 64 then failwithf "deterministicEvidenceId produced %d chars, expected 64" s.Length else s
 
 // -----------------------------------------------------------------------------
 // Directory Helpers
