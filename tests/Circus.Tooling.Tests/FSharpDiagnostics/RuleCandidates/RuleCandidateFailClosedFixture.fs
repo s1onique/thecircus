@@ -187,6 +187,72 @@ type TempRepository() =
 // Valid input corpus builders
 // -----------------------------------------------------------------------------
 
+/// Build a repair-episode JSON record with an explicit episode_id.
+/// Use this helper when the test must assert on a SPECIFIC identity
+/// (e.g., same identity across two records to exercise duplicate-identity
+/// detection; or an identity referenced by an evidence record).
+let mkRepairEpisodeJsonWithId
+    (episodeId: string)
+    (episodeKey: string)
+    (changeSetId: string)
+    (evidenceIds: string list)
+    : string =
+    let afterCommit = String.replicate 40 "b"
+    let afterTree = String.replicate 40 "d"
+    let evidJson = evidenceIds |> List.map (sprintf "\"%s\"") |> String.concat ","
+    "{\"schema_version\":\"repair-episode-v1\","
+    + "\"episode_id\":\"" + episodeId + "\","
+    + "\"episode_key\":\"" + episodeKey + "\","
+    + "\"before_capture_id\":\"x\",\"after_capture_id\":\"y\","
+    + "\"before_commit_oid\":\"" + String.replicate 40 "a" + "\","
+    + "\"before_tree_oid\":\"" + String.replicate 40 "c" + "\","
+    + "\"after_commit_oid\":\"" + afterCommit + "\","
+    + "\"after_tree_oid\":\"" + afterTree + "\","
+    + "\"commit_range\":[\"" + afterCommit + "\"],"
+    + "\"change_set_id\":\"" + changeSetId + "\","
+    + "\"command_contract_before\":\"dotnet build\","
+    + "\"command_contract_after\":\"dotnet build\","
+    + "\"compatibility\":{\"status\":\"compatible\",\"reasons\":[],\"missing_fields\":[]},"
+    + "\"transition_counts\":{\"persisted_same_count\":0,\"persisted_count_decreased\":0,\"persisted_count_increased\":0,\"eliminated_after\":4,\"introduced_after\":0,\"resolution_candidates\":4,\"regression_candidates\":0,\"unassessable\":0},"
+    + "\"verification_level\":\"focused_gate_verified\","
+    + "\"verification_evidence_ids\":[" + evidJson + "],"
+    + "\"qualification\":{\"status\":\"qualified\",\"reasons\":[]}}"
+
+/// Build a change-set JSON record with an explicit change_set_id.
+let mkChangeSetJsonWithId (changeSetId: string) (path: string) : string =
+    let beforeTree = String.replicate 40 "c"
+    let afterTree = String.replicate 40 "d"
+    "{\"schema_version\":\"git-change-set-v1\","
+    + "\"change_set_id\":\"" + changeSetId + "\","
+    + "\"change_set_version\":\"git-change-set-v1\","
+    + "\"before_tree_oid\":\"" + beforeTree + "\","
+    + "\"after_tree_oid\":\"" + afterTree + "\","
+    + "\"object_format\":\"sha1\","
+    + "\"entries\":[{\"before_mode\":\"100644\",\"after_mode\":\"100644\",\"before_blob_oid\":null,\"after_blob_oid\":null,\"change_kind\":\"modified\",\"canonical_path\":\"" + path + "\"}]}"
+
+/// Build a verification-evidence JSON record with an explicit evidence_id
+/// and the supplied binding fields.  Use when the test must assert that the
+/// episode under evaluation references this exact record.
+let mkVerificationEvidenceJsonWithId
+    (evidenceId: string)
+    (episodeId: string)
+    (status: string)
+    (exitCode: int)
+    (testedCommitOid: string)
+    (testedTreeOid: string)
+    : string =
+    "{\"schema_version\":\"verification-evidence-v1\","
+    + "\"evidence_id\":\"" + evidenceId + "\","
+    + "\"episode_id\":\"" + episodeId + "\","
+    + "\"kind\":\"focused_gate\","
+    + "\"command\":\"dotnet build\","
+    + "\"working_directory\":\"/tmp\","
+    + "\"tested_commit_oid\":\"" + testedCommitOid + "\","
+    + "\"tested_tree_oid\":\"" + testedTreeOid + "\","
+    + "\"exit_code\":" + string exitCode + ","
+    + "\"stdout_sha256\":null,\"stderr_sha256\":null,\"combined_log_path\":null,"
+    + "\"status\":\"" + status + "\"}"
+
 /// Construct a valid repair episode JSON record from a fixture key.
 let mkValidRepairEpisodeJson (key: string) : string =
     let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" key

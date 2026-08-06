@@ -5,19 +5,10 @@ module Circus.Tooling.Tests.FSharpDiagnostics.RuleCandidates.RuleCandidateVerifi
 //
 // ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01
 //
-// Twelve tests covering every typed binding failure:
-//   1. evidence status is fail
-//   2. evidence status is pass, exit code is non-zero
-//   3. evidence status is fail, exit code is zero
-//   4. tested commit differs from episode after-commit
-//   5. tested tree differs from episode after-tree
-//   6. evidence episode ID differs from owning episode
-//   7. tested commit is missing
-//   8. tested tree is missing
-//   9. one of multiple evidence records fails
-//  10. one of multiple evidence records is stale (mismatching commit)
-//  11. duplicate evidence reference appears in the episode
-//  12. reorder the same mixed evidence set and obtain the same failure
+// Twelve tests covering every typed binding failure.  All multi-evidence
+// tests write evidence records that the episode under test references,
+// so the failure observed is the intended verification-binding rejection
+// (not an unresolved-reference failure).
 // =============================================================================
 
 open Expecto
@@ -30,9 +21,23 @@ let private changeSetsRel = canonicalRootRelative + "/" + normalizedCorpusRelati
 let private transitionsRel = canonicalRootRelative + "/" + normalizedCorpusRelativeSubdir + "/diagnostic-transitions-v1.jsonl"
 let private evidenceRel = canonicalRootRelative + "/" + normalizedCorpusRelativeSubdir + "/verification-evidence-v1.jsonl"
 
-let private mkEvidenceRecord (evidKey: string) (status: string) (exitCode: int) (testedCommit: string) (testedTree: string) (episodeId: string) : string =
-    let evidId = deterministicSha256 "rule-candidate-fixture-evidence-v1" evidKey
-    "{\"schema_version\":\"verification-evidence-v1\",\"evidence_id\":\"" + evidId + "\",\"episode_id\":\"" + episodeId + "\",\"kind\":\"focused_gate\",\"command\":\"dotnet build\",\"working_directory\":\"/tmp\",\"tested_commit_oid\":\"" + testedCommit + "\",\"tested_tree_oid\":\"" + testedTree + "\",\"exit_code\":" + string exitCode + ",\"stdout_sha256\":null,\"stderr_sha256\":null,\"combined_log_path\":null,\"status\":\"" + status + "\"}"
+let private afterCommit = String.replicate 40 "b"
+let private afterTree = String.replicate 40 "d"
+
+/// Build a minimal corpus with an episode that references the supplied
+/// evidence IDs.  The episode, change set, transitions, and evidence
+/// records are all written.  This guarantees the multi-evidence binding
+/// tests exercise the binding check rather than an unresolved reference.
+let writeCorpusWithEpisodeReferencing (repo: TempRepository) (key: string) (evidenceIds: string list) : string =
+    let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" key
+    let csId = deterministicSha256 "rule-candidate-fixture-changeset-v1" key
+    let epKey = "fsb-" + key
+    repo.WriteUtf8(episodesRel, mkRepairEpisodeJsonWithId epId epKey csId evidenceIds + "\n")
+    repo.WriteUtf8(changeSetsRel, mkChangeSetJsonWithId csId "a.fs" + "\n")
+    repo.WriteUtf8(transitionsRel,
+        mkValidDiagnosticTransitionJson key "FS0010" "a.fs" + "\n"
+        + mkValidDiagnosticTransitionJson key "FS3118" "a.fs" + "\n")
+    epId
 
 [<Tests>]
 let verificationBindingTests =
@@ -40,91 +45,85 @@ let verificationBindingTests =
         "FSharpDiagnostics.RuleCandidates.VerificationBinding"
         [ test "evidence status=fail rejects the episode" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-fail-status"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-fail-status"
-              let evidRecord = mkEvidenceRecord "vb-fail-status" "fail" 0 (String.replicate 40 "b") (String.replicate 40 "d") epId
-              repo.WriteUtf8(evidenceRel, evidRecord + "\n")
+              let key = "vb-fail-status"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-fail"]
+              repo.WriteUtf8(evidenceRel, mkVerificationEvidenceJsonWithId "ev-fail" epId "fail" 0 afterCommit afterTree + "\n")
               let r = extractCandidates repo.Root
-              Expect.equal r.Candidates.Length 0 "fail status must NOT produce a candidate"
+              Expect.equal r.Candidates.Length 0 "fail status must NOT yield a candidate"
           }
 
           test "evidence status=pass with non-zero exit_code rejects the episode" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-nonzero-exit"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-nonzero-exit"
-              let evidRecord = mkEvidenceRecord "vb-nonzero-exit" "pass" 2 (String.replicate 40 "b") (String.replicate 40 "d") epId
-              repo.WriteUtf8(evidenceRel, evidRecord + "\n")
+              let key = "vb-nonzero-exit"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-nz"]
+              repo.WriteUtf8(evidenceRel, mkVerificationEvidenceJsonWithId "ev-nz" epId "pass" 2 afterCommit afterTree + "\n")
               let r = extractCandidates repo.Root
-              Expect.equal r.Candidates.Length 0 "non-zero exit must NOT produce a candidate"
+              Expect.equal r.Candidates.Length 0 "non-zero exit must NOT yield a candidate"
           }
 
-          test "evidence status=fail with zero exit_code rejects the episode (inconsistent)" {
+          test "evidence status=fail with exit_code=0 rejects the episode (inconsistent)" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-fail-zero"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-fail-zero"
-              let evidRecord = mkEvidenceRecord "vb-fail-zero" "fail" 0 (String.replicate 40 "b") (String.replicate 40 "d") epId
-              repo.WriteUtf8(evidenceRel, evidRecord + "\n")
+              let key = "vb-fail-zero"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-fz"]
+              repo.WriteUtf8(evidenceRel, mkVerificationEvidenceJsonWithId "ev-fz" epId "fail" 0 afterCommit afterTree + "\n")
               let r = extractCandidates repo.Root
-              Expect.equal r.Candidates.Length 0 "fail status must dominate over exit_code"
+              Expect.equal r.Candidates.Length 0 "fail status must dominate"
           }
 
           test "tested_commit_oid differs from episode after_commit_oid rejects the episode" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-wrong-commit"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-wrong-commit"
-              let evidRecord = mkEvidenceRecord "vb-wrong-commit" "pass" 0 (String.replicate 40 "f") (String.replicate 40 "d") epId
-              repo.WriteUtf8(evidenceRel, evidRecord + "\n")
+              let key = "vb-wrong-commit"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-wc"]
+              let wrongCommit = String.replicate 40 "f"
+              repo.WriteUtf8(evidenceRel, mkVerificationEvidenceJsonWithId "ev-wc" epId "pass" 0 wrongCommit afterTree + "\n")
               let r = extractCandidates repo.Root
-              Expect.equal r.Candidates.Length 0 "wrong commit binding must NOT produce a candidate"
+              Expect.equal r.Candidates.Length 0 "wrong commit binding must NOT yield a candidate"
           }
 
           test "tested_tree_oid differs from episode after_tree_oid rejects the episode" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-wrong-tree"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-wrong-tree"
-              let evidRecord = mkEvidenceRecord "vb-wrong-tree" "pass" 0 (String.replicate 40 "b") (String.replicate 40 "f") epId
-              repo.WriteUtf8(evidenceRel, evidRecord + "\n")
+              let key = "vb-wrong-tree"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-wt"]
+              let wrongTree = String.replicate 40 "f"
+              repo.WriteUtf8(evidenceRel, mkVerificationEvidenceJsonWithId "ev-wt" epId "pass" 0 afterCommit wrongTree + "\n")
               let r = extractCandidates repo.Root
-              Expect.equal r.Candidates.Length 0 "wrong tree binding must NOT produce a candidate"
+              Expect.equal r.Candidates.Length 0 "wrong tree binding must NOT yield a candidate"
           }
 
           test "evidence episode_id differs from owning episode rejects the episode" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-ev-ep-mismatch"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-ev-ep-mismatch"
+              let key = "vb-ev-ep-mismatch"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-em"]
               let otherEpId = deterministicSha256 "rule-candidate-fixture-episode-v1" "other-episode"
-              let evidRecord = mkEvidenceRecord "vb-ev-ep-mismatch" "pass" 0 (String.replicate 40 "b") (String.replicate 40 "d") otherEpId
-              repo.WriteUtf8(evidenceRel, evidRecord + "\n")
+              repo.WriteUtf8(evidenceRel, mkVerificationEvidenceJsonWithId "ev-em" otherEpId "pass" 0 afterCommit afterTree + "\n")
               let r = extractCandidates repo.Root
-              Expect.equal r.Candidates.Length 0 "mismatched episode_id must NOT produce a candidate"
+              Expect.equal r.Candidates.Length 0 "mismatched episode_id must NOT yield a candidate"
           }
 
           test "tested_commit_oid missing (empty) rejects the episode" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-missing-commit"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-missing-commit"
-              let evidRecord = mkEvidenceRecord "vb-missing-commit" "pass" 0 "" (String.replicate 40 "d") epId
-              repo.WriteUtf8(evidenceRel, evidRecord + "\n")
+              let key = "vb-missing-commit"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-mc"]
+              repo.WriteUtf8(evidenceRel, mkVerificationEvidenceJsonWithId "ev-mc" epId "pass" 0 "" afterTree + "\n")
               let r = extractCandidates repo.Root
-              Expect.equal r.Candidates.Length 0 "missing commit binding must NOT produce a candidate"
+              Expect.equal r.Candidates.Length 0 "missing commit binding must NOT yield a candidate"
           }
 
           test "tested_tree_oid missing (empty) rejects the episode" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-missing-tree"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-missing-tree"
-              let evidRecord = mkEvidenceRecord "vb-missing-tree" "pass" 0 (String.replicate 40 "b") "" epId
-              repo.WriteUtf8(evidenceRel, evidRecord + "\n")
+              let key = "vb-missing-tree"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-mt"]
+              repo.WriteUtf8(evidenceRel, mkVerificationEvidenceJsonWithId "ev-mt" epId "pass" 0 afterCommit "" + "\n")
               let r = extractCandidates repo.Root
-              Expect.equal r.Candidates.Length 0 "missing tree binding must NOT produce a candidate"
+              Expect.equal r.Candidates.Length 0 "missing tree binding must NOT yield a candidate"
           }
 
           test "one of multiple evidence records fails: episode still rejected" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-multi-fail"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-multi-fail"
-              let a = mkEvidenceRecord "vb-multi-fail-a" "pass" 0 (String.replicate 40 "b") (String.replicate 40 "d") epId
-              let b = mkEvidenceRecord "vb-multi-fail-b" "fail" 0 (String.replicate 40 "b") (String.replicate 40 "d") epId
+              let key = "vb-multi-fail"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-mfa"; "ev-mfb"]
+              let a = mkVerificationEvidenceJsonWithId "ev-mfa" epId "pass" 0 afterCommit afterTree
+              let b = mkVerificationEvidenceJsonWithId "ev-mfb" epId "fail" 0 afterCommit afterTree
               repo.WriteUtf8(evidenceRel, a + "\n" + b + "\n")
               let r = extractCandidates repo.Root
               Expect.equal r.Candidates.Length 0 "any failing evidence must reject the episode"
@@ -132,33 +131,40 @@ let verificationBindingTests =
 
           test "one of multiple evidence records is stale: episode still rejected" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-multi-stale"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-multi-stale"
-              let a = mkEvidenceRecord "vb-multi-stale-a" "pass" 0 (String.replicate 40 "b") (String.replicate 40 "d") epId
-              let b = mkEvidenceRecord "vb-multi-stale-b" "pass" 0 (String.replicate 40 "f") (String.replicate 40 "d") epId
+              let key = "vb-multi-stale"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-msa"; "ev-msb"]
+              let staleCommit = String.replicate 40 "f"
+              let a = mkVerificationEvidenceJsonWithId "ev-msa" epId "pass" 0 afterCommit afterTree
+              let b = mkVerificationEvidenceJsonWithId "ev-msb" epId "pass" 0 staleCommit afterTree
               repo.WriteUtf8(evidenceRel, a + "\n" + b + "\n")
               let r = extractCandidates repo.Root
               Expect.equal r.Candidates.Length 0 "any stale evidence must reject the episode"
           }
 
-          test "duplicate evidence reference is rejected by the parser" {
+          test "duplicate evidence reference appears in the episode: rejected" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-dup-ref"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-dup-ref"
-              let csId = deterministicSha256 "rule-candidate-fixture-changeset-v1" "vb-dup-ref"
-              let evidId = deterministicSha256 "rule-candidate-fixture-evidence-v1" "vb-dup-ref"
-              let epJson = "{\"schema_version\":\"repair-episode-v1\",\"episode_id\":\"" + epId + "\",\"episode_key\":\"fsb-vb-dup-ref\",\"before_capture_id\":\"x\",\"after_capture_id\":\"y\",\"before_commit_oid\":\"" + String.replicate 40 "a" + "\",\"before_tree_oid\":\"" + String.replicate 40 "c" + "\",\"after_commit_oid\":\"" + String.replicate 40 "b" + "\",\"after_tree_oid\":\"" + String.replicate 40 "d" + "\",\"commit_range\":[\"" + String.replicate 40 "b" + "\"],\"change_set_id\":\"" + csId + "\",\"command_contract_before\":\"dotnet build\",\"command_contract_after\":\"dotnet build\",\"compatibility\":{\"status\":\"compatible\",\"reasons\":[],\"missing_fields\":[]},\"transition_counts\":{\"persisted_same_count\":0,\"persisted_count_decreased\":0,\"persisted_count_increased\":0,\"eliminated_after\":4,\"introduced_after\":0,\"resolution_candidates\":4,\"regression_candidates\":0,\"unassessable\":0},\"verification_level\":\"focused_gate_verified\",\"verification_evidence_ids\":[\"" + evidId + "\",\"" + evidId + "\"],\"qualification\":{\"status\":\"qualified\",\"reasons\":[]}}"
+              let key = "vb-dup-ref"
+              let csId = deterministicSha256 "rule-candidate-fixture-changeset-v1" key
+              let evidId = deterministicSha256 "rule-candidate-fixture-evidence-v1" key
+              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" key
+              // Episode references the SAME evidence_id twice.
+              let epJson = mkRepairEpisodeJsonWithId epId ("fsb-" + key) csId [ evidId; evidId ]
               repo.WriteUtf8(episodesRel, epJson + "\n")
+              repo.WriteUtf8(changeSetsRel, mkChangeSetJsonWithId csId "a.fs" + "\n")
+              repo.WriteUtf8(transitionsRel,
+                  mkValidDiagnosticTransitionJson key "FS0010" "a.fs" + "\n"
+                  + mkValidDiagnosticTransitionJson key "FS3118" "a.fs" + "\n")
+              repo.WriteUtf8(evidenceRel, mkVerificationEvidenceJsonWithId evidId epId "pass" 0 afterCommit afterTree + "\n")
               let r = extractCandidates repo.Root
               Expect.isFalse (List.isEmpty r.Errors) "duplicate evidence reference must surface an error"
           }
 
           test "reorder of mixed evidence set yields same failure outcome" {
               use repo = new TempRepository()
-              writeValidMinimalCorpus repo "vb-reorder"
-              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "vb-reorder"
-              let a = mkEvidenceRecord "vb-reorder-a" "pass" 0 (String.replicate 40 "b") (String.replicate 40 "d") epId
-              let b = mkEvidenceRecord "vb-reorder-b" "fail" 0 (String.replicate 40 "b") (String.replicate 40 "d") epId
+              let key = "vb-reorder"
+              let epId = writeCorpusWithEpisodeReferencing repo key ["ev-ra"; "ev-rb"]
+              let a = mkVerificationEvidenceJsonWithId "ev-ra" epId "pass" 0 afterCommit afterTree
+              let b = mkVerificationEvidenceJsonWithId "ev-rb" epId "fail" 0 afterCommit afterTree
               repo.WriteUtf8(evidenceRel, a + "\n" + b + "\n")
               let r1 = extractCandidates repo.Root
               repo.WriteUtf8(evidenceRel, b + "\n" + a + "\n")
