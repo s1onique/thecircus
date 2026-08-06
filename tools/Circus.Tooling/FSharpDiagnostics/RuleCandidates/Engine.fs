@@ -429,35 +429,59 @@ let mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError list =
                 |> List.sortWith (fun a b -> String.CompareOrdinal(a, b))
             output.Add(DuplicateInputIdentities(VerificationEvidenceIdentity, ids))
 
-        // Typed key for normalizing non-duplicate errors.  Renders the
-        // case to a stable sortable key using only the fields the DU
-        // guarantees carry.
+        // Typed structured key for normalizing non-duplicate errors.
+        // Every DU case carries its own discriminators; we render each
+        // to a tuple that contains every discriminator so identical
+        // string keys cannot collide across semantically different
+        // errors.  Ordinal string comparison via `String.CompareOrdinal`
+        // is independent of language and culture.
         let nonDupKey (e: VerificationEvidenceLoadError) : string =
+            let ord (s: string) (s2: string) = s + "|" + s2
             match e with
-            | VerificationEvidenceLoadError.EvidenceFileMissing p -> "missing:" + p
-            | VerificationEvidenceLoadError.EvidenceFileUnreadable(p, _) -> "unreadable:" + p
-            | VerificationEvidenceLoadError.DuplicateEvidenceId _ -> "duplicate:"
-            | VerificationEvidenceLoadError.ConflictingEvidenceRecord _ -> "conflicting:"
-            | VerificationEvidenceLoadError.UnsupportedEvidenceSchemaVersion(p, v) -> "schema:" + p + ":" + v
+            | VerificationEvidenceLoadError.EvidenceFileMissing p -> "missing|" + p + "|"
+            | VerificationEvidenceLoadError.EvidenceFileUnreadable(p, msg) -> "unreadable|" + p + "|" + msg
+            | VerificationEvidenceLoadError.DuplicateEvidenceId(p, id, l1, l2) ->
+                sprintf "duplicate|%s|%s|%d|%d|" p id l1 l2
+            | VerificationEvidenceLoadError.ConflictingEvidenceRecord(p, id, l1, l2) ->
+                sprintf "conflicting|%s|%s|%d|%d|" p id l1 l2
+            | VerificationEvidenceLoadError.UnsupportedEvidenceSchemaVersion(p, v) ->
+                "unsupported_schema|" + p + "|" + v + "|"
             | VerificationEvidenceLoadError.ParseError pe ->
                 match pe with
-                | VerificationEvidenceParseError.MalformedJson(s, l, _) -> "malformed:" + s + ":" + string l
-                | VerificationEvidenceParseError.ExpectedObject(s, l) -> "expected_object:" + s + ":" + string l
-                | VerificationEvidenceParseError.MissingField(s, l, f) -> "missing_field:" + s + ":" + string l + ":" + f
-                | VerificationEvidenceParseError.WrongFieldType(s, l, f, _, _) -> "wrong_type:" + s + ":" + string l + ":" + f
-                | VerificationEvidenceParseError.UnsupportedSchemaVersion(s, l, v) -> "schema_v:" + s + ":" + string l + ":" + v
-                | VerificationEvidenceParseError.UnknownVerificationKind(s, l, v) -> "unknown_kind:" + s + ":" + string l + ":" + v
-                | VerificationEvidenceParseError.UnknownVerificationStatus(s, l, v) -> "unknown_status:" + s + ":" + string l + ":" + v
-                | VerificationEvidenceParseError.InvalidExitCode(s, l, v) -> "invalid_exit:" + s + ":" + string l + ":" + v
-                | VerificationEvidenceParseError.InvalidCommitOid(s, l, f, _) -> "invalid_commit:" + s + ":" + string l + ":" + f
-                | VerificationEvidenceParseError.InvalidTreeOid(s, l, f, _) -> "invalid_tree:" + s + ":" + string l + ":" + f
-                | VerificationEvidenceParseError.InvalidSha256(s, l, f, _) -> "invalid_sha:" + s + ":" + string l + ":" + f
-                | VerificationEvidenceParseError.InvalidEvidenceId(s, l, _) -> "invalid_evidence_id:" + s + ":" + string l
-                | VerificationEvidenceParseError.PlaceholderEvidenceId(s, l, _) -> "placeholder_evidence_id:" + s + ":" + string l
-                | VerificationEvidenceParseError.JsonException(s, l, _) -> "json_exception:" + s + ":" + string l
-                | VerificationEvidenceParseError.DuplicateRawProperty(s, l, p, _) -> "dup_raw_prop:" + s + ":" + string l + ":" + p
-                | VerificationEvidenceParseError.DuplicateSemanticField(s, l, c, a) -> "dup_sem_field:" + s + ":" + string l + ":" + c + ":" + a
-                | VerificationEvidenceParseError.ConflictingSemanticFields(s, l, c, a, _, _) -> "conf_sem_field:" + s + ":" + string l + ":" + c + ":" + a
+                | VerificationEvidenceParseError.MalformedJson(s, l, m) ->
+                    sprintf "malformed|%s|%d|%s|" s l m
+                | VerificationEvidenceParseError.ExpectedObject(s, l) ->
+                    sprintf "expected_object|%s|%d|" s l
+                | VerificationEvidenceParseError.MissingField(s, l, f) ->
+                    sprintf "missing_field|%s|%d|%s|" s l f
+                | VerificationEvidenceParseError.WrongFieldType(s, l, f, e, a) ->
+                    sprintf "wrong_type|%s|%d|%s|%s|%s|" s l f e a
+                | VerificationEvidenceParseError.UnsupportedSchemaVersion(s, l, v) ->
+                    sprintf "schema_v|%s|%d|%s|" s l v
+                | VerificationEvidenceParseError.UnknownVerificationKind(s, l, v) ->
+                    sprintf "unknown_kind|%s|%d|%s|" s l v
+                | VerificationEvidenceParseError.UnknownVerificationStatus(s, l, v) ->
+                    sprintf "unknown_status|%s|%d|%s|" s l v
+                | VerificationEvidenceParseError.InvalidExitCode(s, l, v) ->
+                    sprintf "invalid_exit|%s|%d|%s|" s l v
+                | VerificationEvidenceParseError.InvalidCommitOid(s, l, f, v) ->
+                    sprintf "invalid_commit|%s|%d|%s|%s|" s l f v
+                | VerificationEvidenceParseError.InvalidTreeOid(s, l, f, v) ->
+                    sprintf "invalid_tree|%s|%d|%s|%s|" s l f v
+                | VerificationEvidenceParseError.InvalidSha256(s, l, f, v) ->
+                    sprintf "invalid_sha|%s|%d|%s|%s|" s l f v
+                | VerificationEvidenceParseError.InvalidEvidenceId(s, l, v) ->
+                    sprintf "invalid_evidence_id|%s|%d|%s|" s l v
+                | VerificationEvidenceParseError.PlaceholderEvidenceId(s, l, v) ->
+                    sprintf "placeholder_evidence_id|%s|%d|%s|" s l v
+                | VerificationEvidenceParseError.JsonException(s, l, m) ->
+                    sprintf "json_exception|%s|%d|%s|" s l m
+                | VerificationEvidenceParseError.DuplicateRawProperty(s, l, p, n) ->
+                    sprintf "dup_raw_prop|%s|%d|%s|%d|" s l p n
+                | VerificationEvidenceParseError.DuplicateSemanticField(s, l, c, a) ->
+                    sprintf "dup_sem_field|%s|%d|%s|%s|" s l c a
+                | VerificationEvidenceParseError.ConflictingSemanticFields(s, l, c, a, cv, av) ->
+                    sprintf "conf_sem_field|%s|%d|%s|%s|%s|%s|" s l c a cv av
         match nonDups with
         | [] -> ()
         | _ ->

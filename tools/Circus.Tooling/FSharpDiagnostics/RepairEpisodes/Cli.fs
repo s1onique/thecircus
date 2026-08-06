@@ -165,7 +165,7 @@ let private renderEngineFailure (failure: EpisodeEngineFailure) : string =
         for d in dups do
             sb.AppendLine(
                 sprintf
-                    "  duplicate_input_identity: kind=%s identity=%s occurrence_lines=[%s]"
+                    "  duplicate_input_identity: kind=%s identity=%s occurrence_indices=[%s]"
                     (episodeInputIdentityKindToken d.Kind)
                     d.Identity
                     (d.OccurrenceIndices |> List.map string |> String.concat "; ")

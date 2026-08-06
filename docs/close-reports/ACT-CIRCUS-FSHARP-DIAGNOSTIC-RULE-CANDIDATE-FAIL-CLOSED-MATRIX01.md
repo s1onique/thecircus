@@ -471,7 +471,7 @@ parent_status_unchanged: REOPENED_PARTIAL
 BASE_COMMIT       = 93b23ba20e76dd4bdd6ec8729130a15c775572da
 BASE_TREE         = 988f054c1689a8eaed361076331bcfc6ec220e51
 IMPLEMENTATION_I  = 336579ebb75f7a79af4e0e0964066c6bd05961b6
-IMPLEMENTATION_T  = <implementation tree; populated by F commit>
+IMPLEMENTATION_T  = 14e87a221dc45376e88fc48d0b14f0ca41f6657e
 ```
 
 `git diff --check` and `git status --short` were clean after the
@@ -618,7 +618,7 @@ FSharpDiagnostics.RuleCandidates.ProductionRegression          8/8   passed
 
 ## 5.6 Pre-publication duplicate detection boundary
 
-**P0 architectural correction.**  The initial correction05 implementation
+**P0 architectural correction (round 2).**  After re-review the initial
 ran duplicate detection *after* `runEpisodesWithEvidence` had already
 completed, qualified, sorted, and **published** the repair-episode
 canonical artifacts.  Review feedback correctly identified that a
@@ -661,6 +661,77 @@ FSharpDiagnostics.RuleCandidates.IdentityFailures             12/12  passed
 FSharpDiagnostics.RepairEpisodes.CanonicalPreservation        1/1   passed
 FSharpDiagnostics.RuleCandidates.ProductionRegression          8/8   passed
 ```
+
+## 5.6.1 Round-2 review fixes
+
+Re-review identified eight remaining defects.  All have been
+addressed in this round:
+
+1. **Canonical artifact path** — `EpisodeEngineCanonicalPreservationTests`
+   now imports `Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Paths` and
+   uses the canonical `repairEpisodesFile`,
+   `diagnosticTransitionsFile`, `gitChangeSetsFile`,
+   `repairEpisodeSummaryFile`, and `verificationEvidenceFile` constants
+   instead of hard-coded names.  The helper now asserts every expected
+   file existed BEFORE the run, still exists AFTER, and has unchanged
+   bytes — a missing-before-missing-after case cannot report success.
+
+2. **Test isolation** — the canonical-preservation test now runs in an
+   isolated temporary directory built by `TempRepository()`.  The
+   production `factory/` subtree is *copied* (never written), and
+   the production `.git/` is *copied recursively* (never mutated).  No
+   production-corpus file is created, modified, or removed.  Concurrent
+   test-worker interference is therefore impossible.
+
+3. **End-to-end coverage for all three upstream kinds** — the
+   canonical-preservation test now asserts that the `dups` list
+   contains the kind set
+   `{RepairEpisode, ChangeSet, DiagnosticTransition}` because two
+   declarations sharing the same capture IDs and commit OIDs collide on
+   all three identities (EpisodeId is deterministic from
+   capture+commit+trees; ChangeSetId is deterministic from
+   before-tree+after-tree+entries; transition identity is
+   `EpisodeId|ExactFingerprint`).
+
+4. **Detection before qualification** — the close report
+   characterisation is revised: the gate is **post-computation,
+   pre-publication**, not *before qualification*.  The earlier wording
+   overstated the boundary.  The flow is now: declarations parsed →
+   Git resolved → episodes/change-sets/transitions computed → upstream
+   duplicate detection runs on the uncollapsed records → if any
+   duplicate exists, the function returns `Error dups` BEFORE the
+   `publish` call.  `mapEpisodeEngineFailure` then surfaces the typed
+   failure.  This is the documented contract from this point on.
+
+5. **Committed implementation tree** — `IMPLEMENTATION_T` is now bound
+   to the actual `14e87a221dc45376e88fc48d0b14f0ca41f6657e`, resolved
+   via `git rev-parse <I>^{tree}`.
+
+6. **Test arithmetic** — the population is now reported as
+   `1,142 + 32 = 1,174`, consistent with the source-visible additions.
+
+7. **CLI token** — `RepairEpisodes/Cli.fs` now renders
+   `occurrence_indices=[...]`, matching the renamed `OccurrenceIndices`
+   field.
+
+8. **Mixed evidence ordering** — the rule-candidate adapter's
+   `nonDupKey` now uses every discriminator that each DU case carries.
+   The previous key for `DuplicateEvidenceId` was `duplicate:` and for
+   `ConflictingEvidenceRecord` was also `conflicting:`, so two
+   semantically different errors in the same file could collide.  The
+   new keys are:
+
+   ```text
+   duplicate|path|id|l1|l2|
+   conflicting|path|id|l1|l2|
+   malformed|path|line|message|
+   missing_field|path|line|field|
+   wrong_type|path|line|field|expected|actual|
+   …etc, one per DU case.
+   ```
+
+   The map result is invariant under record reversal: a forward
+   input and a reversed input produce byte-identical `EngineError list`.
 
 ## 5.7 Production read-only replay
 

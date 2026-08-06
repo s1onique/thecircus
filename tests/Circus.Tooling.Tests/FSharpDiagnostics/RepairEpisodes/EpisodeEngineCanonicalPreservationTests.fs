@@ -6,13 +6,15 @@ open Expecto
 open Circus.Tooling.FSharpDiagnostics.Paths
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Engine
+open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Paths
+open Circus.Tooling.Tests.FSharpDiagnostics.RuleCandidates.RuleCandidateFailClosedFixture
 
 let private canonicalFileNames =
-    [| "repair-episodes-v1.jsonl"
-       "diagnostic-transitions-v1.jsonl"
-       "git-change-sets-v1.jsonl"
-       "repair-episode-summary-v1.json"
-       "verification-evidence-v1.json" |]
+    [| repairEpisodesFile
+       diagnosticTransitionsFile
+       gitChangeSetsFile
+       repairEpisodeSummaryFile
+       verificationEvidenceFile |]
 
 let private canonicalRelative (file: string) : string =
     canonicalRootRelative + "/" + normalizedCorpusRelativeSubdir + "/" + file
@@ -20,97 +22,106 @@ let private canonicalRelative (file: string) : string =
 let private canonicalAbsolute (root: string) (file: string) : string =
     Path.Combine(root, canonicalRelative file)
 
-let private snapshotCanonical (root: string) : Map<string, string> =
+let private snapshotCanonical (root: string) : Map<string, string * bool> =
+    // Each entry is (sha256-or-empty, exists).  Existence must be true
+    // for every expected file both BEFORE and AFTER.
     canonicalFileNames
     |> Array.map (fun name ->
         let abs = canonicalAbsolute root name
-        let hash =
-            if File.Exists abs then
-                Circus.Tooling.FSharpDiagnostics.Hashing.sha256OfFile abs
-            else
-                ""
-        name, hash)
+        let exists = File.Exists abs
+        let hash = if exists then Circus.Tooling.FSharpDiagnostics.Hashing.sha256OfFile abs else ""
+        name, (hash, exists))
     |> Map.ofArray
 
-let private verifyCanonicalUnchanged
+let private verifyCanonicalExistenceAndBytes
     (root: string)
-    (before: Map<string, string>)
+    (before: Map<string, string * bool>)
     (label: string)
     : unit =
     let after = snapshotCanonical root
     for name in canonicalFileNames do
-        let b = Map.find name before
-        let a = Map.tryFind name after |> Option.defaultValue ""
-        Expect.equal
-            (a = b)
-            true
-            (sprintf "%s: canonical %s must be unchanged (before=%s after=%s)" label name b a)
+        let bHash, bExists = Map.find name before
+        let aOpt = Map.tryFind name after
+        match aOpt with
+        | None ->
+            failwithf "%s: canonical %s disappeared" label name
+        | Some (aHash, aExists) ->
+            if not bExists then
+                failwithf "%s: canonical %s did not exist before the run; preservation cannot be asserted" label name
+            if not aExists then
+                failwithf "%s: canonical %s disappeared during the run" label name
+            Expect.equal
+                (aHash = bHash)
+                true
+                (sprintf "%s: canonical %s bytes must be unchanged (before=%s after=%s)" label name bHash aHash)
 
-let private productionRoot () : string =
-    let assemblyDir =
-        System.IO.Path.GetDirectoryName(
-            System.Reflection.Assembly.GetExecutingAssembly().Location
-        )
-    let mutable dir = assemblyDir
-    let mutable found = false
-    while not (String.IsNullOrEmpty dir) && not found do
-        let probe = Path.Combine(dir, "factory")
-        if Directory.Exists probe then
-            found <- true
-        else
-            dir <- Path.GetDirectoryName dir
-    if not found then
-        failwithf "could not locate production root from %s" assemblyDir
-    dir
-
-let private duplicateDeclarationPath () : string =
-    let root = productionRoot ()
-    Path.Combine(
-        root,
-        "factory/evidence/fsharp-diagnostics/corpus/episodes/declarations/fsb-dup-bytes.json"
-    )
+/// Set up a temp repository containing a clone of the production
+/// corpus plus a recursive copy of the production .git subtree, so
+/// commit OIDs resolve against the real history without mutating the
+/// production tree.  The temp directory is fully isolated; no
+/// production files are written.
+let private setupIsolatedCorpusRepo (repo: TempRepository) : unit =
+    let srcRoot = productionRepoRoot ()
+    let rec copyRecursive (src: string) (dst: string) : unit =
+        if File.Exists src then
+            let dir = Path.GetDirectoryName dst
+            if not (String.IsNullOrEmpty dir) && not (Directory.Exists dir) then
+                Directory.CreateDirectory dir |> ignore
+            File.Copy(src, dst, true)
+        elif Directory.Exists src then
+            if not (Directory.Exists dst) then
+                Directory.CreateDirectory dst |> ignore
+            for entry in Directory.EnumerateFileSystemEntries src do
+                let name = Path.GetFileName entry
+                copyRecursive entry (Path.Combine(dst, name))
+    let copyRelative (rel: string) : unit =
+        let src = Path.Combine(srcRoot, rel.Replace('/', Path.DirectorySeparatorChar))
+        let dst = repo.Absolute rel
+        copyRecursive src dst
+    copyRelative "factory/evidence/fsharp-diagnostics/corpus/episodes/declarations"
+    copyRelative "factory/evidence/fsharp-diagnostics/corpus/raw"
+    copyRelative "factory/evidence/fsharp-diagnostics/corpus/manifests"
+    copyRelative "factory/evidence/fsharp-diagnostics/corpus/normalized"
+    // Copy the entire .git subtree recursively so commit OIDs resolve
+    // against the real history.  The temp directory never mutates the
+    // production checkout.
+    copyRelative ".git"
 
 let private duplicateDeclarationBody () : string =
     """{"schema_version":"repair-episode-declaration-v1","episode_key":"fsb-dup-bytes","before_capture_id":"fsb-0025-before-c79f0ec","after_capture_id":"fsb-0025-after-c79f0ec","before_commit_oid":"be84cb3cb0b540fa0c895afd7f7c6a41c01c81c6","after_commit_oid":"c79f0ecfff6b7e4c34ae469ea55a4a4b60adca91","expected_before_tree_oid":"111de4f330d2076f2b7e96d683a3f4b142c3bee4","expected_after_tree_oid":"2cf1c11e8e6f3c9c950affa87706361c9601755b","verification_evidence_ids":["8eb41f21b7e2c8809db481daa8af71fea55eb21146106245ca95fb4baeabfb70"],"declared_relevant_paths":["tools/Circus.Tooling/NoForcePush/GitHubRules.fs"],"notes":"Duplicate declaration injected for canonical preservation test."}"""
 
-let private withDuplicateDeclaration (f: unit -> 'a) : 'a =
-    let path = duplicateDeclarationPath ()
-    let originalExists = File.Exists path
-    let originalContent = if originalExists then File.ReadAllText path else ""
-    try
-        File.WriteAllText(path, duplicateDeclarationBody ())
-        f ()
-    finally
-        if originalExists then
-            File.WriteAllText(path, originalContent)
-        elif File.Exists path then
-            File.Delete path
+let private writeDuplicate (repo: TempRepository) : unit =
+    let path =
+        repo.Absolute
+            "factory/evidence/fsharp-diagnostics/corpus/episodes/declarations/fsb-dup-bytes.json"
+    File.WriteAllText(path, duplicateDeclarationBody ())
 
 [<Tests>]
 let episodeEngineCanonicalPreservationTests =
     testList
         "FSharpDiagnostics.RepairEpisodes.CanonicalPreservation"
         [ test "duplicate episode declaration: runEpisodeEngine returns Failed and preserves canonical bytes" {
-              let root = productionRoot ()
-              withDuplicateDeclaration (fun () ->
-                  let before = snapshotCanonical root
-                  let outcome = runEpisodeEngine root defaultEngineOptions
-                  let after = snapshotCanonical root
+              use repo = new TempRepository()
+              setupIsolatedCorpusRepo repo
+              let before = snapshotCanonical repo.Root
 
-                  match outcome with
-                  | EpisodeEngineExecution.Failed(EpisodeEngineFailure.DuplicateInputIdentities dups) ->
-                      Expect.isFalse (List.isEmpty dups) "at least one duplicate identity"
-                      let kinds =
-                          dups
-                          |> List.map (fun d -> d.Kind)
-                          |> List.distinct
-                      Expect.contains
-                        kinds
-                        EpisodeInputIdentityKind.RepairEpisode
-                        "must surface RepairEpisode kind"
-                  | other ->
-                      failwithf "expected Failed(DuplicateInputIdentities), got %A" other
+              writeDuplicate repo
+              let outcome = runEpisodeEngine repo.Root defaultEngineOptions
+              let after = snapshotCanonical repo.Root
 
-                  verifyCanonicalUnchanged root before "duplicate episode"
-              )
+              match outcome with
+              | EpisodeEngineExecution.Failed(EpisodeEngineFailure.DuplicateInputIdentities dups) ->
+                  Expect.isFalse (List.isEmpty dups) "at least one duplicate identity"
+                  let kinds =
+                      dups
+                      |> List.map (fun d -> d.Kind)
+                      |> List.distinct
+                  Expect.contains
+                    kinds
+                    EpisodeInputIdentityKind.RepairEpisode
+                    "must surface RepairEpisode kind"
+              | other ->
+                  failwithf "expected Failed(DuplicateInputIdentities), got %A" other
+
+              verifyCanonicalExistenceAndBytes repo.Root before "duplicate episode"
           } ]
