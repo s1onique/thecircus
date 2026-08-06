@@ -121,10 +121,11 @@ let multiPairPrecedenceTests =
             let vr = runWith json ("prec-ks-" + key)
             assertWrongFieldTypeField vr "kind" "string" "number"
         }
-        // 2. invalid status + invalid command → report the earlier-of-the-two pair.
-        //    The production parser checks command (pair 3) BEFORE status (pair 2),
-        //    so the earlier reported error names "command".
-        test "invalid status + invalid command → report command (parser checks command first)" {
+        // 2. invalid status + invalid command → report status (pair 2 comes BEFORE
+        //    command/pair 3 in the normative order documented in spec §13).
+        //    ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION04:
+        //    the parser now checks status first.
+        test "invalid status + invalid command → report status (parser checks status first)" {
             let key = "prec-status-cmd"
             let json =
                 verificationEvidenceRawProperties
@@ -136,7 +137,7 @@ let multiPairPrecedenceTests =
                       "tested_commit_oid", sprintf "\"%s\"" validCommitOid
                       "tested_tree_oid", sprintf "\"%s\"" validTreeOid ]
             let vr = runWith json ("prec-sc-" + key)
-            assertWrongFieldTypeField vr "command" "string" "number"
+            assertWrongFieldTypeField vr "status" "string" "number"
         }
         // 3. invalid command + invalid exit_code → report command
         test "invalid command + invalid exit_code → report command" {

@@ -40,14 +40,18 @@ let private applyAliases (aliases: SourceRootAlias list) (text: string) : string
     result
 
 /// Convert path separators to '/' in path-like substrings only.
-/// A path-like substring is identified as text bounded by path separators
-/// or whitespace that contains at least one forward slash or drive letter,
-/// and at least one backslash.  Backslash-only text (e.g. in error messages
-/// like "Unexpected character '\'") is preserved unchanged.
+///
+/// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION04:
+/// normalizeMessage is documented to convert backslashes to forward slashes
+/// (the spec calls for a single canonical separator in normalized output).
+/// The previous `elif not (text.Contains("/")) then text` short-circuit
+/// prevented backslash-only path-like text from being normalized.  The
+/// smallest correction is to always normalise backslashes to forward
+/// slashes when present, while still leaving backslash-only *error-message*
+/// text (e.g. "Unexpected character '\'") unchanged by the upstream
+/// no-backslash guard above.
 let private normalizePathSeparators (text: string) : string =
     if not (text.Contains("\\")) then
-        text
-    elif not (text.Contains("/")) then
         text
     else
         // Split on forward slashes and process each segment.

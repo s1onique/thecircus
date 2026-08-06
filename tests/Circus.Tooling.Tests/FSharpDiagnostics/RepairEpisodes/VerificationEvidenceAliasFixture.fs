@@ -82,9 +82,47 @@ let writeEvidence (dir: string) (records: string list) =
     if not (Directory.Exists evidenceDir) then Directory.CreateDirectory(evidenceDir) |> ignore
     File.WriteAllLines(path, records)
 
-/// Run verification pipeline on a directory
+// -----------------------------------------------------------------------------
+// Spec §9 — strict-parsing seam that returns parsed domain values
+// -----------------------------------------------------------------------------
+
+/// Load verification evidence from a JSON record and return either the
+/// parsed `VerificationEvidence` or the first load error.  This is the
+/// strict-parsing seam that allows tests to assert that alias-only and
+/// canonical-only JSON values actually reach the correct domain members
+/// (Kind, Status, Command, ExitCode).
+let private loadSingleEvidence (json: string) (label: string) : Result<VerificationEvidence, VerificationEvidenceLoadError> =
+    let dir = tempDir label
+    try
+        createMinimalStructure dir
+        writeEvidence dir [ json ]
+        match loadVerificationEvidenceStrict dir with
+        | Ok locatedRecords ->
+            match locatedRecords with
+            | [ single ] -> Ok single.Evidence
+            | _ :: _ -> failwithf "expected exactly one parsed record, got %d" (List.length locatedRecords)
+            | [] -> failwithf "no parsed records returned"
+        | Error [ err ] -> Error err
+        | Error errs -> failwithf "expected exactly one load error, got %d: %A" (List.length errs) errs
+    finally
+        cleanup dir
+
 let runVerify (dir: string) : VerificationResult =
     verifyPipeline dir defaultEngineOptions
+
+/// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION04:
+/// Spec §9 — run a JSON record through the strict parser and assert the
+/// parsed domain values.  Returns the parsed `VerificationEvidence` so the
+/// caller can chain additional assertions.  Fails the test on any load
+/// error.
+let parseAndAssert
+    (label: string)
+    (json: string)
+    : VerificationEvidence =
+    match loadSingleEvidence json label with
+    | Ok evidence -> evidence
+    | Error err ->
+        failwithf "load failed (expected successful parse): %A" err
 
 // -----------------------------------------------------------------------------
 // ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION03:

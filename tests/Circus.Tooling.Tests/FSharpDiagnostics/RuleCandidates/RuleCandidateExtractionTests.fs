@@ -377,6 +377,16 @@ let partitionTests =
               Expect.equal p.ContextTransitionIds [ t.ExactFingerprint ] "Ambiguous must be Context"
           }
 
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION04:
+// The previous fixture used `TransitionKind = IntroducedAfter` together
+// with `Assessment = ObservedRegressionCandidate`.  The production
+// `classifyTransitionRole` checks `IntroducedAfter` first and returns
+// `Excluded`, so the regression assessment never reached the
+// counterevidence branch and the test failed.  `IntroducedAfter` is a
+// structural exclusion independent of assessment per spec §6.  The
+// smallest correction is to switch the fixture to `PersistedCountIncreased`
+// (which is consistent with a regression: count went up across the
+// commit boundary) so the counterevidence branch is reachable.
           test "regression transition is Counterevidence" {
               let t =
                   mkTransition
@@ -386,7 +396,7 @@ let partitionTests =
                       TransitionAssessment.ObservedRegressionCandidate
                       0
                       1
-                      ExactTransitionKind.IntroducedAfter
+                      ExactTransitionKind.PersistedCountIncreased
                       (Some 1)
 
               let gf =

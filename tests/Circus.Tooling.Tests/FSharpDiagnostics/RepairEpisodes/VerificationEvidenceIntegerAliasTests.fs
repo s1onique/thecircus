@@ -7,6 +7,12 @@ module Circus.Tooling.Tests.FSharpDiagnostics.RepairEpisodes.VerificationEvidenc
 // Spec §12 — full 12-case matrix applied to:
 //   - exit_code / verification_exit_code
 //
+// CORRECTION04 — every successful canonical-only and alias-only case
+// asserts the parsed domain value `evidence.ExitCode` using the
+// strict-parsing seam `parseAndAssert`.  This proves the parser
+// resolves alias spelling to the correct integer domain member rather
+// than merely accepting the record silently.
+//
 // Required cases:
 //   1.  canonical only
 //   2.  alias only
@@ -15,9 +21,9 @@ module Circus.Tooling.Tests.FSharpDiagnostics.RepairEpisodes.VerificationEvidenc
 //   5.  canonical wrong type, alias valid
 //   6.  canonical valid, alias wrong type
 //   7.  both wrong type
-//   8.  canonical fractional
-//   9.  alias fractional
-//   10. both fractional
+//   8.  canonical fractional (1.5)
+//   9.  alias fractional (2.5)
+//   10. both fractional (1.5, 2.5)
 //   11. value > Int32.MaxValue
 //   12. negative value
 //
@@ -86,33 +92,23 @@ let private runWith (json: string) (label: string) : VerificationResult =
 [<Tests>]
 let exitCodeTests =
     testList "exit_code" [
-        // 1. canonical only → success, non-zero positive integer parses
-        test "canonical only → evidence.ExitCode = 3" {
+        // 1. canonical only → success, parsed ExitCode = 3
+        test "canonical only → evidence.ExitCode = 3 and no verification_exit_code property" {
             let key = "ec-canonical-only"
             let json = verificationEvidenceCanonicalOnly key "exit_code" "3"
-            let vr = runWith json ("ec-canon-" + key)
-            Expect.isFalse
-                (vr.Issues
-                 |> List.exists (function
-                     | VerificationIssue.VerificationEvidenceLoadFailed _ -> true
-                     | _ -> false))
-                "canonical-only exit_code must parse successfully"
             Expect.equal (propertyOccurrences json "exit_code") 1 "canonical 'exit_code' must appear once"
             Expect.equal (propertyOccurrences json "verification_exit_code") 0 "alias 'verification_exit_code' must be absent"
+            let evidence = parseAndAssert key json
+            Expect.equal evidence.ExitCode 3 "parsed ExitCode must equal 3"
         }
-        // 2. alias only → success, no canonical emitted
-        test "alias only → evidence.ExitCode = 7 and no canonical emitted" {
+        // 2. alias only → success, parsed ExitCode = 7 (resolved from alias), no canonical
+        test "alias only → evidence.ExitCode = 7 and no canonical 'exit_code' property emitted" {
             let key = "ec-alias-only"
             let json = verificationEvidenceAliasOnly key "verification_exit_code" "7"
-            let vr = runWith json ("ec-alias-" + key)
-            Expect.isFalse
-                (vr.Issues
-                 |> List.exists (function
-                     | VerificationIssue.VerificationEvidenceLoadFailed _ -> true
-                     | _ -> false))
-                "alias-only verification_exit_code must parse successfully"
-            Expect.equal (propertyOccurrences json "verification_exit_code") 1 "alias 'verification_exit_code' must appear once"
             Expect.equal (propertyOccurrences json "exit_code") 0 "canonical 'exit_code' must be absent"
+            Expect.equal (propertyOccurrences json "verification_exit_code") 1 "alias 'verification_exit_code' must appear once"
+            let evidence = parseAndAssert key json
+            Expect.equal evidence.ExitCode 7 "parsed ExitCode must equal 7 (resolved from verification_exit_code alias)"
         }
         // 3. both present equal → DuplicateSemanticField
         test "both present equal → DuplicateSemanticField" {

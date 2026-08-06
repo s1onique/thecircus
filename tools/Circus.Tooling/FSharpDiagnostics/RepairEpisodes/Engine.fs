@@ -702,70 +702,82 @@ let rec private parseVerificationEvidenceStrict
                                         )
                                     )
                                 | Some parsedKind ->
-                                    // 4. command (required, also accepts verification_command alias)
+                                    // 4. status (required, also accepts verification_result alias)
+                                    // ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION04:
+                                    // Spec §13 — multi-pair precedence reorders status BEFORE
+                                    // command.  Previously the parser checked command first
+                                    // (kind, command, status, exit_code), which conflicted with
+                                    // the spec's documented pair order.  The smallest possible
+                                    // correction is to swap the order of these two checks;
+                                    // every per-pair contract (spec §6) is preserved and
+                                    // JSON property order independence is unchanged.
                                     match
                                         lookupFieldStringWithAlias
                                             fields
-                                            "command"
-                                            "verification_command"
+                                            "status"
+                                            "verification_result"
                                             source
                                             lineNumber
                                     with
                                     | Result.Error e -> Result.Error e
                                     | Result.Ok(FieldLookup.Missing) ->
                                         Result.Error(
-                                            VerificationEvidenceParseError.MissingField(source, lineNumber, "command")
+                                            VerificationEvidenceParseError.MissingField(
+                                                source,
+                                                lineNumber,
+                                                "status"
+                                            )
                                         )
                                     | Result.Ok(FieldLookup.WrongType(expected, actual)) ->
                                         Result.Error(
                                             VerificationEvidenceParseError.WrongFieldType(
                                                 source,
                                                 lineNumber,
-                                                "command",
+                                                "status",
                                                 expected,
                                                 actual
                                             )
                                         )
-                                    | Result.Ok(FieldLookup.Present cmd) ->
-                                        // 5. status (required, also accepts verification_result alias)
-                                        match
-                                            lookupFieldStringWithAlias
-                                                fields
-                                                "status"
-                                                "verification_result"
-                                                source
-                                                lineNumber
-                                        with
-                                        | Result.Error e -> Result.Error e
-                                        | Result.Ok(FieldLookup.Missing) ->
+                                    | Result.Ok(FieldLookup.Present statusToken) ->
+                                        match tryParseVerificationStatus statusToken with
+                                        | None ->
                                             Result.Error(
-                                                VerificationEvidenceParseError.MissingField(
+                                                VerificationEvidenceParseError.UnknownVerificationStatus(
                                                     source,
                                                     lineNumber,
-                                                    "status"
+                                                    statusToken
                                                 )
                                             )
-                                        | Result.Ok(FieldLookup.WrongType(expected, actual)) ->
-                                            Result.Error(
-                                                VerificationEvidenceParseError.WrongFieldType(
-                                                    source,
-                                                    lineNumber,
-                                                    "status",
-                                                    expected,
-                                                    actual
-                                                )
-                                            )
-                                        | Result.Ok(FieldLookup.Present statusToken) ->
-                                            match tryParseVerificationStatus statusToken with
-                                            | None ->
+                                        | Some parsedStatus ->
+                                            // 5. command (required, also accepts verification_command alias)
+                                            match
+                                                lookupFieldStringWithAlias
+                                                    fields
+                                                    "command"
+                                                    "verification_command"
+                                                    source
+                                                    lineNumber
+                                            with
+                                            | Result.Error e -> Result.Error e
+                                            | Result.Ok(FieldLookup.Missing) ->
                                                 Result.Error(
-                                                    VerificationEvidenceParseError.UnknownVerificationStatus(
+                                                    VerificationEvidenceParseError.MissingField(
                                                         source,
                                                         lineNumber,
-                                                        statusToken
+                                                        "command"
                                                     )
                                                 )
-                                            | Some parsedStatus ->
+                                            | Result.Ok(FieldLookup.WrongType(expected, actual)) ->
+                                                Result.Error(
+                                                    VerificationEvidenceParseError.WrongFieldType(
+                                                        source,
+                                                        lineNumber,
+                                                        "command",
+                                                        expected,
+                                                        actual
+                                                    )
+                                                )
+                                            | Result.Ok(FieldLookup.Present cmd) ->
                                                 // 6. exit_code (required, non-negative integer, also accepts verification_exit_code alias)
                                                 match
                                                     lookupFieldIntWithAlias

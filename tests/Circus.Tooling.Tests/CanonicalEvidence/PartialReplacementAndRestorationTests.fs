@@ -133,7 +133,17 @@ let previousSnapshotPreservationTests =
 let liveSnapshotMayHaveChangedTests =
     testList
         "LiveSnapshotMayHaveChanged"
-        [ testCase "live snapshot not changed on successful staging"
+        // ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION04:
+        // On successful staging the live snapshot IS replaced (the new
+        // snapshot content takes the place of the previous live snapshot),
+        // so the LiveSnapshotState must be LiveSnapshotReplaced.  The legacy
+        // boolean helper `liveSnapshotMayHaveChanged` returns true for both
+        // `LiveSnapshotReplaced` and `LiveSnapshotMayHaveChanged`, which is
+        // semantically correct: the live snapshot state has changed from
+        // what it was before this operation.  The previous assertion that
+        // this boolean was false on success contradicted the production
+        // contract documented in Publication.fs.
+        [ testCase "live snapshot is LiveSnapshotReplaced on successful staging"
           <| fun () ->
               let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("n"))
               Directory.CreateDirectory tempDir |> ignore
@@ -151,9 +161,10 @@ let liveSnapshotMayHaveChangedTests =
 
                   Expect.isTrue outcome.Success "staging should succeed"
 
-                  Expect.isFalse
-                      (liveSnapshotMayHaveChanged outcome.LiveSnapshotState)
-                      "live snapshot may have changed should be false on success"
+                  Expect.equal
+                      outcome.LiveSnapshotState
+                      LiveSnapshotReplaced
+                      "successful staging must report LiveSnapshotReplaced"
               finally
                   if Directory.Exists tempDir then
                       Directory.Delete(tempDir, true)
