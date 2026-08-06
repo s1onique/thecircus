@@ -338,6 +338,10 @@ type VerificationEvidenceParseError =
     | InvalidEvidenceId of source: string * lineNumber: int * value: string
     | PlaceholderEvidenceId of source: string * lineNumber: int * value: string
     | JsonException of source: string * lineNumber: int * message: string
+    /// The same raw JSON property name appears more than once in the object.
+    /// Spec §8: detected before semantic alias resolution.  No first-wins
+    /// or last-wins interpretation.
+    | DuplicateRawProperty of source: string * lineNumber: int * propertyName: string * occurrenceCount: int
     /// Both canonical and alias fields are present with the same value.
     | DuplicateSemanticField of source: string * lineNumber: int * canonicalName: string * aliasName: string
     /// Both canonical and alias fields are present with different values.

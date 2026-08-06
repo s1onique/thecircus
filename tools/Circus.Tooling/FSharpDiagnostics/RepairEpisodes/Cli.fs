@@ -113,6 +113,9 @@ let private renderEvidenceLoadErrors (errors: VerificationEvidenceLoadError list
             | VerificationEvidenceParseError.PlaceholderEvidenceId(src, line, evid) ->
                 sb.AppendLine(sprintf "  placeholder_evidence_id: %s:%d %s" src line evid)
                 |> ignore
+            | VerificationEvidenceParseError.DuplicateRawProperty(src, line, propertyName, occurrenceCount) ->
+                sb.AppendLine(sprintf "  duplicate_raw_property: %s:%d %s (occurrences %d)" src line propertyName occurrenceCount)
+                |> ignore
             | VerificationEvidenceParseError.ExpectedObject(src, line) ->
                 sb.AppendLine(sprintf "  expected_object: %s:%d" src line) |> ignore
             | VerificationEvidenceParseError.JsonException(src, line, msg) ->
