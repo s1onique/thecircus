@@ -470,8 +470,8 @@ parent_status_unchanged: REOPENED_PARTIAL
 ```text
 BASE_COMMIT       = 93b23ba20e76dd4bdd6ec8729130a15c775572da
 BASE_TREE         = 988f054c1689a8eaed361076331bcfc6ec220e51
-IMPLEMENTATION_I  = <implementation commit; populated below>
-IMPLEMENTATION_T  = <implementation tree; populated below>
+IMPLEMENTATION_I  = 336579ebb75f7a79af4e0e0964066c6bd05961b6
+IMPLEMENTATION_T  = <implementation tree; populated by F commit>
 ```
 
 `git diff --check` and `git status --short` were clean after the
@@ -616,7 +616,53 @@ FSharpDiagnostics.RuleCandidates.IdentityFailures             12/12  passed
 FSharpDiagnostics.RuleCandidates.ProductionRegression          8/8   passed
 ```
 
-## 5.6 Production read-only replay
+## 5.6 Pre-publication duplicate detection boundary
+
+**P0 architectural correction.**  The initial correction05 implementation
+ran duplicate detection *after* `runEpisodesWithEvidence` had already
+completed, qualified, sorted, and **published** the repair-episode
+canonical artifacts.  Review feedback correctly identified that a
+duplicate-driven run could already have modified the upstream canonical
+files before the failure was reported.
+
+This final correction05 implementation:
+
+* Restructures `runEpisodesWithEvidence` to return
+  `Result<EpisodeEngineResult, EpisodeDuplicateIdentity list>` instead
+  of `EpisodeEngineResult` directly.
+* Performs duplicate detection **after** parsing and computation but
+  **before** any `publish` call.
+* On duplicate input returns `Error dups` without touching the
+  filesystem, so `runEpisodeEngine` returns
+  `Failed(DuplicateInputIdentities _)` with zero publication writes.
+* Renames `OccurrenceLines` to `OccurrenceIndices` to honestly report
+  that the values are 1-based positions in the sorted in-memory list,
+  not JSONL source lines (the engine reads from declarations + Git
+  resolution, not from JSONL, so JSONL line provenance is not
+  available).
+* Adds an explicit `kindRank` so the adapter emits mixed-kind
+  failures in the documented order
+  `EpisodeIdentity < ChangeSetIdentity < TransitionIdentity
+  < VerificationEvidenceIdentity`.
+* Normalizes non-duplicate verification-evidence errors by a typed key
+  (kind, source path, line number, field name) using ordinal comparison
+  so the mapped result is invariant under record-reversal.
+* Uses real semantic difference (different entries, different tree
+  OIDs) in the change-set "different content" test instead of an
+  identical-content shape.
+
+End-to-end coverage:
+
+```text
+FSharpDiagnostics.RepairEpisodes.DuplicateIdentity    18/18  passed
+FSharpDiagnostics.RuleCandidates.UpstreamDuplicateMapping       7/7   passed
+FSharpDiagnostics.RuleCandidates.MixedEvidenceLoadMapping      6/6   passed
+FSharpDiagnostics.RuleCandidates.IdentityFailures             12/12  passed
+FSharpDiagnostics.RepairEpisodes.CanonicalPreservation        1/1   passed
+FSharpDiagnostics.RuleCandidates.ProductionRegression          8/8   passed
+```
+
+## 5.7 Production read-only replay
 
 Pre-snapshot of the four upstream outputs:
 
@@ -649,7 +695,7 @@ c48e1ac9f84183cbab002bba7a50ff293b6c1b52e4ddb8c36bffef061fc6cbf3  rule-candidate
 b5537953bfdb3c5ada9fc260b8ea53df712b22bec409e87671917667148d923d  rule-candidate-summary-v2.json
 ```
 
-## 5.7 Working-tree evidence
+## 5.8 Working-tree evidence
 
 ```text
 git status --short     : empty (only source-code changes; canonical files unchanged)
@@ -657,7 +703,7 @@ git diff --check       : pass
 force_update           : false
 ```
 
-## 5.8 Parent status after this correction
+## 5.9 Parent status after this correction
 
 `ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01` remains
 `REOPENED_PARTIAL`.  The remaining parent defects (out of scope for
@@ -677,7 +723,7 @@ correction05) are:
 `ACT-CIRCUS-FSHARP-DIAGNOSTIC-CAUSAL-FAMILY-CLUSTERING01` remains
 `BLOCKED`.
 
-## 5.9 Boundary statements
+## 5.10 Boundary statements
 
 ```text
 causal_family_curated      : false
@@ -685,7 +731,7 @@ repair_advice_available    : false
 llm_tip_available          : false
 ```
 
-## 5.10 Successor
+## 5.11 Successor
 
 The next P0 slice is:
 
