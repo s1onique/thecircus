@@ -6,11 +6,11 @@ module Circus.Tooling.Tests.FSharpDiagnostics.RuleCandidates.RuleCandidateIdenti
 // ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01
 //
 // Twelve tests covering every identity-bearing field in the current
-// domain model.  Every duplicate-identity test asserts that an exact
-// typed duplicate failure variant is emitted by the extractor.
-// All "byte-identical" duplicate tests write a valid corpus first,
-// then append a second copy of the SAME identity record, so the
-// duplicate branch is reached.
+// domain model.  Every duplicate-identity test asserts an exact typed
+// `DuplicateInputIdentities` failure with the EXACT identity string
+// that the production code computes.  All "byte-identical" duplicate
+// tests write a valid corpus first, then append a second copy of the
+// SAME identity record, so the duplicate branch is reached.
 // =============================================================================
 
 open Expecto
@@ -27,23 +27,24 @@ let private evidenceRel = canonicalRootRelative + "/" + normalizedCorpusRelative
 let private afterCommit = String.replicate 40 "b"
 let private afterTree = String.replicate 40 "d"
 
-/// Assert that the result contains a `DuplicateInputIdentities` with the
-/// supplied kind.  Avoids type-mismatch pitfalls by always binding through
-/// the public `InputIdentityKind` DU.
+/// Asserts the result contains exactly one `DuplicateInputIdentities` with
+/// the supplied kind and identity.  Records the actual error payload
+/// first to support post-mortem debugging.
 let assertExactDuplicate
-    (expectedKind: 'a)
-    (result: EngineError list)
-    (actualId: string)
-    (msg: string)
+    (expectedKind: InputIdentityKind)
+    (expectedIdentity: string)
+    (errors: EngineError list)
     : unit =
-    match result with
-    | [ DuplicateInputIdentities(k, [actual]) ] when
-        // Use a runtime check that works for both string-typed and DU-typed kinds.
-        (System.Object.Equals(k, box expectedKind)) ->
-        Expect.equal actual actualId msg
-    | _ -> failwithf "expected exact duplicate failure %A, got %A" expectedKind result
-
-let private equalInputIdentityKind (a: obj) (b: obj) = System.Object.Equals(a, b)
+    match errors with
+    | [ DuplicateInputIdentities(actualKind, [actualIdentity]) ] ->
+        Expect.equal actualKind expectedKind "identity kind"
+        Expect.equal actualIdentity expectedIdentity "duplicate identity"
+    | actual ->
+        failwithf
+            "expected DuplicateInputIdentities(%A, [%s]), got actual=%A"
+            expectedKind
+            expectedIdentity
+            actual
 
 [<Tests>]
 let identityFailureTests =
@@ -70,12 +71,10 @@ let identityFailureTests =
               repo.AppendUtf8(episodesRel, dup + "\n")
               let r = extractCandidates repo.Root
               let expectedId = deterministicSha256 "rule-candidate-fixture-episode-v1" "id-dup-ep-same"
-              let sawDuplicate =
-                  List.exists (function
-                      | DuplicateInputIdentities(k, ids) when equalInputIdentityKind k (box EpisodeIdentity) ->
-                          List.exists ((=) expectedId) ids
-                      | _ -> false) r.Errors
-              Expect.isTrue sawDuplicate "expected exact DuplicateInputIdentities with EpisodeIdentity"
+              try
+                  assertExactDuplicate EpisodeIdentity expectedId r.Errors
+              with
+              | _ -> failwithf "actual errors: %A" r.Errors
           }
 
           test "duplicate repair-episode ID (different content, same id) is rejected" {
@@ -123,12 +122,10 @@ let identityFailureTests =
               repo.AppendUtf8(changeSetsRel, dup + "\n")
               let r = extractCandidates repo.Root
               let expectedId = deterministicSha256 "rule-candidate-fixture-changeset-v1" "id-dup-cs-same"
-              let sawDuplicate =
-                  List.exists (function
-                      | DuplicateInputIdentities(k, ids) when equalInputIdentityKind k (box ChangeSetIdentity) ->
-                          List.exists ((=) expectedId) ids
-                      | _ -> false) r.Errors
-              Expect.isTrue sawDuplicate "expected exact DuplicateInputIdentities with ChangeSetIdentity"
+              try
+                  assertExactDuplicate ChangeSetIdentity expectedId r.Errors
+              with
+              | _ -> failwithf "actual errors: %A" r.Errors
           }
 
           test "duplicate change-set ID (different content, same id) is rejected" {
@@ -169,13 +166,13 @@ let identityFailureTests =
               let dup = mkValidDiagnosticTransitionJson "id-dup-tx-same" "FS0010" "a.fs"
               repo.AppendUtf8(transitionsRel, dup + "\n")
               let r = extractCandidates repo.Root
-              let expectedFp = "fp-id-dup-tx-same-FS0010-a.fs"
-              let sawDuplicate =
-                  List.exists (function
-                      | DuplicateInputIdentities(k, ids) when equalInputIdentityKind k (box TransitionIdentity) ->
-                          List.exists ((=) expectedFp) ids
-                      | _ -> false) r.Errors
-              Expect.isTrue sawDuplicate "expected exact DuplicateInputIdentities with TransitionIdentity"
+              // Production transition identity is episode_id + "|" + exact_fingerprint.
+              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "id-dup-tx-same"
+              let expectedIdentity = epId + "|fp-id-dup-tx-same-FS0010-a.fs"
+              try
+                  assertExactDuplicate TransitionIdentity expectedIdentity r.Errors
+              with
+              | _ -> failwithf "actual errors: %A" r.Errors
           }
 
           test "duplicate transition ID (different content, same id) is rejected" {
@@ -223,13 +220,8 @@ let identityFailureTests =
               repo.AppendUtf8(evidenceRel, dup + "\n")
               let r = extractCandidates repo.Root
               let expectedId = deterministicSha256 "rule-candidate-fixture-evidence-v1" "id-dup-ev-same"
-              let sawDuplicate =
-                  List.exists (function
-                      | DuplicateInputIdentities(k, ids) when equalInputIdentityKind k (box VerificationEvidenceIdentity) ->
-                          List.exists ((=) expectedId) ids
-                      | _ -> false) r.Errors
-              Expect.isTrue sawDuplicate "expected exact DuplicateInputIdentities with VerificationEvidenceIdentity"
+              try
+                  assertExactDuplicate VerificationEvidenceIdentity expectedId r.Errors
+              with
+              | _ -> failwithf "actual errors: %A" r.Errors
           } ]
-
-// Suppress unused-warning for the helper that resolves to a function value.
-ignore assertExactDuplicate
