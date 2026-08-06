@@ -357,7 +357,19 @@ type RuleCandidateInputs =
 let private mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError =
     match failure with
     | EpisodeEngineFailure.VerificationEvidenceLoadFailed errors ->
-        EngineError.VerificationEvidenceLoadFailed(errors |> List.map string)
+        // Map the typed `DuplicateEvidenceId` cases to the rule-candidate
+        // `DuplicateInputIdentities` so the byte-identical duplicate
+        // test reaches the intended branch instead of a generic load error.
+        let dups =
+            errors
+            |> List.choose (function
+                | VerificationEvidenceLoadError.DuplicateEvidenceId(_, evidId, _, _) -> Some evidId
+                | _ -> None)
+        match dups with
+        | [] -> EngineError.VerificationEvidenceLoadFailed(errors |> List.map string)
+        | ids ->
+            let sorted = ids |> List.sort |> List.distinct
+            EngineError.DuplicateInputIdentities(VerificationEvidenceIdentity, sorted)
     | EpisodeEngineFailure.DeclarationLoadFailed issues ->
         EngineError.Internal(sprintf "Declaration load failed: %A" issues)
     | EpisodeEngineFailure.PublicationFailed(_, msg) -> EngineError.PublicationFailed msg
