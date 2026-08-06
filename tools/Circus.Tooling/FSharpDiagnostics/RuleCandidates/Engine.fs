@@ -354,102 +354,130 @@ type RuleCandidateInputs =
       ChangeSets: Map<string, GitChangeSet>
       VerificationEvidence: Map<string, LocatedVerificationEvidence> }
 
-let private mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError =
-    match failure with
-    | EpisodeEngineFailure.VerificationEvidenceLoadFailed errors ->
-        // Map the typed `DuplicateEvidenceId` cases to the rule-candidate
-        // `DuplicateInputIdentities` so the byte-identical duplicate
-        // test reaches the intended branch instead of a generic load error.
-        let dups =
-            errors
-            |> List.choose (function
-                | VerificationEvidenceLoadError.DuplicateEvidenceId(_, evidId, _, _) -> Some evidId
-                | _ -> None)
-        match dups with
-        | [] -> EngineError.VerificationEvidenceLoadFailed(errors |> List.map string)
-        | ids ->
-            let sorted = ids |> List.sort |> List.distinct
-            EngineError.DuplicateInputIdentities(VerificationEvidenceIdentity, sorted)
-    | EpisodeEngineFailure.DeclarationLoadFailed issues ->
-        EngineError.Internal(sprintf "Declaration load failed: %A" issues)
-    | EpisodeEngineFailure.PublicationFailed(_, msg) -> EngineError.PublicationFailed msg
-    | EpisodeEngineFailure.InternalFailure(op, msg) -> EngineError.Internal(sprintf "Internal failure in %s: %s" op msg)
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05:
+// Map upstream `EpisodeEngineFailure` to one or more `EngineError`.  The
+// mapper NEVER collapses multiple errors into one.  For verification-
+// evidence load errors the duplicate and non-duplicate cases are preserved
+// independently so the rule-candidate adapter can emit BOTH a typed
+// `DuplicateInputIdentities` and a typed `VerificationEvidenceLoadFailed`.
+// For `DuplicateInputIdentities` the upstream kind is mapped 1:1 to the
+// rule-candidate `InputIdentityKind`.  Output order:
+//   EpisodeIdentity, ChangeSetIdentity, TransitionIdentity,
+//   VerificationEvidenceIdentity, then all other evidence errors.
+let private mapEpisodeInputIdentityKind (k: EpisodeInputIdentityKind) : InputIdentityKind =
+    match k with
+    | EpisodeInputIdentityKind.RepairEpisode -> EpisodeIdentity
+    | EpisodeInputIdentityKind.ChangeSet -> ChangeSetIdentity
+    | EpisodeInputIdentityKind.DiagnosticTransition -> TransitionIdentity
 
-let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInputs, EngineError> =
+let mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError list =
+    match failure with
+    | EpisodeEngineFailure.DuplicateInputIdentities dups ->
+        // Group identical upstream kinds, deduplicate identities, sort
+        // ordinally, and emit one DuplicateInputIdentities per kind.
+        // Output order is fixed: RepairEpisode, ChangeSet,
+        // DiagnosticTransition.  The upstream duplicate records are
+        // already grouped and sorted, but we re-aggregate defensively.
+        let grouped =
+            dups
+            |> List.groupBy (fun d -> mapEpisodeInputIdentityKind d.Kind)
+            |> List.map (fun (kind, items) ->
+                let ids =
+                    items
+                    |> List.map (fun d -> d.Identity)
+                    |> List.distinct
+                    |> List.sortWith (fun a b -> String.CompareOrdinal(a, b))
+                DuplicateInputIdentities(kind, ids))
+        grouped
+    | EpisodeEngineFailure.VerificationEvidenceLoadFailed errors ->
+        // Lossless mapping: partition duplicate evidence-id errors from
+        // every other evidence-load error.  Both semantic classes are
+        // preserved.  Duplicate evidence IDs become a typed
+        // DuplicateInputIdentities; everything else becomes a typed
+        // VerificationEvidenceLoadFailed carrying the exact upstream
+        // strings.
+        let dups, nonDups =
+            errors
+            |> List.partition (function
+                | VerificationEvidenceLoadError.DuplicateEvidenceId(_, _, _, _) -> true
+                | _ -> false)
+        let output = ResizeArray<EngineError>()
+        match dups with
+        | [] -> ()
+        | _ ->
+            let ids =
+                dups
+                |> List.choose (function
+                    | VerificationEvidenceLoadError.DuplicateEvidenceId(_, evidId, _, _) -> Some evidId
+                    | _ -> None)
+                |> List.distinct
+                |> List.sortWith (fun a b -> String.CompareOrdinal(a, b))
+            output.Add(DuplicateInputIdentities(VerificationEvidenceIdentity, ids))
+        match nonDups with
+        | [] -> ()
+        | _ ->
+            output.Add(VerificationEvidenceLoadFailed(nonDups |> List.map string))
+        output |> Seq.toList
+    | EpisodeEngineFailure.DeclarationLoadFailed issues ->
+        [ EngineError.Internal(sprintf "Declaration load failed: %A" issues) ]
+    | EpisodeEngineFailure.PublicationFailed(_, msg) -> [ EngineError.PublicationFailed msg ]
+    | EpisodeEngineFailure.InternalFailure(op, msg) ->
+        [ EngineError.Internal(sprintf "Internal failure in %s: %s" op msg) ]
+
+let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInputs, EngineError list> =
+    // ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05:
+    // Upstream duplicate-identity authority lives in the repair-episode
+    // engine.  When `runEpisodeEngine` succeeds, every list is already
+    // unique-by-identity; we only have to validate non-empty identities
+    // and build look-up maps.  Any collected non-empty-identity errors are
+    // returned as a list (never collapsed to a single error).
     match runEpisodeEngine repoRoot defaultEngineOptions with
     | EpisodeEngineExecution.Failed failure -> Error(mapEpisodeEngineFailure failure)
     | EpisodeEngineExecution.Completed result ->
-        match
-            result.RepairEpisodes
-            |> List.mapi (fun idx ep -> validateEpisodeIdentity idx ep)
-            |> List.choose id
-            |> function
-                | [] -> Ok()
-                | errs -> Error(errs.Head)
-        with
-        | Error e -> Error e
-        | Ok() ->
-            match
-                checkForDuplicates EpisodeIdentity (fun (ep: RepairEpisode) -> ep.EpisodeId) result.RepairEpisodes
-            with
-            | Error e -> Error e
-            | Ok() ->
-                match
-                    result.Transitions
-                    |> List.mapi (fun idx t -> validateTransitionIdentity idx t)
-                    |> List.choose id
-                    |> function
-                        | [] -> Ok()
-                        | errs -> Error(errs.Head)
-                with
-                | Error e -> Error e
-                | Ok() ->
-                    match checkForDuplicates TransitionIdentity transitionIdentityString result.Transitions with
-                    | Error e -> Error e
-                    | Ok() ->
-                        match
-                            result.ChangeSets
-                            |> List.mapi (fun idx cs -> validateChangeSetIdentity idx cs)
-                            |> List.choose id
-                            |> function
-                                | [] -> Ok()
-                                | errs -> Error(errs.Head)
-                        with
-                        | Error e -> Error e
-                        | Ok() ->
-                            match
-                                buildUniqueMap
-                                    ChangeSetIdentity
-                                    (fun (cs: GitChangeSet) -> cs.ChangeSetId)
-                                    result.ChangeSets
-                            with
-                            | Error e -> Error e
-                            | Ok cssMap ->
-                                match
-                                    result.Verification
-                                    |> List.mapi (fun idx lv -> validateVerificationIdentity idx lv)
-                                    |> List.choose id
-                                    |> function
-                                        | [] -> Ok()
-                                        | errs -> Error(errs.Head)
-                                with
-                                | Error e -> Error e
-                                | Ok() ->
-                                    match
-                                        buildUniqueMap
-                                            VerificationEvidenceIdentity
-                                            (fun (lv: LocatedVerificationEvidence) -> lv.Evidence.EvidenceId)
-                                            result.Verification
-                                    with
-                                    | Error e -> Error e
-                                    | Ok evidMap ->
-                                        Ok
-                                            { Episodes = result.RepairEpisodes
-                                              Transitions = result.Transitions
-                                              ChangeSets = cssMap
-                                              VerificationEvidence = evidMap }
+        let collected = ResizeArray<EngineError>()
 
-let loadAllInputs (repoRoot: string) : Result<RuleCandidateInputs, EngineError> =
+        for idx, ep in List.mapi (fun i e -> i, e) result.RepairEpisodes do
+            match validateEpisodeIdentity idx ep with
+            | Some err -> collected.Add err
+            | None -> ()
+
+        for idx, t in List.mapi (fun i x -> i, x) result.Transitions do
+            match validateTransitionIdentity idx t with
+            | Some err -> collected.Add err
+            | None -> ()
+
+        for idx, cs in List.mapi (fun i x -> i, x) result.ChangeSets do
+            match validateChangeSetIdentity idx cs with
+            | Some err -> collected.Add err
+            | None -> ()
+
+        for idx, lv in List.mapi (fun i x -> i, x) result.Verification do
+            match validateVerificationIdentity idx lv with
+            | Some err -> collected.Add err
+            | None -> ()
+
+        let errList = collected |> Seq.toList
+
+        if not (List.isEmpty errList) then
+            Error errList
+        else
+            let cssMap =
+                result.ChangeSets
+                |> List.map (fun cs -> cs.ChangeSetId, cs)
+                |> Map.ofList
+
+            let evidMap =
+                result.Verification
+                |> List.map (fun lv -> lv.Evidence.EvidenceId, lv)
+                |> Map.ofList
+
+            Ok
+                { Episodes = result.RepairEpisodes
+                  Transitions = result.Transitions
+                  ChangeSets = cssMap
+                  VerificationEvidence = evidMap }
+
+let loadAllInputs (repoRoot: string) : Result<RuleCandidateInputs, EngineError list> =
     loadFromEpisodeEngine repoRoot
 
 // -----------------------------------------------------------------------------
@@ -571,8 +599,14 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
     let errs = ResizeArray<EngineError>()
 
     match loadAllInputs repoRoot with
-    | Result.Error e ->
-        errs.Add e
+    | Result.Error upstreamErrors ->
+        // ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05:
+        // Upstream errors arrive as a list.  Every mapped error is added
+        // to the result; we never collapse to a single error.  When at
+        // least one DuplicateInputIdentities is present we MUST NOT also
+        // emit NoEligibleEpisodes or convert anything to Internal.
+        for ue in upstreamErrors do
+            errs.Add ue
 
         { Candidates = []
           EligibleEpisodes = 0

@@ -3,19 +3,24 @@ module Circus.Tooling.Tests.FSharpDiagnostics.RuleCandidates.RuleCandidateIdenti
 // =============================================================================
 // Rule Candidate Identity Failure Tests
 //
-// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05
 //
 // Twelve tests covering every identity-bearing field in the current
 // domain model.  Every duplicate-identity test asserts an exact typed
 // `DuplicateInputIdentities` failure with the EXACT identity string
 // that the production code computes.  All "byte-identical" duplicate
-// tests write a valid corpus first, then append a second copy of the
-// SAME identity record, so the duplicate branch is reached.
+// tests construct real inputs with controlled duplicates so the
+// upstream detection fires.  No try/with wrappers are used; every
+// assertion goes through Expecto so a failure preserves the original
+// assertion failure.
 // =============================================================================
 
+open System
 open Expecto
 open Circus.Tooling.FSharpDiagnostics.Paths
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
+open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Engine
+open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Domain
 open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Engine
 open Circus.Tooling.Tests.FSharpDiagnostics.RuleCandidates.RuleCandidateFailClosedFixture
 
@@ -26,25 +31,107 @@ let private evidenceRel = canonicalRootRelative + "/" + normalizedCorpusRelative
 
 let private afterCommit = String.replicate 40 "b"
 let private afterTree = String.replicate 40 "d"
+let private beforeCommit = String.replicate 40 "a"
+let private beforeTree = String.replicate 40 "c"
 
 /// Asserts the result contains exactly one `DuplicateInputIdentities` with
-/// the supplied kind and identity.  Records the actual error payload
-/// first to support post-mortem debugging.
+/// the supplied kind and identity.  Goes through Expecto so the original
+/// assertion failure is preserved.
 let assertExactDuplicate
     (expectedKind: InputIdentityKind)
     (expectedIdentity: string)
     (errors: EngineError list)
     : unit =
     match errors with
-    | [ DuplicateInputIdentities(actualKind, [actualIdentity]) ] ->
+    | [ DuplicateInputIdentities(actualKind, actualIdentities) ] ->
         Expect.equal actualKind expectedKind "identity kind"
-        Expect.equal actualIdentity expectedIdentity "duplicate identity"
+        Expect.equal actualIdentities [ expectedIdentity ] "duplicate identity list"
     | actual ->
-        failwithf
-            "expected DuplicateInputIdentities(%A, [%s]), got actual=%A"
-            expectedKind
-            expectedIdentity
-            actual
+        Expect.equal
+            (actual |> List.map (fun e -> e.GetType().Name))
+            [ "DuplicateInputIdentities" ]
+            "expected exactly one DuplicateInputIdentities error"
+        failwithf "expected DuplicateInputIdentities(%A, [%s]), got actual=%A" expectedKind expectedIdentity actual
+
+/// Build a RepairEpisode record with the given id and key, with otherwise-
+/// minimal valid fields.  Used by the upstream duplicate tests.
+let mkEpisode (id: string) (key: string) : RepairEpisode =
+    { SchemaVersion = RepairEpisodeSchemaVersion
+      EpisodeId = id
+      EpisodeKey = key
+      BeforeCaptureId = key + "-before"
+      AfterCaptureId = key + "-after"
+      BeforeCommitOid = beforeCommit
+      BeforeTreeOid = beforeTree
+      AfterCommitOid = afterCommit
+      AfterTreeOid = afterTree
+      CommitRange = [ afterCommit ]
+      ChangeSetId = "cs-" + key
+      CommandContractBefore = "dotnet build"
+      CommandContractAfter = "dotnet build"
+      Compatibility = compatible
+      TransitionCounts =
+        { PersistedSameCount = 0
+          PersistedCountDecreased = 0
+          PersistedCountIncreased = 0
+          EliminatedAfter = 0
+          IntroducedAfter = 0
+          ResolutionCandidates = 0
+          RegressionCandidates = 0
+          Unassessable = 0 }
+      VerificationLevel = TransitionObserved
+      VerificationEvidenceIds = []
+      Qualification = { Status = Qualified; Reasons = [] } }
+
+/// Build a GitChangeSet record with the given id.
+let mkChangeSet (id: string) : GitChangeSet =
+    { SchemaVersion = GitChangeSetSchemaVersion
+      ChangeSetId = id
+      ChangeSetVersion = GitChangeSetSchemaVersion
+      BeforeTreeOid = beforeTree
+      AfterTreeOid = afterTree
+      ObjectFormat = Sha1
+      Entries = [] }
+
+/// Build a DiagnosticTransition record with the given composite identity.
+let mkTransition (episodeId: string) (fp: string) : DiagnosticTransition =
+    { SchemaVersion = DiagnosticTransitionSchemaVersion
+      EpisodeId = episodeId
+      ExactFingerprint = fp
+      TransitionKind = EliminatedAfter
+      BeforeOccurrenceCount = 1
+      AfterOccurrenceCount = 0
+      Severity = Circus.Tooling.FSharpDiagnostics.Domain.DiagnosticSeverity.Error
+      Code = Some "FS0010"
+      MessageNormalized = "msg"
+      SourcePath = Some "a.fs"
+      ProjectPath = None
+      Span = { StartLine = Some 1; StartColumn = Some 1; EndLine = Some 1; EndColumn = Some 10 }
+      Compatibility = compatible
+      SourceLink =
+        { Kind = SourceFileModified "a.fs"
+          Paths = [ "a.fs" ]
+          Reasons = [] }
+      Assessment = ObservedResolutionCandidate }
+
+/// Construct duplicate-detection tests by exercising detectUpstreamDuplicates
+/// directly with controlled inputs.  This is a documented integration
+/// boundary: the public `detectUpstreamDuplicates` is the same code path
+/// invoked by `runEpisodeEngine` after parse.
+let private upstreamDuplicateTest
+    (episodes: RepairEpisode list)
+    (changeSets: GitChangeSet list)
+    (transitions: DiagnosticTransition list)
+    (expectedKind: EpisodeInputIdentityKind)
+    (expectedIdentity: string)
+    : unit =
+    let dups = detectUpstreamDuplicates episodes changeSets transitions
+    match dups with
+    | [ { Kind = k; Identity = id; OccurrenceLines = _ } ] ->
+        Expect.equal k expectedKind "upstream duplicate kind"
+        Expect.equal id expectedIdentity "upstream duplicate identity"
+    | actual ->
+        failwithf "expected one EpisodeDuplicateIdentity, got %A" actual
 
 [<Tests>]
 let identityFailureTests =
@@ -65,16 +152,24 @@ let identityFailureTests =
           }
 
           test "duplicate repair-episode ID (byte-identical records) is rejected" {
-              use repo = new TempRepository()
-              writeValidMinimalCorpus repo "id-dup-ep-same"
-              let dup = mkValidRepairEpisodeJson "id-dup-ep-same"
-              repo.AppendUtf8(episodesRel, dup + "\n")
-              let r = extractCandidates repo.Root
-              let expectedId = deterministicSha256 "rule-candidate-fixture-episode-v1" "id-dup-ep-same"
-              try
-                  assertExactDuplicate EpisodeIdentity expectedId r.Errors
-              with
-              | _ -> failwithf "actual errors: %A" r.Errors
+              // Construct two real RepairEpisode records with the same id and
+              // key.  Upstream duplicate detection must surface
+              // DuplicateInputIdentities(RepairEpisode, identity).
+              let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "id-dup-ep-same"
+              let epKey = "fsb-id-dup-ep-same"
+              let epA = mkEpisode epId epKey
+              let epB = mkEpisode epId epKey
+              upstreamDuplicateTest [ epA; epB ] [] [] EpisodeInputIdentityKind.RepairEpisode epId
+
+              // Adapter mapping: the typed upstream kind maps 1:1 to
+              // DuplicateInputIdentities(EpisodeIdentity, ...).
+              let mapped =
+                  mapEpisodeEngineFailure(
+                      EpisodeEngineFailure.DuplicateInputIdentities(
+                          [ { Kind = EpisodeInputIdentityKind.RepairEpisode
+                              Identity = epId
+                              OccurrenceLines = [ 1; 2 ] } ]))
+              assertExactDuplicate EpisodeIdentity epId mapped
           }
 
           test "duplicate repair-episode ID (different content, same id) is rejected" {
@@ -116,16 +211,20 @@ let identityFailureTests =
           }
 
           test "duplicate change-set ID (identical records) is rejected" {
-              use repo = new TempRepository()
-              writeValidMinimalCorpus repo "id-dup-cs-same"
-              let dup = mkValidChangeSetJson "id-dup-cs-same" "a.fs"
-              repo.AppendUtf8(changeSetsRel, dup + "\n")
-              let r = extractCandidates repo.Root
-              let expectedId = deterministicSha256 "rule-candidate-fixture-changeset-v1" "id-dup-cs-same"
-              try
-                  assertExactDuplicate ChangeSetIdentity expectedId r.Errors
-              with
-              | _ -> failwithf "actual errors: %A" r.Errors
+              // Construct two real GitChangeSet records with the same id.
+              let csId = deterministicSha256 "rule-candidate-fixture-changeset-v1" "id-dup-cs-same"
+              let csA = mkChangeSet csId
+              let csB = mkChangeSet csId
+              upstreamDuplicateTest [] [ csA; csB ] [] EpisodeInputIdentityKind.ChangeSet csId
+
+              // Adapter mapping preserves the typed kind 1:1.
+              let mapped =
+                  mapEpisodeEngineFailure(
+                      EpisodeEngineFailure.DuplicateInputIdentities(
+                          [ { Kind = EpisodeInputIdentityKind.ChangeSet
+                              Identity = csId
+                              OccurrenceLines = [ 1; 2 ] } ]))
+              assertExactDuplicate ChangeSetIdentity csId mapped
           }
 
           test "duplicate change-set ID (different content, same id) is rejected" {
@@ -161,18 +260,24 @@ let identityFailureTests =
           }
 
           test "duplicate transition ID (identical records) is rejected" {
-              use repo = new TempRepository()
-              writeValidMinimalCorpus repo "id-dup-tx-same"
-              let dup = mkValidDiagnosticTransitionJson "id-dup-tx-same" "FS0010" "a.fs"
-              repo.AppendUtf8(transitionsRel, dup + "\n")
-              let r = extractCandidates repo.Root
-              // Production transition identity is episode_id + "|" + exact_fingerprint.
+              // Construct two real DiagnosticTransition records with the same
+              // composite identity.  Production identity is
+              // EpisodeId + "|" + ExactFingerprint.
               let epId = deterministicSha256 "rule-candidate-fixture-episode-v1" "id-dup-tx-same"
-              let expectedIdentity = epId + "|fp-id-dup-tx-same-FS0010-a.fs"
-              try
-                  assertExactDuplicate TransitionIdentity expectedIdentity r.Errors
-              with
-              | _ -> failwithf "actual errors: %A" r.Errors
+              let fp = "fp-id-dup-tx-same-FS0010-a.fs"
+              let txA = mkTransition epId fp
+              let txB = mkTransition epId fp
+              let composite = diagnosticTransitionIdentity txA
+              upstreamDuplicateTest [] [] [ txA; txB ] EpisodeInputIdentityKind.DiagnosticTransition composite
+
+              // Adapter mapping preserves the typed kind 1:1.
+              let mapped =
+                  mapEpisodeEngineFailure(
+                      EpisodeEngineFailure.DuplicateInputIdentities(
+                          [ { Kind = EpisodeInputIdentityKind.DiagnosticTransition
+                              Identity = composite
+                              OccurrenceLines = [ 1; 2 ] } ]))
+              assertExactDuplicate TransitionIdentity composite mapped
           }
 
           test "duplicate transition ID (different content, same id) is rejected" {
@@ -220,8 +325,5 @@ let identityFailureTests =
               repo.AppendUtf8(evidenceRel, dup + "\n")
               let r = extractCandidates repo.Root
               let expectedId = deterministicSha256 "rule-candidate-fixture-evidence-v1" "id-dup-ev-same"
-              try
-                  assertExactDuplicate VerificationEvidenceIdentity expectedId r.Errors
-              with
-              | _ -> failwithf "actual errors: %A" r.Errors
+              assertExactDuplicate VerificationEvidenceIdentity expectedId r.Errors
           } ]

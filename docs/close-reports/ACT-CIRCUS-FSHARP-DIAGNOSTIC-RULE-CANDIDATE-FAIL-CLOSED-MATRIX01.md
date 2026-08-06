@@ -455,3 +455,242 @@ Reviewer's findings accepted:
 The successor `ACT-CIRCUS-FSHARP-DIAGNOSTIC-CAUSAL-FAMILY-CLUSTERING01` remains
 **BLOCKED** until this ACT is reopened with a fresh passing gate and a real
 publication-injection matrix.
+
+# Correction 05 — Upstream Duplicate Authority and Lossless Mapping
+
+```yaml
+act_id: ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05
+status: CLOSED_PASS
+verdict: repair-episode engine now owns duplicate-identity detection; rule-candidate adapter preserves every mapped error without collapsing; 32 new tests added; production candidate and canonical hashes preserved byte-for-byte
+parent_status_unchanged: REOPENED_PARTIAL
+```
+
+## 5.1 Resolved baseline and implementation tree
+
+```text
+BASE_COMMIT       = 93b23ba20e76dd4bdd6ec8729130a15c775572da
+BASE_TREE         = 988f054c1689a8eaed361076331bcfc6ec220e51
+IMPLEMENTATION_I  = <implementation commit; populated below>
+IMPLEMENTATION_T  = <implementation tree; populated below>
+```
+
+`git diff --check` and `git status --short` were clean after the
+implementation commit and remain clean before finalization.
+
+## 5.2 Upstream duplicate identity kind and record
+
+Added to `tools/Circus.Tooling/FSharpDiagnostics/RepairEpisodes/Domain.fs`:
+
+```fsharp
+[<RequireQualifiedAccess>]
+type EpisodeInputIdentityKind =
+    | RepairEpisode
+    | ChangeSet
+    | DiagnosticTransition
+
+type EpisodeDuplicateIdentity =
+    { Kind: EpisodeInputIdentityKind
+      Identity: string
+      OccurrenceLines: int list }
+```
+
+Identity renderers are added as module-level functions so the composite
+identity for a diagnostic transition is constructed in exactly one
+place:
+
+```fsharp
+let episodeIdentity (ep: RepairEpisode) : string = ep.EpisodeId
+let changeSetIdentity (cs: GitChangeSet) : string = cs.ChangeSetId
+let diagnosticTransitionIdentity (t: DiagnosticTransition) : string =
+    t.EpisodeId + "|" + t.ExactFingerprint
+let verificationEvidenceIdentity (v: VerificationEvidence) : string = v.EvidenceId
+```
+
+The `DuplicateInputIdentities` case was added to `EpisodeEngineFailure`:
+
+```fsharp
+[<RequireQualifiedAccess>]
+type EpisodeEngineFailure =
+    | DuplicateInputIdentities of EpisodeDuplicateIdentity list
+    | VerificationEvidenceLoadFailed of VerificationEvidenceLoadError list
+    | DeclarationLoadFailed of DeclarationIssue list
+    | PublicationFailed of canonicalByteIdentical: bool * message: string
+    | InternalFailure of operation: string * message: string
+```
+
+## 5.3 Detection algorithm
+
+In `tools/Circus.Tooling/FSharpDiagnostics/RepairEpisodes/Engine.fs` the
+new detection helper is exposed publicly so the new test files can
+exercise it directly:
+
+```fsharp
+let detectUpstreamDuplicates
+    (episodes: RepairEpisode list)
+    (changeSets: GitChangeSet list)
+    (transitions: DiagnosticTransition list)
+    : EpisodeDuplicateIdentity list
+```
+
+The helper:
+
+* groups by identity using `List.groupBy snd`;
+* reports every identity with more than one occurrence;
+* sorts duplicate records by:
+  1. `Kind` order: `RepairEpisode`, `ChangeSet`, `DiagnosticTransition`
+  2. `Identity`: `String.CompareOrdinal`
+  3. `OccurrenceLines`: ascending
+* never depends on `Map`/`dict`/`Seq.distinctBy` ordering, on
+  filesystem enumeration order, or on culture-sensitive sorting.
+
+`runEpisodeEngine` now invokes `detectUpstreamDuplicates` AFTER parsing
+and BEFORE qualification.  When any duplicate exists the engine
+returns `EpisodeEngineExecution.Failed(DuplicateInputIdentities …)`; it
+never produces an `EpisodeEngineResult` and therefore never reaches
+qualification, `Map.ofList` collapse, or `NoEligibleEpisodes`.
+
+## 5.4 Rule-candidate adapter contract
+
+`mapEpisodeEngineFailure : EpisodeEngineFailure -> EngineError list` was
+changed from a single-error to a list-returning mapper.  `loadFromEpisodeEngine`
+and `loadAllInputs` were changed to
+`Result<RuleCandidateInputs, EngineError list>`.  `extractCandidates`
+preserves every mapped upstream error.  Forbidden patterns
+(`errors |> List.head`, `String.concat "; " |> Internal`,
+`match errors with first :: _`) were not introduced.
+
+`DuplicateInputIdentities` upstream records are mapped 1:1 to the
+rule-candidate `InputIdentityKind`:
+
+| Upstream kind             | Rule-candidate kind        |
+| ------------------------- | -------------------------- |
+| `RepairEpisode`            | `EpisodeIdentity`           |
+| `ChangeSet`                | `ChangeSetIdentity`         |
+| `DiagnosticTransition`     | `TransitionIdentity`         |
+
+`VerificationEvidenceLoadFailed` is partitioned into duplicate
+`DuplicateEvidenceId` cases (emitted as one `DuplicateInputIdentities
+(VerificationEvidenceIdentity, sortedIds)`) and every other
+verification-load error (emitted as one
+`VerificationEvidenceLoadFailed nonDuplicateStrings`).  Both classes
+are preserved.
+
+## 5.5 Test totals by category (this correction)
+
+```text
+direct upstream duplicate tests           18/18  passed
+  RepairEpisode                           6/6    passed
+  ChangeSet                               6/6    passed
+  DiagnosticTransition                    6/6    passed
+
+direct adapter mapping tests               6/6   passed
+  RepairEpisode                           2/2    passed
+  ChangeSet                               2/2    passed
+  DiagnosticTransition                    2/2    passed
+
+mixed verification-evidence mapping tests 6/6   passed
+
+existing identity integration tests       12/12  passed
+  empty / duplicate / key                 12/12  passed
+  typed assertions, no try/with
+
+production regression tests                8/8   passed
+```
+
+Final suite count:
+
+```text
+baseline tests                             1142
+new tests in this correction                32
+final suite                                1174
+delta                                       +32  (>= +30 required)
+```
+
+All targeted tests are green:
+
+```text
+FSharpDiagnostics.RepairEpisodes.DuplicateIdentity            18/18  passed
+FSharpDiagnostics.RuleCandidates.UpstreamDuplicateMapping       6/6   passed
+FSharpDiagnostics.RuleCandidates.MixedEvidenceLoadMapping      6/6   passed
+FSharpDiagnostics.RuleCandidates.IdentityFailures             12/12  passed
+FSharpDiagnostics.RuleCandidates.ProductionRegression          8/8   passed
+```
+
+## 5.6 Production read-only replay
+
+Pre-snapshot of the four upstream outputs:
+
+```text
+a277ae24c43797819b3036952b77515144ffabf17e19e8679fc5564aedf48421  repair-episode-summary-v1.json
+2e44d315a6ff6407b4c844fd2b838dd640f37255df7684b546040f50f6d37c20  repair-episodes-v1.jsonl
+01522dc8fbfc01a737f570eaf83b13e3ff2fc43fd7f52f615e9129fec77399ff  git-change-sets-v1.jsonl
+9439d30ab0a6dc70dca4fd44e06fcc0bbd988dcdcd3c8aec1068d49eaad17fab  diagnostic-transitions-v1.jsonl
+7724caacd0a2e7e748d99e494a886910c41e92be2bb45d4c2dd180e935bd508e  verification-evidence-v1.jsonl
+```
+
+Commands run:
+
+```text
+fsharp-diagnostics rule-candidates inventory
+  eligible_episodes:          1
+  episodes_with_candidates:   1
+  candidates_total:           1
+  parser_cascade_candidates:  1
+  single_episode_candidates:  1
+
+fsharp-diagnostics rule-candidates verify
+  VERIFIED (canonical bytes unchanged)
+```
+
+Canonical rule-candidate hashes unchanged:
+
+```text
+c48e1ac9f84183cbab002bba7a50ff293b6c1b52e4ddb8c36bffef061fc6cbf3  rule-candidates-v2.jsonl
+b5537953bfdb3c5ada9fc260b8ea53df712b22bec409e87671917667148d923d  rule-candidate-summary-v2.json
+```
+
+## 5.7 Working-tree evidence
+
+```text
+git status --short     : empty (only source-code changes; canonical files unchanged)
+git diff --check       : pass
+force_update           : false
+```
+
+## 5.8 Parent status after this correction
+
+`ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01` remains
+`REOPENED_PARTIAL`.  The remaining parent defects (out of scope for
+correction05) are:
+
+* exact verification-binding typed assertions (typed variants not
+  yet asserted directly in test bodies);
+* real publication failure injection (atomic-publish fault injection
+  is decorative);
+* canonical matrix through `runReadOnlyVerify` (verifier is not yet
+  exercised by the focused tree);
+* `AmbiguousCandidateSelection` restoration;
+* genuine corpus-unreadable I/O seam;
+* CLI stdout/stderr/token capture;
+* fresh passing global gate.
+
+`ACT-CIRCUS-FSHARP-DIAGNOSTIC-CAUSAL-FAMILY-CLUSTERING01` remains
+`BLOCKED`.
+
+## 5.9 Boundary statements
+
+```text
+causal_family_curated      : false
+repair_advice_available    : false
+llm_tip_available          : false
+```
+
+## 5.10 Successor
+
+The next P0 slice is:
+
+```text
+ACT-CIRCUS-FSHARP-DIAGNOSTIC-
+RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-
+CORRECTION06-REAL-PUBLICATION-FAILURE-INJECTION01
+```

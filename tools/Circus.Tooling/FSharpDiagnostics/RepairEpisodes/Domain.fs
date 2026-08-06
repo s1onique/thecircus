@@ -120,6 +120,27 @@ type GitChangeSet =
       ObjectFormat: GitObjectFormat
       Entries: GitChangeEntry list }
 
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05:
+// Upstream duplicate identity kinds owned by the repair-episode engine.
+// Detection happens before any qualification or map construction so the
+// downstream rule-candidate adapter can never collapse a duplicate.
+[<RequireQualifiedAccess>]
+type EpisodeInputIdentityKind =
+    | RepairEpisode
+    | ChangeSet
+    | DiagnosticTransition
+
+let episodeInputIdentityKindToken (k: EpisodeInputIdentityKind) : string =
+    match k with
+    | EpisodeInputIdentityKind.RepairEpisode -> "repair_episode"
+    | EpisodeInputIdentityKind.ChangeSet -> "change_set"
+    | EpisodeInputIdentityKind.DiagnosticTransition -> "diagnostic_transition"
+
+type EpisodeDuplicateIdentity =
+    { Kind: EpisodeInputIdentityKind
+      Identity: string
+      OccurrenceLines: int list }
+
 exception GitChangeParseFailure of string
 
 // -----------------------------------------------------------------------------
@@ -583,3 +604,17 @@ type EpisodeValidation =
     { EpisodeId: string option
       Issues: string list
       Episode: RepairEpisode option }
+
+// -----------------------------------------------------------------------------
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05:
+// Canonical identity renderers.  All upstream identity construction goes
+// through these helpers so the same composite identity cannot be constructed
+// independently in multiple modules.  Transitions use EpisodeId + "|" +
+// ExactFingerprint as the canonical composite identity.
+// -----------------------------------------------------------------------------
+
+let episodeIdentity (ep: RepairEpisode) : string = ep.EpisodeId
+let changeSetIdentity (cs: GitChangeSet) : string = cs.ChangeSetId
+let diagnosticTransitionIdentity (t: DiagnosticTransition) : string =
+    t.EpisodeId + "|" + t.ExactFingerprint
+let verificationEvidenceIdentity (v: VerificationEvidence) : string = v.EvidenceId

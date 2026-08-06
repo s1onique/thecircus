@@ -56,6 +56,7 @@
     <Compile Include="FSharpDiagnostics/RepairEpisodes/CaptureBindingTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/BoundedProcessTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/GitAdapterTests.fs" />
+    <Compile Include="FSharpDiagnostics/RepairEpisodes/EpisodeEngineDuplicateIdentityTests.fs" />
     <!-- ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION03:
          Compile order: shared fixture -> string matrix -> integer matrix ->
          precedence matrix -> raw-duplicate matrix -> fixture identity ->
@@ -79,6 +80,8 @@
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateCorpusPresenceTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateJsonlSchemaFailureTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateIdentityFailureTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateUpstreamDuplicateMappingTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateMixedEvidenceLoadMappingTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateReferenceIntegrityTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateVerificationBindingFailureTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateClassificationCardinalityTests.fs" />

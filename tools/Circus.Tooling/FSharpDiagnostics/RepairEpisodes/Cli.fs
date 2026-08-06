@@ -160,6 +160,17 @@ let private renderEngineFailure (failure: EpisodeEngineFailure) : string =
     | EpisodeEngineFailure.InternalFailure(op, msg) ->
         sb.AppendLine(sprintf "error: internal engine failure in %s: %s" op msg)
         |> ignore
+    | EpisodeEngineFailure.DuplicateInputIdentities dups ->
+        sb.AppendLine("error: upstream duplicate input identities detected") |> ignore
+        for d in dups do
+            sb.AppendLine(
+                sprintf
+                    "  duplicate_input_identity: kind=%s identity=%s occurrence_lines=[%s]"
+                    (episodeInputIdentityKindToken d.Kind)
+                    d.Identity
+                    (d.OccurrenceLines |> List.map string |> String.concat "; ")
+            )
+            |> ignore
 
     sb.ToString()
 

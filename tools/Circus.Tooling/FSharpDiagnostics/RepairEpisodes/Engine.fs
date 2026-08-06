@@ -1617,6 +1617,14 @@ type EpisodeEngineResult =
 /// An EpisodeEngineResult MUST NOT be produced when evidence loading fails.
 [<RequireQualifiedAccess>]
 type EpisodeEngineFailure =
+    /// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05:
+    /// Upstream typed duplicate-identity detection.  Identities are detected
+    /// in repair episodes, change sets, and diagnostic transitions BEFORE any
+    /// qualification or map construction.  Several duplicate identities may
+    /// appear in one failure.  Occurrence lines are 1-based JSONL line numbers
+    /// where available.  Sorted by (Kind, Identity ordinal, OccurrenceLines
+    /// ascending).  No rendered error text is parsed to recover identity.
+    | DuplicateInputIdentities of EpisodeDuplicateIdentity list
     /// Evidence loading failed with specific errors.
     | VerificationEvidenceLoadFailed of VerificationEvidenceLoadError list
     /// Declaration loading produced issues.
@@ -1932,21 +1940,128 @@ let private runEpisodesWithEvidence
       Outcome = outcome.Success
       Declarations = declarations }
 
+// =============================================================================
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05
+// Upstream duplicate identity detection.
+// Detection runs over the uncollapsed parsed records produced by
+// `runEpisodesWithEvidence`.  No `Map.ofList` collapse or qualification
+// happens before detection.  Duplicate records are sorted by:
+//   1. Kind order: RepairEpisode, ChangeSet, DiagnosticTransition
+//   2. Identity: StringComparison.Ordinal
+//   3. OccurrenceLines: ascending
+// Detection tolerates reversed record order (same identity, same set of
+// occurrence lines, regardless of insertion order).
+// =============================================================================
+
+let private kindSortIndex (k: EpisodeInputIdentityKind) : int =
+    match k with
+    | EpisodeInputIdentityKind.RepairEpisode -> 0
+    | EpisodeInputIdentityKind.ChangeSet -> 1
+    | EpisodeInputIdentityKind.DiagnosticTransition -> 2
+
+let private ascendingOccurrenceLines (lines: int list) : int list =
+    lines |> List.sort
+
+let private sortDuplicateRecords (records: EpisodeDuplicateIdentity list) : EpisodeDuplicateIdentity list =
+    records
+    |> List.sortWith (fun a b ->
+        let kindCmp = compare (kindSortIndex a.Kind) (kindSortIndex b.Kind)
+        if kindCmp <> 0 then
+            kindCmp
+        else
+            let idCmp = String.CompareOrdinal(a.Identity, b.Identity)
+            if idCmp <> 0 then
+                idCmp
+            else
+                compare a.OccurrenceLines b.OccurrenceLines)
+
+/// Detect duplicates in a list of items using the supplied identity function.
+/// Returns one EpisodeDuplicateIdentity per identity that has more than one
+/// occurrence.  Occurrence lines are 1-based and preserved in input order.
+let private detectDuplicates
+    (kind: EpisodeInputIdentityKind)
+    (identityFn: 'a -> string)
+    (items: 'a list)
+    (lineFor: 'a -> int)
+    : EpisodeDuplicateIdentity list =
+    items
+    |> List.mapi (fun idx item -> idx + 1, identityFn item)
+    |> List.groupBy snd
+    |> List.choose (fun (id, occurrences) ->
+        if List.length occurrences > 1 then
+            let lines =
+                occurrences
+                |> List.map fst
+                |> ascendingOccurrenceLines
+            Some { Kind = kind
+                   Identity = id
+                   OccurrenceLines = lines }
+        else
+            None)
+
+/// Detect duplicates across the four upstream corpora and produce a single
+/// sorted list.  Returns Some when at least one duplicate exists.
+let detectUpstreamDuplicates
+    (episodes: RepairEpisode list)
+    (changeSets: GitChangeSet list)
+    (transitions: DiagnosticTransition list)
+    : EpisodeDuplicateIdentity list =
+    let episodeDups =
+        detectDuplicates
+            EpisodeInputIdentityKind.RepairEpisode
+            episodeIdentity
+            episodes
+            (fun _ -> 0)
+    let changeSetDups =
+        detectDuplicates
+            EpisodeInputIdentityKind.ChangeSet
+            changeSetIdentity
+            changeSets
+            (fun _ -> 0)
+    let transitionDups =
+        detectDuplicates
+            EpisodeInputIdentityKind.DiagnosticTransition
+            diagnosticTransitionIdentity
+            transitions
+            (fun _ -> 0)
+
+    let combined =
+        episodeDups @ changeSetDups @ transitionDups
+    if List.isEmpty combined then [] else sortDuplicateRecords combined
+
 /// Run the episode engine with fail-closed error propagation.
 /// If evidence loading fails, return EpisodeEngineExecution.Failed to preserve exact errors.
+/// If upstream duplicate identities are detected, return EpisodeEngineExecution.Failed with
+/// the typed DuplicateInputIdentities failure.  Detection runs BEFORE qualification or any
+/// map construction in the rule-candidate adapter.
 let runEpisodeEngine (repoRoot: string) (options: EpisodeEngineOptions) : EpisodeEngineExecution =
     clearObjectFormatCache ()
 
     let declarations = loadDeclarations repoRoot
 
-    // Load verification evidence using strict loader - FAIL CLOSED on any error
+    // Load verification evidence using strict loader - FAIL CLOSED on any error.
+    // The strict loader already rejects duplicate evidence IDs and conflicting records.
     match loadVerificationEvidenceStrict repoRoot with
     | Result.Error loadErrors ->
         // Return failure with exact errors - do NOT produce EpisodeEngineResult
         EpisodeEngineExecution.Failed(EpisodeEngineFailure.VerificationEvidenceLoadFailed loadErrors)
-    | Result.Ok allEvidence ->
+    | Result.Ok _allEvidence ->
         // Evidence loaded successfully, proceed with episode computation
-        EpisodeEngineExecution.Completed(runEpisodesWithEvidence repoRoot options declarations allEvidence)
+        let result = runEpisodesWithEvidence repoRoot options declarations _allEvidence
+
+        // ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05:
+        // Upstream duplicate identity detection runs BEFORE any qualification
+        // or map construction in the rule-candidate adapter.  When duplicate
+        // identities are present we MUST NOT produce an EpisodeEngineResult;
+        // the engine fails closed and the rule-candidate adapter can no
+        // longer degrade the duplicate cause into NoEligibleEpisodes.
+        let dups =
+            detectUpstreamDuplicates result.RepairEpisodes result.ChangeSets result.Transitions
+
+        if not (List.isEmpty dups) then
+            EpisodeEngineExecution.Failed(EpisodeEngineFailure.DuplicateInputIdentities dups)
+        else
+            EpisodeEngineExecution.Completed(result)
 
 type VerificationIssue =
     | EpisodeIdMismatch
@@ -1984,6 +2099,14 @@ let verifyPipeline (repoRoot: string) (options: EpisodeEngineOptions) : Verifica
               RepairEpisodesValidated = 0
               TransitionsValidated = 0 }
         | EpisodeEngineFailure.InternalFailure _ ->
+            { Issues = [ EpisodeEngineFailed failure ]
+              RepairEpisodesValidated = 0
+              TransitionsValidated = 0 }
+        | EpisodeEngineFailure.DuplicateInputIdentities _ ->
+            // ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05:
+            // Upstream duplicate identities are a typed engine failure.  The
+            // verifier does NOT attempt recovery or qualification when the
+            // upstream engine has detected duplicate identities.
             { Issues = [ EpisodeEngineFailed failure ]
               RepairEpisodesValidated = 0
               TransitionsValidated = 0 }
