@@ -4,12 +4,14 @@ module Circus.Tooling.FSharpDiagnostics.RuleCandidates.Selection
 // Deterministic candidate selection
 // =============================================================================
 //
-// This module implements the deterministic selection logic for rule candidates.
-// Selection is deterministic: same input always produces same output regardless
-// of filesystem enumeration order, map iteration, or timestamps.
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-EXTRACTION01-CORRECTION01
+//
+// Selection is deterministic: same input always produces same output
+// regardless of filesystem enumeration order, map iteration, or timestamps.
+// Repository path normalization is delegated to the shared authority.
 
-open System.Collections.Generic
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
+open Circus.Tooling.FSharpDiagnostics.RepoPaths
 open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Classification
 open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Domain
 
@@ -17,7 +19,6 @@ open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Domain
 // Selection errors
 // -----------------------------------------------------------------------------
 
-/// Errors that prevent candidate selection.
 type SelectionError =
     | NoEligibleEpisodes
     | EpisodeIneligible of episodeKey: string * reason: string
@@ -39,13 +40,10 @@ type SelectionError =
 /// - change set is present with entries;
 /// - all Git OIDs are full-width.
 let isEpisodeEligible (episode: RepairEpisode) : bool =
-    // Qualification must be Qualified (not ambiguous, rejected, or qualified_with_limitations)
     if episode.Qualification.Status <> EpisodeQualificationStatus.Qualified then
         false
-    // Must have verification evidence
     elif List.isEmpty episode.VerificationEvidenceIds then
         false
-    // Must have transitions
     elif
         episode.TransitionCounts.EliminatedAfter
         + episode.TransitionCounts.PersistedCountDecreased
@@ -53,10 +51,8 @@ let isEpisodeEligible (episode: RepairEpisode) : bool =
         <= 0
     then
         false
-    // Must have change set entries
     elif System.String.IsNullOrEmpty episode.ChangeSetId then
         false
-    // Git OIDs must be full-width (40 for SHA-1, 64 for SHA-256)
     elif episode.BeforeCommitOid.Length <> 40 && episode.BeforeCommitOid.Length <> 64 then
         false
     elif episode.AfterCommitOid.Length <> 40 && episode.AfterCommitOid.Length <> 64 then
@@ -72,43 +68,42 @@ let isEpisodeEligible (episode: RepairEpisode) : bool =
 // Transition grouping
 // -----------------------------------------------------------------------------
 
-/// Normalize source path by stripping <REPO> prefix
-let private normalizeSourcePath (path: string) : string =
-    if path.StartsWith("<REPO>/") then
-        path.Substring(7)
-    else
-        path
-
 /// Group transitions by their normalized source path deterministically.
-/// Normalizes <REPO> prefix to match change set paths.
+/// Normalization delegates to the shared authority.
 let groupTransitionsByPath (transitions: DiagnosticTransition list) : Map<string, DiagnosticTransition list> =
-    // Use Map to ensure deterministic ordering, normalize paths
     transitions
-    |> List.groupBy (fun t -> normalizeSourcePath (defaultArg t.SourcePath ""))
+    |> List.groupBy (fun t -> normalizeRepositoryPath (defaultArg t.SourcePath ""))
     |> List.filter (fun (path, _) -> not (System.String.IsNullOrEmpty path))
     |> Map.ofList
 
 // -----------------------------------------------------------------------------
-// Candidate derivation
+// Candidate derivation prose
 // -----------------------------------------------------------------------------
 
-/// Derive the fixed prose template for ParserCascadeRepair.
+/// Derive the fixed observation template for ParserCascadeRepair.
 let deriveParserCascadeProse (episodeKey: string) (afterCommitOid: string) (groupFacts: TransitionGroupFacts) : string =
-    // Template observation that names the episode and repair commit
     sprintf
-        "In %s, the selected %s parser-diagnostic cluster was present before %s and absent from the verified after-state."
+        "In episode %s (commit %s), %d parser diagnostic(s) including %s were resolved after a verified repair on path %s (earliest at line %A)."
         episodeKey
-        (System.IO.Path.GetFileName groupFacts.Path)
-        (afterCommitOid.Substring(0, 7))
+        afterCommitOid
+        groupFacts.TransitionCount
+        (String.concat "," groupFacts.DiagnosticCodes)
+        groupFacts.Path
+        groupFacts.EarliestLine
 
-/// Select the best candidate group from an episode's transitions.
+// -----------------------------------------------------------------------------
+// Candidate group selection
+// -----------------------------------------------------------------------------
+
+/// Select the best candidate group from an episode's transitions.  Only
+/// positively assessed transitions may contribute.  Unassessable and
+/// regression transitions are filtered out at this stage.
 let selectCandidateGroup
     (episode: RepairEpisode)
     (changeSet: GitChangeSet)
     (transitions: DiagnosticTransition list)
     : TransitionGroupFacts option =
 
-    // Filter to supporting transitions
     let supporting =
         transitions
         |> List.filter (fun t -> isRepairSupportingTransition episode changeSet t)
@@ -116,16 +111,13 @@ let selectCandidateGroup
     if List.isEmpty supporting then
         None
     else
-        // Group by path
         let groups = groupTransitionsByPath supporting
 
-        // Classify each group
         let classifiedGroups =
             groups
             |> Map.toList
             |> List.map (fun (path, pathTransitions) -> classifyGroup episode changeSet pathTransitions)
 
-        // Filter to parser cascade groups and derive facts
         let parserGroups =
             classifiedGroups
             |> List.choose (function
@@ -135,19 +127,16 @@ let selectCandidateGroup
         if List.isEmpty parserGroups then
             None
         else
-            // Sort deterministically using the comparison function
             let sorted = parserGroups |> List.sortWith compareTransitionGroupFacts
             Some sorted.Head
 
 // -----------------------------------------------------------------------------
-// Candidate building
+// Path and code helpers
 // -----------------------------------------------------------------------------
 
-/// Build all changed paths from a change set.
 let buildChangedPaths (changeSet: GitChangeSet) : string list =
     changeSet.Entries |> List.map (fun e -> e.CanonicalPath) |> List.sort
 
-/// Extract diagnostic codes from a list of transitions.
 let extractDiagnosticCodes (transitions: DiagnosticTransition list) : string list =
     transitions |> List.choose (fun t -> t.Code) |> List.distinct |> List.sort
 
@@ -155,7 +144,6 @@ let extractDiagnosticCodes (transitions: DiagnosticTransition list) : string lis
 // Selection result
 // -----------------------------------------------------------------------------
 
-/// Result of the selection process for a single episode.
 type EpisodeSelectionResult =
     { EpisodeKey: string
       EpisodeId: string

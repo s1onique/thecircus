@@ -56,6 +56,9 @@
     <Compile Include="FSharpDiagnostics/RepairEpisodes/CaptureBindingTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/BoundedProcessTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/GitAdapterTests.fs" />
+    <Compile Include="FSharpDiagnostics/RepairEpisodes/VerificationEvidenceAliasFixture.fs" />
+    <Compile Include="FSharpDiagnostics/RepairEpisodes/VerificationEvidenceStringAliasTests.fs" />
+    <Compile Include="FSharpDiagnostics/RepairEpisodes/VerificationEvidenceIntegerAliasTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateExtractionTests.fs" />
 
     <!-- Canonical evidence provider tests (ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01 CORRECTION01).

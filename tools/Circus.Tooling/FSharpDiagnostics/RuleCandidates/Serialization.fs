@@ -1,5 +1,19 @@
 module Circus.Tooling.FSharpDiagnostics.RuleCandidates.Serialization
 
+// =============================================================================
+// Rule candidate serialization
+// =============================================================================
+//
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-EXTRACTION01-CORRECTION01
+//
+// The published artifacts are:
+//   * `rule-candidates-v2.jsonl` - one JSON object per candidate.
+//   * `rule-candidate-summary-v2.json` - aggregate counts.
+//
+// The candidate record is observation only.  No imperative repair text is
+// emitted.  Curation flags (`causal_family_curated`,
+// `repair_advice_available`, `llm_tip_available`) are always false.
+
 open System
 open System.Globalization
 open System.IO
@@ -7,7 +21,6 @@ open System.Security.Cryptography
 open System.Text
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Domain
-open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Selection
 
 type JsonValue =
     | JsonString of string
@@ -95,45 +108,6 @@ let rec private parseJsonValue (s: string) (startIdx: int) : JsonValue * int =
 
 let parseJson (s: string) : JsonValue = let v, _ = parseJsonValue s 0 in v
 
-type FieldLookup<'v> =
-    | Missing
-    | WrongType of string * string
-    | Present of 'v
-
-let private lookupString (fields: (string * JsonValue) list) (name: string) : FieldLookup<string> =
-    match List.tryFind (fun (k, _) -> k = name) fields with
-    | None -> Missing
-    | Some(_, JsonString s) -> Present s
-    | Some(_, v) -> WrongType("string", sprintf "%A" v)
-
-let private lookupStringList (fields: (string * JsonValue) list) (name: string) : FieldLookup<string list> =
-    match List.tryFind (fun (k, _) -> k = name) fields with
-    | None -> Missing
-    | Some(_, JsonArray items) ->
-        let strs =
-            items
-            |> List.choose (function
-                | JsonString s -> Some s
-                | _ -> None)
-
-        if strs.Length <> items.Length then
-            WrongType("string[]", "mixed")
-        else
-            Present strs
-    | Some(_, v) -> WrongType("array", sprintf "%A" v)
-
-let private lookupInt (fields: (string * JsonValue) list) (name: string) : FieldLookup<int> =
-    match List.tryFind (fun (k, _) -> k = name) fields with
-    | None -> Missing
-    | Some(_, JsonNumber n) ->
-        let d = decimal n
-
-        if d <> Math.Floor(d) || d < decimal Int32.MinValue || d > decimal Int32.MaxValue then
-            WrongType("int", "range")
-        else
-            Present(int d)
-    | Some(_, v) -> WrongType("int", sprintf "%A" v)
-
 type ParseError =
     | MalformedJson of string
     | MissingField of string
@@ -145,6 +119,91 @@ type ParseError =
     | InvalidCandidateId of string
     | DuplicateInList of string
     | UnsortedList of string
+    | StatusFlagMustBeFalse of string
+
+// -----------------------------------------------------------------------------
+// Field lookups
+// -----------------------------------------------------------------------------
+
+let private lookupString (fields: (string * JsonValue) list) (name: string) : Result<string, ParseError> =
+    match List.tryFind (fun (k, _) -> k = name) fields with
+    | None -> Error(MissingField name)
+    | Some(_, JsonString s) -> Ok s
+    | Some(_, v) -> Error(WrongFieldType(name, "string", sprintf "%A" v))
+
+let private lookupStringList (fields: (string * JsonValue) list) (name: string) : Result<string list, ParseError> =
+    match List.tryFind (fun (k, _) -> k = name) fields with
+    | None -> Error(MissingField name)
+    | Some(_, JsonArray items) ->
+        let strs =
+            items
+            |> List.choose (function
+                | JsonString s -> Some s
+                | _ -> None)
+
+        if strs.Length <> items.Length then
+            Error(WrongFieldType(name, "string[]", "mixed"))
+        else
+            Ok strs
+    | Some(_, v) -> Error(WrongFieldType(name, "array", sprintf "%A" v))
+
+let private lookupInt (fields: (string * JsonValue) list) (name: string) : Result<int, ParseError> =
+    match List.tryFind (fun (k, _) -> k = name) fields with
+    | None -> Error(MissingField name)
+    | Some(_, JsonNumber n) ->
+        let d = decimal n
+
+        if d <> Math.Floor(d) || d < decimal Int32.MinValue || d > decimal Int32.MaxValue then
+            Error(WrongFieldType(name, "int", "range"))
+        else
+            Ok(int d)
+    | Some(_, v) -> Error(WrongFieldType(name, "int", sprintf "%A" v))
+
+let private lookupIntOption (fields: (string * JsonValue) list) (name: string) : Result<int option, ParseError> =
+    match List.tryFind (fun (k, _) -> k = name) fields with
+    | None -> Ok None
+    | Some(_, JsonNull) -> Ok None
+    | Some(_, JsonNumber n) ->
+        let d = decimal n
+
+        if d <> Math.Floor(d) || d < decimal Int32.MinValue || d > decimal Int32.MaxValue then
+            Error(WrongFieldType(name, "int", "range"))
+        else
+            Ok(Some(int d))
+    | Some(_, v) -> Error(WrongFieldType(name, "int", sprintf "%A" v))
+
+let private lookupBool (fields: (string * JsonValue) list) (name: string) : Result<bool, ParseError> =
+    match List.tryFind (fun (k, _) -> k = name) fields with
+    | None -> Error(MissingField name)
+    | Some(_, JsonBool b) -> Ok b
+    | Some(_, v) -> Error(WrongFieldType(name, "bool", sprintf "%A" v))
+
+let private lookupObject (fields: (string * JsonValue) list) (name: string) : Result<(string * JsonValue) list, ParseError> =
+    match List.tryFind (fun (k, _) -> k = name) fields with
+    | None -> Error(MissingField name)
+    | Some(_, JsonObject items) -> Ok items
+    | Some(_, v) -> Error(WrongFieldType(name, "object", sprintf "%A" v))
+
+// -----------------------------------------------------------------------------
+// Result builder for clean parsing pipelines
+// -----------------------------------------------------------------------------
+
+type ParseResultBuilder() =
+    member _.Bind(r, f) = Result.bind f r
+    member _.Return(x) = Ok x
+    member _.ReturnFrom(r) = r
+    member _.Zero() = Ok ()
+    member _.Combine(a, b) =
+        match a with
+        | Ok () -> b
+        | Error e -> Error e
+    member _.Delay(f) = f ()
+
+let parse = ParseResultBuilder()
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
 
 let sha256OfBytes (bytes: byte array) : string =
     use h = SHA256.Create()
@@ -153,6 +212,24 @@ let sha256OfBytes (bytes: byte array) : string =
     |> Array.map (fun b -> b.ToString("x2", CultureInfo.InvariantCulture))
     |> String.concat ""
 
+// -----------------------------------------------------------------------------
+// Deterministic candidate identity
+// -----------------------------------------------------------------------------
+
+/// Compute the deterministic SHA-256 candidate identity from canonical
+/// identity-bearing fields.  Presentation text that is not declared identity
+/// bearing is excluded; transitions, evidence IDs, and OIDs are sorted before
+/// encoding so order does not affect the ID.
+///
+/// Identity-bearing fields (in encoding order):
+///   schema_version, kind, evidence_strength, title, symptom,
+///   applicability_conditions, observation, candidate_hypothesis,
+///   sorted(limitations), primary_path, sorted(diagnostic_codes),
+///   diagnostic_count, earliest_line (or empty), sorted(changed_paths),
+///   episode_id, episode_key, change_set_id,
+///   sorted(verification_evidence_ids), sorted(supporting_transition_ids),
+///   sorted(context_transition_ids), sorted(counterevidence_transition_ids),
+///   before_commit_oid, before_tree_oid, after_commit_oid, after_tree_oid
 let computeCandidateId
     (schemaVersion: string)
     (kind: RuleCandidateKind)
@@ -161,7 +238,7 @@ let computeCandidateId
     (symptom: string)
     (applicability: string)
     (observation: string)
-    (proposedRepair: string)
+    (candidateHypothesis: string)
     (limitations: string list)
     (primaryPath: string)
     (diagnosticCodes: string list)
@@ -172,7 +249,9 @@ let computeCandidateId
     (episodeKey: string)
     (changeSetId: string)
     (verificationEvidenceIds: string list)
-    (transitionIds: string list)
+    (supportingTransitionIds: string list)
+    (contextTransitionIds: string list)
+    (counterevidenceTransitionIds: string list)
     (beforeCommitOid: string)
     (beforeTreeOid: string)
     (afterCommitOid: string)
@@ -196,7 +275,7 @@ let computeCandidateId
     add symptom
     add applicability
     add observation
-    add proposedRepair
+    add candidateHypothesis
 
     for lim in limitations |> List.sort do
         add lim
@@ -222,7 +301,13 @@ let computeCandidateId
     for evid in verificationEvidenceIds |> List.sort do
         add evid
 
-    for tid in transitionIds |> List.sort do
+    for tid in supportingTransitionIds |> List.sort do
+        add tid
+
+    for tid in contextTransitionIds |> List.sort do
+        add tid
+
+    for tid in counterevidenceTransitionIds |> List.sort do
         add tid
 
     add beforeCommitOid
@@ -230,6 +315,10 @@ let computeCandidateId
     add afterCommitOid
     add afterTreeOid
     sha256OfBytes (buffer.ToArray())
+
+// -----------------------------------------------------------------------------
+// JSON rendering
+// -----------------------------------------------------------------------------
 
 let private utf8NoBom = UTF8Encoding(false)
 
@@ -258,6 +347,8 @@ let private jn (v: int) =
 let private ja (xs: string list) =
     "[" + (xs |> List.map esc |> String.concat ",") + "]"
 
+let private jb (v: bool) = if v then "true" else "false"
+
 let renderRuleCandidateEvidence (e: RuleCandidateEvidence) : string =
     "{\"episode_id\":"
     + js e.EpisodeId
@@ -267,8 +358,6 @@ let renderRuleCandidateEvidence (e: RuleCandidateEvidence) : string =
     + js e.ChangeSetId
     + ",\"verification_evidence_ids\":"
     + ja e.VerificationEvidenceIds
-    + ",\"transition_ids\":"
-    + ja e.TransitionIds
     + ",\"before_commit_oid\":"
     + js e.BeforeCommitOid
     + ",\"before_tree_oid\":"
@@ -277,6 +366,15 @@ let renderRuleCandidateEvidence (e: RuleCandidateEvidence) : string =
     + js e.AfterCommitOid
     + ",\"after_tree_oid\":"
     + js e.AfterTreeOid
+    + "}"
+
+let renderTransitionPartition (p: RuleCandidateTransitionPartition) : string =
+    "{\"supporting_transition_ids\":"
+    + ja p.SupportingTransitionIds
+    + ",\"context_transition_ids\":"
+    + ja p.ContextTransitionIds
+    + ",\"counterevidence_transition_ids\":"
+    + ja p.CounterevidenceTransitionIds
     + "}"
 
 let renderRuleCandidate (c: RuleCandidate) : string =
@@ -294,12 +392,12 @@ let renderRuleCandidate (c: RuleCandidate) : string =
     + js c.Title
     + ",\"symptom\":"
     + js c.Symptom
-    + ",\"applicability\":"
-    + js c.Applicability
+    + ",\"applicability_conditions\":"
+    + js c.ApplicabilityConditions
     + ",\"observation\":"
     + js c.Observation
-    + ",\"proposed_repair\":"
-    + js c.ProposedRepair
+    + ",\"candidate_hypothesis\":"
+    + js c.CandidateHypothesis
     + ",\"limitations\":"
     + ja c.Limitations
     + ",\"primary_path\":"
@@ -314,6 +412,11 @@ let renderRuleCandidate (c: RuleCandidate) : string =
        | None -> "null")
     + ",\"changed_paths\":"
     + ja c.ChangedPaths
+    + ",\"causal_family_curated\":" + jb c.StatusFlags.CausalFamilyCurated
+    + ",\"repair_advice_available\":" + jb c.StatusFlags.RepairAdviceAvailable
+    + ",\"llm_tip_available\":" + jb c.StatusFlags.LlmTipAvailable
+    + ",\"transition_partition\":"
+    + renderTransitionPartition c.TransitionPartition
     + ",\"evidence\":"
     + renderRuleCandidateEvidence c.Evidence
     + "}"
@@ -352,284 +455,143 @@ let writeAllLines (path: string) (lines: string list) : unit =
 
     File.WriteAllText(path, (lines |> String.concat "\n") + "\n", utf8NoBom)
 
+// -----------------------------------------------------------------------------
+// Strict parsing
+// -----------------------------------------------------------------------------
+
+let private parseEvidence (fields: (string * JsonValue) list) : Result<RuleCandidateEvidence, ParseError> =
+    parse {
+        let! episodeId = lookupString fields "episode_id"
+        let! episodeKey = lookupString fields "episode_key"
+        let! changeSetId = lookupString fields "change_set_id"
+        let! verificationEvidenceIds = lookupStringList fields "verification_evidence_ids"
+        let! beforeCommitOid = lookupString fields "before_commit_oid"
+        let! beforeTreeOid = lookupString fields "before_tree_oid"
+        let! afterCommitOid = lookupString fields "after_commit_oid"
+        let! afterTreeOid = lookupString fields "after_tree_oid"
+
+        return
+            { EpisodeId = episodeId
+              EpisodeKey = episodeKey
+              ChangeSetId = changeSetId
+              VerificationEvidenceIds = verificationEvidenceIds
+              BeforeCommitOid = beforeCommitOid
+              BeforeTreeOid = beforeTreeOid
+              AfterCommitOid = afterCommitOid
+              AfterTreeOid = afterTreeOid }
+    }
+
+let private parseTransitionPartition (fields: (string * JsonValue) list) : Result<RuleCandidateTransitionPartition, ParseError> =
+    parse {
+        let! supporting = lookupStringList fields "supporting_transition_ids"
+        let! context = lookupStringList fields "context_transition_ids"
+        let! counterevidence = lookupStringList fields "counterevidence_transition_ids"
+
+        return
+            { SupportingTransitionIds = supporting
+              ContextTransitionIds = context
+              CounterevidenceTransitionIds = counterevidence }
+    }
+
+let private parseRuleCandidateFromObject (fields: (string * JsonValue) list) : Result<RuleCandidate, ParseError> =
+    parse {
+        let! sv = lookupString fields "schema_version"
+        do!
+            if sv <> RuleCandidateSchemaVersion then
+                Error(UnknownSchemaVersion sv)
+            else
+                Ok()
+
+        let! cid = lookupString fields "candidate_id"
+        do!
+            if cid.Length <> 64 then
+                Error(InvalidCandidateId cid)
+            else
+                Ok()
+
+        let! statusToken = lookupString fields "status"
+        let! status =
+            match tryParseRuleCandidateStatus statusToken with
+            | None -> Error(UnknownCandidateStatus statusToken)
+            | Some s -> Ok s
+
+        let! kindToken = lookupString fields "kind"
+        let! kind =
+            match tryParseRuleCandidateKind kindToken with
+            | None -> Error(UnknownCandidateKind kindToken)
+            | Some k -> Ok k
+
+        let! esToken = lookupString fields "evidence_strength"
+        let! strength =
+            match tryParseEvidenceStrength esToken with
+            | None -> Error(UnknownEvidenceStrength esToken)
+            | Some e -> Ok e
+
+        let! limitations = lookupStringList fields "limitations"
+        let! diagnosticCodes = lookupStringList fields "diagnostic_codes"
+        let! changedPaths = lookupStringList fields "changed_paths"
+        let! title = lookupString fields "title"
+        let! symptom = lookupString fields "symptom"
+        let! applicability = lookupString fields "applicability_conditions"
+        let! observation = lookupString fields "observation"
+        let! candidateHypothesis = lookupString fields "candidate_hypothesis"
+        let! primaryPath = lookupString fields "primary_path"
+        let! diagnosticCount = lookupInt fields "diagnostic_count"
+        let! earliestLine = lookupIntOption fields "earliest_line"
+
+        let! causalFamilyCurated = lookupBool fields "causal_family_curated"
+        do!
+            if causalFamilyCurated then
+                Error(StatusFlagMustBeFalse "causal_family_curated")
+            else
+                Ok()
+
+        let! repairAdviceAvailable = lookupBool fields "repair_advice_available"
+        do!
+            if repairAdviceAvailable then
+                Error(StatusFlagMustBeFalse "repair_advice_available")
+            else
+                Ok()
+
+        let! llmTipAvailable = lookupBool fields "llm_tip_available"
+        do!
+            if llmTipAvailable then
+                Error(StatusFlagMustBeFalse "llm_tip_available")
+            else
+                Ok()
+
+        let! partitionFields = lookupObject fields "transition_partition"
+        let! partition = parseTransitionPartition partitionFields
+
+        let! evidenceFields = lookupObject fields "evidence"
+        let! evidence = parseEvidence evidenceFields
+
+        return
+            { SchemaVersion = RuleCandidateSchemaVersion
+              CandidateId = cid
+              Status = status
+              Kind = kind
+              EvidenceStrength = strength
+              Title = title
+              Symptom = symptom
+              ApplicabilityConditions = applicability
+              Observation = observation
+              CandidateHypothesis = candidateHypothesis
+              Limitations = limitations
+              PrimaryPath = primaryPath
+              DiagnosticCodes = diagnosticCodes
+              DiagnosticCount = diagnosticCount
+              EarliestLine = earliestLine
+              ChangedPaths = changedPaths
+              StatusFlags = defaultCandidateStatusFlags
+              TransitionPartition = partition
+              Evidence = evidence }
+    }
 
 let parseRuleCandidateStrict (json: string) : Result<RuleCandidate, ParseError> =
     try
         match parseJson json with
-        | JsonObject fields ->
-            let req n =
-                match lookupString fields n with
-                | Present v -> Ok v
-                | Missing -> Error(MissingField n)
-                | WrongType(e, a) -> Error(WrongFieldType(n, e, a))
-
-            let reqList n =
-                match lookupStringList fields n with
-                | Present v -> Ok v
-                | Missing -> Error(MissingField n)
-                | WrongType(e, a) -> Error(WrongFieldType(n, e, a))
-
-            let reqInt n =
-                match lookupInt fields n with
-                | Present v -> Ok v
-                | Missing -> Error(MissingField n)
-                | WrongType(e, a) -> Error(WrongFieldType(n, e, a))
-
-            match lookupString fields "schema_version" with
-            | Present v when v <> RuleCandidateSchemaVersion -> Error(UnknownSchemaVersion v)
-            | Present _ ->
-                match req "candidate_id" with
-                | Error e -> Error e
-                | Ok cid when cid.Length <> 64 -> Error(InvalidCandidateId cid)
-                | Ok cid ->
-                    match lookupString fields "status" with
-                    | Present s ->
-                        match tryParseRuleCandidateStatus s with
-                        | None -> Error(UnknownCandidateStatus s)
-                        | Some status ->
-                            match lookupString fields "kind" with
-                            | Present k ->
-                                match tryParseRuleCandidateKind k with
-                                | None -> Error(UnknownCandidateKind k)
-                                | Some kind ->
-                                    match lookupString fields "evidence_strength" with
-                                    | Present es ->
-                                        match tryParseEvidenceStrength es with
-                                        | None -> Error(UnknownEvidenceStrength es)
-                                        | Some strength ->
-                                            match reqList "limitations" with
-                                            | Error e -> Error e
-                                            | Ok limitations ->
-                                                match reqList "diagnostic_codes" with
-                                                | Error e -> Error e
-                                                | Ok codes ->
-                                                    match reqList "changed_paths" with
-                                                    | Error e -> Error e
-                                                    | Ok paths ->
-                                                        match reqList "verification_evidence_ids" with
-                                                        | Error e -> Error e
-                                                        | Ok evidIds ->
-                                                            match reqList "transition_ids" with
-                                                            | Error e -> Error e
-                                                            | Ok transIds ->
-                                                                match req "title" with
-                                                                | Error e -> Error e
-                                                                | Ok title ->
-                                                                    match req "symptom" with
-                                                                    | Error e -> Error e
-                                                                    | Ok symptom ->
-                                                                        match req "applicability" with
-                                                                        | Error e -> Error e
-                                                                        | Ok applicability ->
-                                                                            match req "observation" with
-                                                                            | Error e -> Error e
-                                                                            | Ok observation ->
-                                                                                match req "proposed_repair" with
-                                                                                | Error e -> Error e
-                                                                                | Ok proposedRepair ->
-                                                                                    match req "primary_path" with
-                                                                                    | Error e -> Error e
-                                                                                    | Ok primaryPath ->
-                                                                                        match
-                                                                                            reqInt "diagnostic_count"
-                                                                                        with
-                                                                                        | Error e -> Error e
-                                                                                        | Ok diagnosticCount ->
-                                                                                            let earliestLine =
-                                                                                                match
-                                                                                                    lookupInt
-                                                                                                        fields
-                                                                                                        "earliest_line"
-                                                                                                with
-                                                                                                | Present v -> Some v
-                                                                                                | _ -> None
-
-                                                                                            match
-                                                                                                List.tryFind
-                                                                                                    (fun (k, _) ->
-                                                                                                        k = "evidence")
-                                                                                                    fields
-                                                                                            with
-                                                                                            | Some(_,
-                                                                                                   JsonObject evidFields) ->
-                                                                                                let reqE n =
-                                                                                                    match
-                                                                                                        lookupString
-                                                                                                            evidFields
-                                                                                                            n
-                                                                                                    with
-                                                                                                    | Present v -> Ok v
-                                                                                                    | Missing ->
-                                                                                                        Error(
-                                                                                                            MissingField(
-                                                                                                                "evidence."
-                                                                                                                + n
-                                                                                                            )
-                                                                                                        )
-                                                                                                    | WrongType(e, a) ->
-                                                                                                        Error(
-                                                                                                            WrongFieldType(
-                                                                                                                "evidence."
-                                                                                                                + n,
-                                                                                                                e,
-                                                                                                                a
-                                                                                                            )
-                                                                                                        )
-
-                                                                                                let reqEList n =
-                                                                                                    match
-                                                                                                        lookupStringList
-                                                                                                            evidFields
-                                                                                                            n
-                                                                                                    with
-                                                                                                    | Present v -> Ok v
-                                                                                                    | Missing ->
-                                                                                                        Error(
-                                                                                                            MissingField(
-                                                                                                                "evidence."
-                                                                                                                + n
-                                                                                                            )
-                                                                                                        )
-                                                                                                    | WrongType(e, a) ->
-                                                                                                        Error(
-                                                                                                            WrongFieldType(
-                                                                                                                "evidence."
-                                                                                                                + n,
-                                                                                                                e,
-                                                                                                                a
-                                                                                                            )
-                                                                                                        )
-
-                                                                                                match
-                                                                                                    reqE "episode_id"
-                                                                                                with
-                                                                                                | Error e -> Error e
-                                                                                                | Ok episodeId ->
-                                                                                                    match
-                                                                                                        reqE
-                                                                                                            "episode_key"
-                                                                                                    with
-                                                                                                    | Error e -> Error e
-                                                                                                    | Ok episodeKey ->
-                                                                                                        match
-                                                                                                            reqE
-                                                                                                                "change_set_id"
-                                                                                                        with
-                                                                                                        | Error e ->
-                                                                                                            Error e
-                                                                                                        | Ok changeSetId ->
-                                                                                                            match
-                                                                                                                reqEList
-                                                                                                                    "verification_evidence_ids"
-                                                                                                            with
-                                                                                                            | Error e ->
-                                                                                                                Error e
-                                                                                                            | Ok evidList ->
-                                                                                                                match
-                                                                                                                    reqEList
-                                                                                                                        "transition_ids"
-                                                                                                                with
-                                                                                                                | Error e ->
-                                                                                                                    Error
-                                                                                                                        e
-                                                                                                                | Ok transList ->
-                                                                                                                    match
-                                                                                                                        reqE
-                                                                                                                            "before_commit_oid"
-                                                                                                                    with
-                                                                                                                    | Error e ->
-                                                                                                                        Error
-                                                                                                                            e
-                                                                                                                    | Ok beforeCommitOid ->
-                                                                                                                        match
-                                                                                                                            reqE
-                                                                                                                                "before_tree_oid"
-                                                                                                                        with
-                                                                                                                        | Error e ->
-                                                                                                                            Error
-                                                                                                                                e
-                                                                                                                        | Ok beforeTreeOid ->
-                                                                                                                            match
-                                                                                                                                reqE
-                                                                                                                                    "after_commit_oid"
-                                                                                                                            with
-                                                                                                                            | Error e ->
-                                                                                                                                Error
-                                                                                                                                    e
-                                                                                                                            | Ok afterCommitOid ->
-                                                                                                                                match
-                                                                                                                                    reqE
-                                                                                                                                        "after_tree_oid"
-                                                                                                                                with
-                                                                                                                                | Error e ->
-                                                                                                                                    Error
-                                                                                                                                        e
-                                                                                                                                | Ok afterTreeOid ->
-                                                                                                                                    Ok
-                                                                                                                                        { SchemaVersion =
-                                                                                                                                            RuleCandidateSchemaVersion
-                                                                                                                                          CandidateId =
-                                                                                                                                            cid
-                                                                                                                                          Status =
-                                                                                                                                            status
-                                                                                                                                          Kind =
-                                                                                                                                            kind
-                                                                                                                                          EvidenceStrength =
-                                                                                                                                            strength
-                                                                                                                                          Title =
-                                                                                                                                            title
-                                                                                                                                          Symptom =
-                                                                                                                                            symptom
-                                                                                                                                          Applicability =
-                                                                                                                                            applicability
-                                                                                                                                          Observation =
-                                                                                                                                            observation
-                                                                                                                                          ProposedRepair =
-                                                                                                                                            proposedRepair
-                                                                                                                                          Limitations =
-                                                                                                                                            limitations
-                                                                                                                                          PrimaryPath =
-                                                                                                                                            primaryPath
-                                                                                                                                          DiagnosticCodes =
-                                                                                                                                            codes
-                                                                                                                                          DiagnosticCount =
-                                                                                                                                            diagnosticCount
-                                                                                                                                          EarliestLine =
-                                                                                                                                            earliestLine
-                                                                                                                                          ChangedPaths =
-                                                                                                                                            paths
-                                                                                                                                          Evidence =
-                                                                                                                                            { EpisodeId =
-                                                                                                                                                episodeId
-                                                                                                                                              EpisodeKey =
-                                                                                                                                                episodeKey
-                                                                                                                                              ChangeSetId =
-                                                                                                                                                changeSetId
-                                                                                                                                              VerificationEvidenceIds =
-                                                                                                                                                evidList
-                                                                                                                                              TransitionIds =
-                                                                                                                                                transList
-                                                                                                                                              BeforeCommitOid =
-                                                                                                                                                beforeCommitOid
-                                                                                                                                              BeforeTreeOid =
-                                                                                                                                                beforeTreeOid
-                                                                                                                                              AfterCommitOid =
-                                                                                                                                                afterCommitOid
-                                                                                                                                              AfterTreeOid =
-                                                                                                                                                afterTreeOid } }
-                                                                                            | _ ->
-                                                                                                Error(
-                                                                                                    MissingField
-                                                                                                        "evidence"
-                                                                                                )
-                                    | Missing -> Error(MissingField "evidence_strength")
-                                    | WrongType(e, a) -> Error(WrongFieldType("evidence_strength", e, a))
-                            | Missing -> Error(MissingField "kind")
-                            | WrongType(e, a) -> Error(WrongFieldType("kind", e, a))
-                    | Missing -> Error(MissingField "status")
-                    | WrongType(e, a) -> Error(WrongFieldType("status", e, a))
-            | Missing -> Error(MissingField "schema_version")
-            | WrongType(e, a) -> Error(WrongFieldType("schema_version", e, a))
+        | JsonObject fields -> parseRuleCandidateFromObject fields
         | _ -> Error(MalformedJson "Expected JSON object")
     with ex ->
         Error(MalformedJson ex.Message)
@@ -638,49 +600,38 @@ let parseRuleCandidateSummaryStrict (json: string) : Result<RuleCandidateSummary
     try
         match parseJson json with
         | JsonObject fields ->
-            let reqInt n =
-                match lookupInt fields n with
-                | Present v -> Ok v
-                | Missing -> Error(MissingField n)
-                | WrongType(e, a) -> Error(WrongFieldType(n, e, a))
+            parse {
+                let! sv = lookupString fields "schema_version"
+                do!
+                    if sv <> RuleCandidateSummarySchemaVersion then
+                        Error(UnknownSchemaVersion sv)
+                    else
+                        Ok()
 
-            match lookupString fields "schema_version" with
-            | Present v when v <> RuleCandidateSummarySchemaVersion -> Error(UnknownSchemaVersion v)
-            | Present _ ->
-                match reqInt "eligible_episodes" with
-                | Error e -> Error e
-                | Ok elEp ->
-                    match reqInt "episodes_with_candidates" with
-                    | Error e -> Error e
-                    | Ok epWC ->
-                        match reqInt "candidates_total" with
-                        | Error e -> Error e
-                        | Ok cTot ->
-                            match reqInt "parser_cascade_candidates" with
-                            | Error e -> Error e
-                            | Ok pcCands ->
-                                match reqInt "single_episode_candidates" with
-                                | Error e -> Error e
-                                | Ok seCands ->
-                                    match lookupStringList fields "candidate_ids" with
-                                    | Present ids ->
-                                        if ids <> List.sort ids then
-                                            Error(UnsortedList "candidate_ids")
-                                        elif ids <> List.distinct ids then
-                                            Error(DuplicateInList "candidate_ids")
-                                        else
-                                            Ok
-                                                { SchemaVersion = RuleCandidateSummarySchemaVersion
-                                                  EligibleEpisodes = elEp
-                                                  EpisodesWithCandidates = epWC
-                                                  CandidatesTotal = cTot
-                                                  ParserCascadeCandidates = pcCands
-                                                  SingleEpisodeCandidates = seCands
-                                                  CandidateIds = ids }
-                                    | Missing -> Error(MissingField "candidate_ids")
-                                    | WrongType(e, a) -> Error(WrongFieldType("candidate_ids", e, a))
-            | Missing -> Error(MissingField "schema_version")
-            | WrongType(e, a) -> Error(WrongFieldType("schema_version", e, a))
+                let! a = lookupInt fields "eligible_episodes"
+                let! b = lookupInt fields "episodes_with_candidates"
+                let! c = lookupInt fields "candidates_total"
+                let! d = lookupInt fields "parser_cascade_candidates"
+                let! e = lookupInt fields "single_episode_candidates"
+                let! ids = lookupStringList fields "candidate_ids"
+
+                do!
+                    if ids <> List.sort ids then
+                        Error(UnsortedList "candidate_ids")
+                    elif ids <> List.distinct ids then
+                        Error(DuplicateInList "candidate_ids")
+                    else
+                        Ok()
+
+                return
+                    { SchemaVersion = RuleCandidateSummarySchemaVersion
+                      EligibleEpisodes = a
+                      EpisodesWithCandidates = b
+                      CandidatesTotal = c
+                      ParserCascadeCandidates = d
+                      SingleEpisodeCandidates = e
+                      CandidateIds = ids }
+            }
         | _ -> Error(MalformedJson "Expected JSON object")
     with ex ->
         Error(MalformedJson ex.Message)

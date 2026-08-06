@@ -3,6 +3,13 @@ module Circus.Tooling.FSharpDiagnostics.RuleCandidates.Cli
 // =============================================================================
 // Rule candidates CLI
 // =============================================================================
+//
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-EXTRACTION01-CORRECTION01
+//
+// The `verify` command performs no writes.  It recomputes the candidate ID
+// from the parsed semantic fields and reconciles the summary counts.
+// On success it exits zero with the canonical bytes byte-identical to
+// before the call.
 
 open System
 open System.IO
@@ -11,18 +18,10 @@ open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Engine
 open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Paths
 open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Serialization
 
-// -----------------------------------------------------------------------------
-// Exit codes
-// -----------------------------------------------------------------------------
-
 module ExitCode =
     let pass = 0
     let policyFailure = 1
     let operationalError = 2
-
-// -----------------------------------------------------------------------------
-// Command types
-// -----------------------------------------------------------------------------
 
 type Command =
     | InventoryCmd
@@ -30,10 +29,6 @@ type Command =
     | VerifyCmd
     | ShowCmd of candidateId: string
     | HelpCmd
-
-// -----------------------------------------------------------------------------
-// Help text
-// -----------------------------------------------------------------------------
 
 let helpText () : string =
     "fsharp-diagnostics rule-candidates — deterministic rule-candidate extraction\n"
@@ -44,10 +39,6 @@ let helpText () : string =
     + "  circus-tooling fsharp-diagnostics rule-candidates verify\n"
     + "  circus-tooling fsharp-diagnostics rule-candidates show <candidate-id>\n"
     + "  circus-tooling fsharp-diagnostics rule-candidates help\n"
-
-// -----------------------------------------------------------------------------
-// Command parsing
-// -----------------------------------------------------------------------------
 
 let parse (argv: string list) : Command =
     match argv with
@@ -65,10 +56,6 @@ let parse (argv: string list) : Command =
     | _ ->
         eprintfn "error: unknown command"
         HelpCmd
-
-// -----------------------------------------------------------------------------
-// Renderers
-// -----------------------------------------------------------------------------
 
 let renderInventory (result: ExtractionResult) : string =
     let sb = Text.StringBuilder()
@@ -117,6 +104,16 @@ let renderCandidate (c: RuleCandidate) : string =
     |> ignore
 
     sb.AppendLine(sprintf "  diagnostic_count: %d" c.DiagnosticCount) |> ignore
+
+    sb.AppendLine(sprintf "  supporting_transition_ids: %d" c.TransitionPartition.SupportingTransitionIds.Length)
+    |> ignore
+
+    sb.AppendLine(sprintf "  context_transition_ids: %d" c.TransitionPartition.ContextTransitionIds.Length)
+    |> ignore
+
+    sb.AppendLine(sprintf "  counterevidence_transition_ids: %d" c.TransitionPartition.CounterevidenceTransitionIds.Length)
+    |> ignore
+
     sb.AppendLine(sprintf "  episode_id: %s" c.Evidence.EpisodeId) |> ignore
     sb.AppendLine(sprintf "  episode_key: %s" c.Evidence.EpisodeKey) |> ignore
 
@@ -127,9 +124,6 @@ let renderCandidate (c: RuleCandidate) : string =
     |> ignore
 
     sb.AppendLine(sprintf "  verification_evidence_ids: %s" (String.concat ", " c.Evidence.VerificationEvidenceIds))
-    |> ignore
-
-    sb.AppendLine(sprintf "  transition_ids: %d" c.Evidence.TransitionIds.Length)
     |> ignore
 
     sb.AppendLine "  limitations:" |> ignore
@@ -154,10 +148,20 @@ let renderError (err: EngineError) : string =
     | EngineError.InvalidInputIdentity(kind, idx, field, reason) ->
         sprintf "Invalid %A identity at index %d: field '%s' is %s" kind idx field reason
     | EngineError.Internal msg -> "Internal error: " + msg
-
-// -----------------------------------------------------------------------------
-// Run commands
-// -----------------------------------------------------------------------------
+    | EngineError.UnsupportedRepairEpisodeSchemaVersion ver ->
+        sprintf "Unsupported repair-episode schema version: %s" ver
+    | EngineError.UnsupportedChangeSetSchemaVersion ver ->
+        sprintf "Unsupported change-set schema version: %s" ver
+    | EngineError.UnsupportedVerificationEvidenceSchemaVersion ver ->
+        sprintf "Unsupported verification-evidence schema version: %s" ver
+    | EngineError.MalformedRepairEpisodeJson(line, msg) ->
+        sprintf "Malformed repair-episode JSON at line %d: %s" line msg
+    | EngineError.MalformedChangeSetJson(line, msg) ->
+        sprintf "Malformed change-set JSON at line %d: %s" line msg
+    | EngineError.MalformedTransitionJson(line, msg) ->
+        sprintf "Malformed transition JSON at line %d: %s" line msg
+    | EngineError.MalformedVerificationEvidenceJson(line, msg) ->
+        sprintf "Malformed verification-evidence JSON at line %d: %s" line msg
 
 let runInventory (repoRoot: string) : int =
     let result = extractCandidates repoRoot
@@ -184,66 +188,33 @@ let runRegenerate (repoRoot: string) : int =
         ExitCode.pass
 
 let runVerify (repoRoot: string) : int =
-    // Regenerate and compare
-    let result = runExtraction repoRoot
+    let verdict, byteIdentical = runReadOnlyVerify repoRoot
 
-    if not (List.isEmpty result.Errors) then
-        for err in result.Errors do
-            eprintfn "error: %s" (renderError err)
-
-        ExitCode.policyFailure
-    else
-        // Parse and verify candidates
-        let candidatesPath = toAbsolutePath repoRoot ruleCandidatesJsonlRelativePath
-        let summaryPath = toAbsolutePath repoRoot ruleCandidatesSummaryRelativePath
-
-        if not (File.Exists candidatesPath) then
-            eprintfn "error: candidates file not found: %s" candidatesPath
-            ExitCode.policyFailure
-        elif not (File.Exists summaryPath) then
-            eprintfn "error: summary file not found: %s" summaryPath
-            ExitCode.policyFailure
+    match verdict with
+    | Verified ->
+        if byteIdentical then
+            stdout.WriteLine "fsharp-diagnostics rule-candidates verify: VERIFIED (canonical bytes unchanged)"
+            ExitCode.pass
         else
-            try
-                let candidateLines = File.ReadAllLines candidatesPath
-                let mutable parseErrors = 0
-
-                for line in candidateLines do
-                    match parseRuleCandidateStrict line with
-                    | Result.Ok _ -> ()
-                    | Result.Error e ->
-                        parseErrors <- parseErrors + 1
-                        eprintfn "error: candidate parse error: %A" e
-
-                match parseRuleCandidateSummaryStrict (File.ReadAllText summaryPath) with
-                | Result.Ok summary ->
-                    // Verify summary consistency
-                    if summary.CandidatesTotal <> result.Candidates.Length then
-                        eprintfn "error: summary candidate count mismatch"
-                        ExitCode.policyFailure
-                    elif summary.CandidateIds.Length <> result.Candidates.Length then
-                        eprintfn "error: summary candidate IDs count mismatch"
-                        ExitCode.policyFailure
-                    elif parseErrors > 0 then
-                        eprintfn "error: %d candidate parse errors" parseErrors
-                        ExitCode.policyFailure
-                    else
-                        stdout.WriteLine(
-                            sprintf
-                                "fsharp-diagnostics rule-candidates verify: candidates=%d verified"
-                                result.Candidates.Length
-                        )
-
-                        ExitCode.pass
-                | Result.Error e ->
-                    eprintfn "error: summary parse error: %A" e
-                    ExitCode.policyFailure
-            with ex ->
-                eprintfn "error: verification exception: %s" ex.Message
-                ExitCode.operationalError
+            eprintfn "error: canonical bytes changed during verification (verifier must be read-only)"
+            ExitCode.policyFailure
+    | IdentityMismatch(_, _, reason) ->
+        eprintfn "error: identity mismatch: %s" reason
+        ExitCode.policyFailure
+    | SummaryMismatch reason ->
+        eprintfn "error: summary mismatch: %s" reason
+        ExitCode.policyFailure
+    | ParseFailure reason ->
+        eprintfn "error: parse failure: %s" reason
+        ExitCode.policyFailure
+    | OutputMissing path ->
+        eprintfn "error: canonical output missing: %s" path
+        ExitCode.policyFailure
+    | MultipleCandidatesWhenExactlyOneRequired ->
+        eprintfn "error: exactly one candidate is required but multiple were found"
+        ExitCode.policyFailure
 
 let runShow (repoRoot: string) (candidateId: string) : int =
-    // Run extraction to get candidates
     let result = extractCandidates repoRoot
 
     match result.Candidates |> List.tryFind (fun c -> c.CandidateId = candidateId) with
@@ -253,10 +224,6 @@ let runShow (repoRoot: string) (candidateId: string) : int =
     | None ->
         eprintfn "error: candidate %s not found" candidateId
         ExitCode.operationalError
-
-// -----------------------------------------------------------------------------
-// Main entry point
-// -----------------------------------------------------------------------------
 
 let run (argv: string list) : int =
     match parse argv with

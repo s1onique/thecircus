@@ -3,9 +3,28 @@ module Circus.Tooling.FSharpDiagnostics.RuleCandidates.Engine
 // =============================================================================
 // Rule candidate extraction engine
 // =============================================================================
+//
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-EXTRACTION01-CORRECTION01
+//
+// This module owns:
+//   * transition identity & duplicate detection across all four domains;
+//   * candidate construction from a classified group and partition;
+//   * atomic publication via the shared `AtomicPublish.publish` authority;
+//   * read-only verification that recomputes the candidate identity and
+//     reconciles summary counts.
+//
+// Authority invariants:
+//   * The published `candidate_id` is the result of `computeCandidateId`
+//     over the parsed semantic fields, recomputed by the verifier.  The
+//     verifier never trusts the published id verbatim.
+//   * Publication is atomic: temp staging, single replacement of canonical
+//     bytes, no observable partial state.  On failure, canonical bytes are
+//     byte-identical to the pre-publication state.
+//   * `runVerify` performs no writes and leaves the working tree untouched.
 
 open System
 open System.IO
+open Circus.Tooling.FSharpDiagnostics.AtomicPublish
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Engine
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Classification
@@ -24,23 +43,20 @@ type InputIdentityKind =
     | ChangeSetIdentity
     | VerificationEvidenceIdentity
 
-/// Typed transition identity using structural equality.
 [<StructuralEquality; StructuralComparison>]
 type TransitionIdentityKey =
     { EpisodeId: string
       ExactFingerprint: string }
 
-/// Creates a typed transition identity from a DiagnosticTransition.
 let makeTransitionIdentityKey (t: DiagnosticTransition) : TransitionIdentityKey =
     { EpisodeId = t.EpisodeId
       ExactFingerprint = t.ExactFingerprint }
 
-/// Renders a transition identity as a human-readable string.
 let renderTransitionIdentity (key: TransitionIdentityKey) : string =
     sprintf "episode=%s;fingerprint=%s" key.EpisodeId key.ExactFingerprint
 
-/// String conversion for transition identity (used in duplicate detection).
-let transitionIdentityString (t: DiagnosticTransition) : string = t.EpisodeId + "|" + t.ExactFingerprint
+let transitionIdentityString (t: DiagnosticTransition) : string =
+    t.EpisodeId + "|" + t.ExactFingerprint
 
 type EngineError =
     | EpisodeLoadFailed of errors: string list
@@ -53,19 +69,24 @@ type EngineError =
     | DuplicateInputIdentities of kind: InputIdentityKind * identities: string list
     | InvalidInputIdentity of kind: InputIdentityKind * itemIndex: int * field: string * reason: string
     | Internal of message: string
+    | UnsupportedRepairEpisodeSchemaVersion of version: string
+    | UnsupportedChangeSetSchemaVersion of version: string
+    | UnsupportedVerificationEvidenceSchemaVersion of version: string
+    | MalformedRepairEpisodeJson of line: int * message: string
+    | MalformedChangeSetJson of line: int * message: string
+    | MalformedTransitionJson of line: int * message: string
+    | MalformedVerificationEvidenceJson of line: int * message: string
 
 // -----------------------------------------------------------------------------
 // Identity validation helpers
 // -----------------------------------------------------------------------------
 
-/// Validates that an episode identity is non-empty.
 let private validateEpisodeIdentity (index: int) (ep: RepairEpisode) : EngineError option =
     if String.IsNullOrEmpty ep.EpisodeId then
         Some(InvalidInputIdentity(EpisodeIdentity, index, "EpisodeId", "empty"))
     else
         None
 
-/// Validates that a transition identity is non-empty.
 let private validateTransitionIdentity (index: int) (t: DiagnosticTransition) : EngineError option =
     if String.IsNullOrEmpty t.EpisodeId then
         Some(InvalidInputIdentity(TransitionIdentity, index, "EpisodeId", "empty"))
@@ -74,14 +95,12 @@ let private validateTransitionIdentity (index: int) (t: DiagnosticTransition) : 
     else
         None
 
-/// Validates that a change-set identity is non-empty.
 let private validateChangeSetIdentity (index: int) (cs: GitChangeSet) : EngineError option =
     if String.IsNullOrEmpty cs.ChangeSetId then
         Some(InvalidInputIdentity(ChangeSetIdentity, index, "ChangeSetId", "empty"))
     else
         None
 
-/// Validates that a verification evidence identity is non-empty.
 let private validateVerificationIdentity (index: int) (lv: LocatedVerificationEvidence) : EngineError option =
     if String.IsNullOrEmpty lv.Evidence.EvidenceId then
         Some(InvalidInputIdentity(VerificationEvidenceIdentity, index, "EvidenceId", "empty"))
@@ -89,26 +108,26 @@ let private validateVerificationIdentity (index: int) (lv: LocatedVerificationEv
         None
 
 // -----------------------------------------------------------------------------
-// Fixed prose templates
+// Fixed prose templates (descriptive, never imperative)
 // -----------------------------------------------------------------------------
 
 let parserCascadeTitle =
-    "Repair the earliest malformed binding before chasing downstream F# parser errors"
+    "Parser diagnostic cluster eliminated after the same-path repair"
 
 let parserCascadeSymptom =
     "Multiple parser diagnostics occur in one changed F# source path, including FS0010 or FS3118, and later diagnostics appear in the same local region."
 
 let parserCascadeApplicability =
-    "Use this candidate only when the diagnostics form a same-path parser cluster, the path changed in the verified repair episode, and the after-state no longer contains the same exact failures."
+    "Applies when the diagnostics form a same-path parser cluster, the path changed in the verified repair episode, and the after-state no longer contains the same exact failures."
 
-let parserCascadeProposedRepair =
-    "Inspect the earliest parser diagnostic in the cluster and restore the complete binding, expression, indentation, or delimiter structure before attempting to fix later parser diagnostics individually. Rebuild after repairing the earliest syntax break."
+let parserCascadeCandidateHypothesis =
+    "This is a provisional hypothesis that the parser cascade observed in this single episode may be caused by an early malformed binding or delimiter in the source path. The hypothesis is descriptive, not a recommended fix."
 
 let parserCascadeLimitations =
-    [ "This is supported by one observed repair episode."
+    [ "Supported by one observed repair episode."
       "Path-level change support does not prove line-level causation."
-      "The candidate has not yet been reproduced with a minimal compiler fixture."
-      "The candidate is not a universal interpretation of FS0010 or FS3118." ]
+      "Not yet reproduced with a minimal compiler fixture."
+      "Not a universal interpretation of FS0010 or FS3118." ]
 
 // -----------------------------------------------------------------------------
 // Extraction result
@@ -124,43 +143,68 @@ type ExtractionResult =
 // Publication
 // -----------------------------------------------------------------------------
 
+/// PendingFile bodies for the canonical rule-candidate artifacts.
+type private PendingRuleCandidateArtifact =
+    { JsonlBody: string
+      SummaryBody: string }
+
+let private buildPending
+    (canonicalDir: string)
+    (candidates: RuleCandidate list)
+    (eligible: int)
+    (episodesWithCandidates: int)
+    : PendingRuleCandidateArtifact =
+    let cpath = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesJsonlRelativePath)
+    let spath = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesSummaryRelativePath)
+
+    let clines = candidates |> List.map renderRuleCandidate
+
+    let summary =
+        { SchemaVersion = RuleCandidateSummarySchemaVersion
+          EligibleEpisodes = eligible
+          EpisodesWithCandidates = episodesWithCandidates
+          CandidatesTotal = candidates.Length
+          ParserCascadeCandidates = candidates.Length
+          SingleEpisodeCandidates = candidates.Length
+          CandidateIds = candidates |> List.map (fun c -> c.CandidateId) |> List.sort }
+
+    { JsonlBody = (clines |> String.concat "\n") + "\n"
+      SummaryBody = renderRuleCandidateSummary summary }
+
+/// Publish candidates atomically.  Returns true on success; on failure the
+/// canonical outputs remain byte-identical to the pre-publication state.
 let publishCandidates (repoRoot: string) (result: ExtractionResult) : bool =
+    let canonicalDir =
+        Path.GetDirectoryName(toAbsolutePath repoRoot ruleCandidatesJsonlRelativePath)
+
     try
-        let cpath = toAbsolutePath repoRoot ruleCandidatesJsonlRelativePath
-        let spath = toAbsolutePath repoRoot ruleCandidatesSummaryRelativePath
-        let clines = result.Candidates |> List.map renderRuleCandidate
+        let canonicalJsonl = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesJsonlRelativePath)
+        let canonicalSummary = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesSummaryRelativePath)
 
-        let sum =
-            { SchemaVersion = RuleCandidateSummarySchemaVersion
-              EligibleEpisodes = result.EligibleEpisodes
-              EpisodesWithCandidates = result.EpisodesWithCandidates
-              CandidatesTotal = result.Candidates.Length
-              ParserCascadeCandidates = result.Candidates.Length
-              SingleEpisodeCandidates = result.Candidates.Length
-              CandidateIds = result.Candidates |> List.map (fun c -> c.CandidateId) |> List.sort }
+        let pending = buildPending canonicalDir result.Candidates result.EligibleEpisodes result.EpisodesWithCandidates
 
-        let json = renderRuleCandidateSummary sum
-        writeAllLines (cpath + ".tmp") clines
-        writeLineOriented (spath + ".tmp") json
+        let files =
+            [ { CanonicalFileName = Path.GetFileName ruleCandidatesJsonlRelativePath
+                Body = pending.JsonlBody }
+              { CanonicalFileName = Path.GetFileName ruleCandidatesSummaryRelativePath
+                Body = pending.SummaryBody } ]
 
-        if File.Exists cpath then
-            File.Delete cpath
-
-        if File.Exists spath then
-            File.Delete spath
-
-        File.Move(cpath + ".tmp", cpath)
-        File.Move(spath + ".tmp", spath)
-        true
+        match publish canonicalDir true false files with
+        | outcome when outcome.Success -> true
+        | outcome ->
+            eprintfn "error: rule-candidate publication failed: %A" outcome
+            // Preserve the actual canonical paths so a debug reader sees
+            // what we attempted to write.
+            ignore canonicalJsonl
+            ignore canonicalSummary
+            false
     with _ ->
         false
 
 // -----------------------------------------------------------------------------
-// Duplicate detection helper
+// Duplicate detection
 // -----------------------------------------------------------------------------
 
-/// Fails with typed error if duplicate identities are found.
-/// Duplicate IDs are preserved as a sorted list without string serialization.
 let private checkForDuplicates
     (kind: InputIdentityKind)
     (identity: 'a -> string)
@@ -179,7 +223,6 @@ let private checkForDuplicates
     else
         Ok()
 
-/// Builds a unique map, first checking for duplicates.
 let private buildUniqueMap
     (kind: InputIdentityKind)
     (identity: 'a -> string)
@@ -193,8 +236,6 @@ let private buildUniqueMap
 // Single canonical input snapshot from episode engine
 // -----------------------------------------------------------------------------
 
-/// Single authoritative snapshot of all inputs from one episode engine execution.
-/// Prevents multiple expensive engine runs and ensures data consistency.
 type RuleCandidateInputs =
     { Episodes: RepairEpisode list
       Transitions: DiagnosticTransition list
@@ -214,7 +255,6 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
     match runEpisodeEngine repoRoot defaultEngineOptions with
     | EpisodeEngineExecution.Failed failure -> Error(mapEpisodeEngineFailure failure)
     | EpisodeEngineExecution.Completed result ->
-        // Validate episode identities are non-empty
         match
             result.RepairEpisodes
             |> List.mapi (fun idx ep -> validateEpisodeIdentity idx ep)
@@ -225,13 +265,11 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
         with
         | Error e -> Error e
         | Ok() ->
-            // Check episode duplicates
             match
                 checkForDuplicates EpisodeIdentity (fun (ep: RepairEpisode) -> ep.EpisodeId) result.RepairEpisodes
             with
             | Error e -> Error e
             | Ok() ->
-                // Validate transition identities are non-empty
                 match
                     result.Transitions
                     |> List.mapi (fun idx t -> validateTransitionIdentity idx t)
@@ -242,11 +280,9 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
                 with
                 | Error e -> Error e
                 | Ok() ->
-                    // Check transition duplicates by (EpisodeId, ExactFingerprint)
                     match checkForDuplicates TransitionIdentity transitionIdentityString result.Transitions with
                     | Error e -> Error e
                     | Ok() ->
-                        // Validate change-set identities are non-empty
                         match
                             result.ChangeSets
                             |> List.mapi (fun idx cs -> validateChangeSetIdentity idx cs)
@@ -257,7 +293,6 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
                         with
                         | Error e -> Error e
                         | Ok() ->
-                            // Build change-set map with duplicate detection
                             match
                                 buildUniqueMap
                                     ChangeSetIdentity
@@ -266,7 +301,6 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
                             with
                             | Error e -> Error e
                             | Ok cssMap ->
-                                // Validate verification identities are non-empty
                                 match
                                     result.Verification
                                     |> List.mapi (fun idx lv -> validateVerificationIdentity idx lv)
@@ -277,7 +311,6 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
                                 with
                                 | Error e -> Error e
                                 | Ok() ->
-                                    // Build verification map with duplicate detection
                                     match
                                         buildUniqueMap
                                             VerificationEvidenceIdentity
@@ -292,22 +325,29 @@ let private loadFromEpisodeEngine (repoRoot: string) : Result<RuleCandidateInput
                                               ChangeSets = cssMap
                                               VerificationEvidence = evidMap }
 
-// Single entry point - no backward-compatible wrappers to avoid multiple engine calls
-let loadAllInputs (repoRoot: string) : Result<RuleCandidateInputs, EngineError> = loadFromEpisodeEngine repoRoot
+let loadAllInputs (repoRoot: string) : Result<RuleCandidateInputs, EngineError> =
+    loadFromEpisodeEngine repoRoot
 
 // -----------------------------------------------------------------------------
 // Candidate building
 // -----------------------------------------------------------------------------
 
-let buildCandidate (ep: RepairEpisode) (cs: GitChangeSet) (gf: TransitionGroupFacts) : RuleCandidate =
+/// Build a single candidate record.  The candidate ID is deterministically
+/// computed from the parsed semantic fields.
+let buildCandidate
+    (ep: RepairEpisode)
+    (cs: GitChangeSet)
+    (gf: TransitionGroupFacts)
+    (allTransitions: DiagnosticTransition list)
+    : RuleCandidate =
     let obs = deriveParserCascadeProse ep.EpisodeKey ep.AfterCommitOid gf
+    let partition = buildPartition gf allTransitions
 
     let evid =
         { EpisodeId = ep.EpisodeId
           EpisodeKey = ep.EpisodeKey
           ChangeSetId = ep.ChangeSetId
           VerificationEvidenceIds = ep.VerificationEvidenceIds
-          TransitionIds = gf.TransitionIds
           BeforeCommitOid = ep.BeforeCommitOid
           BeforeTreeOid = ep.BeforeTreeOid
           AfterCommitOid = ep.AfterCommitOid
@@ -324,7 +364,7 @@ let buildCandidate (ep: RepairEpisode) (cs: GitChangeSet) (gf: TransitionGroupFa
             parserCascadeSymptom
             parserCascadeApplicability
             obs
-            parserCascadeProposedRepair
+            parserCascadeCandidateHypothesis
             parserCascadeLimitations
             gf.Path
             gf.DiagnosticCodes
@@ -335,7 +375,9 @@ let buildCandidate (ep: RepairEpisode) (cs: GitChangeSet) (gf: TransitionGroupFa
             ep.EpisodeKey
             ep.ChangeSetId
             ep.VerificationEvidenceIds
-            gf.TransitionIds
+            partition.SupportingTransitionIds
+            partition.ContextTransitionIds
+            partition.CounterevidenceTransitionIds
             ep.BeforeCommitOid
             ep.BeforeTreeOid
             ep.AfterCommitOid
@@ -348,23 +390,23 @@ let buildCandidate (ep: RepairEpisode) (cs: GitChangeSet) (gf: TransitionGroupFa
       EvidenceStrength = EvidenceStrength.SingleEpisodeObservedRepair
       Title = parserCascadeTitle
       Symptom = parserCascadeSymptom
-      Applicability = parserCascadeApplicability
+      ApplicabilityConditions = parserCascadeApplicability
       Observation = obs
-      ProposedRepair = parserCascadeProposedRepair
+      CandidateHypothesis = parserCascadeCandidateHypothesis
       Limitations = parserCascadeLimitations
       PrimaryPath = gf.Path
       DiagnosticCodes = gf.DiagnosticCodes
       DiagnosticCount = gf.TransitionCount
       EarliestLine = gf.EarliestLine
       ChangedPaths = cpaths
+      StatusFlags = defaultCandidateStatusFlags
+      TransitionPartition = partition
       Evidence = evid }
 
 // -----------------------------------------------------------------------------
 // Verification evidence binding
 // -----------------------------------------------------------------------------
 
-/// Validates that all referenced verification evidence records exist and are valid.
-/// Returns None if any binding fails, Some with error message otherwise.
 let validateVerificationBinding
     (ep: RepairEpisode)
     (verificationMap: Map<string, LocatedVerificationEvidence>)
@@ -373,7 +415,6 @@ let validateVerificationBinding
 
     if evidId.IsEmpty then
         Some "Episode has no verification evidence references"
-
     else
         let mutable firstError = None
 
@@ -382,25 +423,14 @@ let validateVerificationBinding
             | None -> firstError <- Some(sprintf "Verification evidence %s not found" evid)
             | Some locatedRecord ->
                 let record = locatedRecord.Evidence
-                // Verify episode_id matches
                 if record.EpisodeId <> ep.EpisodeId then
                     firstError <- Some(sprintf "Verification evidence %s has episode_id mismatch" evid)
-
-                // Verify status is pass
                 elif record.Status <> VerificationStatus.Pass then
-                    firstError <-
-                        Some(sprintf "Verification evidence %s has status %A (expected Pass)" evid record.Status)
-
-                // Verify exit code is 0
+                    firstError <- Some(sprintf "Verification evidence %s has status %A (expected Pass)" evid record.Status)
                 elif record.ExitCode <> 0 then
-                    firstError <-
-                        Some(sprintf "Verification evidence %s has exit_code %d (expected 0)" evid record.ExitCode)
-
-                // Verify tested commit matches after commit
+                    firstError <- Some(sprintf "Verification evidence %s has exit_code %d (expected 0)" evid record.ExitCode)
                 elif record.TestedCommitOid <> ep.AfterCommitOid then
                     firstError <- Some(sprintf "Verification evidence %s tested_commit_oid mismatch" evid)
-
-                // Verify tested tree matches after tree
                 elif record.TestedTreeOid <> ep.AfterTreeOid then
                     firstError <- Some(sprintf "Verification evidence %s tested_tree_oid mismatch" evid)
 
@@ -427,9 +457,7 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
 
     | Result.Ok inputs ->
         for ep in inputs.Episodes do
-            // Check episode eligibility
             if isEpisodeEligible ep then
-                // Verify all evidence bindings
                 match validateVerificationBinding ep inputs.VerificationEvidence with
                 | Some errMsg -> errs.Add(EngineError.CandidateGenerationFailed errMsg)
                 | None ->
@@ -437,7 +465,6 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
 
                     let et = inputs.Transitions |> List.filter (fun t -> t.EpisodeId = ep.EpisodeId)
 
-                    // Use tryFind to avoid throwing on missing change set
                     match Map.tryFind ep.ChangeSetId inputs.ChangeSets with
                     | None ->
                         errs.Add(
@@ -446,14 +473,13 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
                     | Some changeSet ->
                         match selectCandidateGroup ep changeSet et with
                         | Some gf ->
-                            cands.Add(buildCandidate ep changeSet gf)
+                            cands.Add(buildCandidate ep changeSet gf et)
                             epWC <- epWC + 1
                         | None -> ()
 
-        // Enforce exactly one candidate contract
         if errs.Count = 0 then
             match elEp, cands.Count with
-            | 1, 1 -> () // Success
+            | 1, 1 -> ()
             | 0, _ -> errs.Add EngineError.NoEligibleEpisodes
             | _, 0 -> errs.Add(EngineError.CandidateGenerationFailed("eligible episode produced no rule candidate"))
             | _, count ->
@@ -479,3 +505,147 @@ let runExtraction (repoRoot: string) : ExtractionResult =
             result
     else
         result
+
+// -----------------------------------------------------------------------------
+// Read-only verification
+// -----------------------------------------------------------------------------
+
+type VerificationVerdict =
+    | Verified
+    | IdentityMismatch of expected: string * actual: string * reason: string
+    | SummaryMismatch of reason: string
+    | ParseFailure of reason: string
+    | OutputMissing of path: string
+    | MultipleCandidatesWhenExactlyOneRequired
+
+/// Verify the published canonical artifacts without writing.  Recomputes the
+/// candidate ID, the summary counts, and the canonical ordering.  Leaves
+/// `git status --short` empty when the only files in the canonical dir are
+/// `rule-candidates-v2.jsonl` and `rule-candidate-summary-v2.json` (we do
+/// not touch them here at all).
+let verifyCanonicalArtifacts
+    (repoRoot: string)
+    (expected: ExtractionResult)
+    : VerificationVerdict =
+    let canonicalDir = Path.GetDirectoryName(toAbsolutePath repoRoot ruleCandidatesJsonlRelativePath)
+    let cpath = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesJsonlRelativePath)
+    let spath = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesSummaryRelativePath)
+
+    if not (File.Exists cpath) then
+        OutputMissing cpath
+    elif not (File.Exists spath) then
+        OutputMissing spath
+    else
+        let summary =
+            try
+                parseRuleCandidateSummaryStrict (File.ReadAllText spath)
+            with _ex ->
+                Error(MalformedJson (sprintf "summary: read failed: %s" _ex.Message))
+
+        match summary with
+        | Error e -> ParseFailure(sprintf "summary: %A" e)
+        | Ok s ->
+            if s.CandidatesTotal <> expected.Candidates.Length then
+                SummaryMismatch "candidates_total mismatch"
+            elif s.ParserCascadeCandidates <> expected.Candidates.Length then
+                SummaryMismatch "parser_cascade_candidates mismatch"
+            elif s.SingleEpisodeCandidates <> expected.Candidates.Length then
+                SummaryMismatch "single_episode_candidates mismatch"
+            elif s.EligibleEpisodes <> expected.EligibleEpisodes then
+                SummaryMismatch "eligible_episodes mismatch"
+            elif s.EpisodesWithCandidates <> expected.EpisodesWithCandidates then
+                SummaryMismatch "episodes_with_candidates mismatch"
+            elif List.length s.CandidateIds <> expected.Candidates.Length then
+                SummaryMismatch "candidate_ids length mismatch"
+            else
+                try
+                    let lines = File.ReadAllLines cpath |> Array.toList
+
+                    let candidates =
+                        lines
+                        |> List.mapi (fun idx line ->
+                            match parseRuleCandidateStrict line with
+                            | Ok c -> Ok c
+                            | Error e -> Error(sprintf "line %d: %A" (idx + 1) e))
+
+                    let failures =
+                        candidates
+                        |> List.choose (function Error e -> Some e | Ok _ -> None)
+
+                    if not (List.isEmpty failures) then
+                        ParseFailure(String.concat "; " failures)
+                    else
+                        let parsed =
+                            candidates |> List.choose (function Ok c -> Some c | _ -> None)
+
+                        if parsed.Length <> 1 then
+                            MultipleCandidatesWhenExactlyOneRequired
+                        else
+                            let c = parsed.Head
+                            // Recompute the identity from parsed semantic
+                            // fields.  Never trust the published id verbatim.
+                            let limitList = c.Limitations
+
+                            let recomputed =
+                                computeCandidateId
+                                    c.SchemaVersion
+                                    c.Kind
+                                    c.EvidenceStrength
+                                    c.Title
+                                    c.Symptom
+                                    c.ApplicabilityConditions
+                                    c.Observation
+                                    c.CandidateHypothesis
+                                    limitList
+                                    c.PrimaryPath
+                                    c.DiagnosticCodes
+                                    c.DiagnosticCount
+                                    c.EarliestLine
+                                    c.ChangedPaths
+                                    c.Evidence.EpisodeId
+                                    c.Evidence.EpisodeKey
+                                    c.Evidence.ChangeSetId
+                                    c.Evidence.VerificationEvidenceIds
+                                    c.TransitionPartition.SupportingTransitionIds
+                                    c.TransitionPartition.ContextTransitionIds
+                                    c.TransitionPartition.CounterevidenceTransitionIds
+                                    c.Evidence.BeforeCommitOid
+                                    c.Evidence.BeforeTreeOid
+                                    c.Evidence.AfterCommitOid
+                                    c.Evidence.AfterTreeOid
+
+                            if recomputed <> c.CandidateId then
+                                IdentityMismatch(c.CandidateId, recomputed, "candidate_id does not match recomputed value")
+                            elif c.StatusFlags.CausalFamilyCurated then
+                                IdentityMismatch(c.CandidateId, recomputed, "causal_family_curated must be false in v2")
+                            elif c.StatusFlags.RepairAdviceAvailable then
+                                IdentityMismatch(c.CandidateId, recomputed, "repair_advice_available must be false in v2")
+                            elif c.StatusFlags.LlmTipAvailable then
+                                IdentityMismatch(c.CandidateId, recomputed, "llm_tip_available must be false in v2")
+                            else
+                                Verified
+                with ex ->
+                    ParseFailure ex.Message
+
+/// Read-only verification entry point.  Returns (verdict, byteIdentical).
+/// The verifier performs no writes.
+let runReadOnlyVerify (repoRoot: string) : VerificationVerdict * bool =
+    let canonicalDir = Path.GetDirectoryName(toAbsolutePath repoRoot ruleCandidatesJsonlRelativePath)
+    let cpath = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesJsonlRelativePath)
+    let spath = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesSummaryRelativePath)
+
+    let preBytes =
+        (if File.Exists cpath then File.ReadAllBytes cpath else [||]),
+        (if File.Exists spath then File.ReadAllBytes spath else [||])
+
+    let expected = extractCandidates repoRoot
+    let verdict = verifyCanonicalArtifacts repoRoot expected
+
+    let postBytes =
+        (if File.Exists cpath then File.ReadAllBytes cpath else [||]),
+        (if File.Exists spath then File.ReadAllBytes spath else [||])
+
+    let byteIdentical =
+        preBytes = postBytes
+
+    verdict, byteIdentical

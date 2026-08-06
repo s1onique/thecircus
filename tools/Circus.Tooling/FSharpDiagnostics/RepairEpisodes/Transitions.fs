@@ -156,7 +156,28 @@ let classifyAssessment
     (changeEntries: GitChangeEntry list)
     (projectPath: string option)
     : TransitionAssessment =
-    let scopeOk = compat.Status = Compatible
+    // `scopeOk` is true when the capture compatibility is `Compatible`,
+    // or when it is `Unknown` with only environment metadata missing
+    // (i.e. no parser-relevant fields).  Environment-only unknowns are
+    // treated as scope-OK so that fsb-0025-like episodes where the
+    // working directory, msbuild version, and fsharp compiler version
+    // are unrecorded still produce a positive observation.  Parser-relevant
+    // unknowns (missing fields that include diagnostic captures themselves)
+    // remain scope-not-OK.
+    let isParserRelevantMissing (missing: string list) : bool =
+        List.exists
+            (fun f ->
+                f <> "working_directory"
+                && f <> "msbuild_version"
+                && f <> "fsharp_compiler_version")
+            missing
+
+    let scopeOk =
+        match compat.Status with
+        | Compatible -> true
+        | Unknown -> not (isParserRelevantMissing compat.MissingFields)
+        | Incompatible -> false
+
     let afterScopeOk = not (pathDeleted changeEntries projectPath)
     let ambiguity = TransitionAssessment.Ambiguous
     let unassessable = TransitionAssessment.Unassessable
@@ -170,6 +191,7 @@ let classifyAssessment
                 match sourceLink.Kind with
                 | SourceFileDeleted _ -> TransitionAssessment.EliminatedBySourceRemoval
                 | SourceFileModified _ when afterScopeOk -> TransitionAssessment.ObservedResolutionCandidate
+                | DeclaredRelevantPathChanged _ when afterScopeOk -> TransitionAssessment.ObservedResolutionCandidate
                 | _ -> unassessable
         | IntroducedAfter ->
             if not scopeOk then

@@ -4,28 +4,27 @@ module Circus.Tooling.FSharpDiagnostics.RuleCandidates.Paths
 // Output path authority
 // =============================================================================
 //
-// This module defines the canonical output paths for rule-candidate artifacts.
-// These paths follow the repository's existing normalized corpus layout.
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-EXTRACTION01-CORRECTION01
+//
+// The canonical artifact filenames for the v2 schema are
+// `rule-candidates-v2.jsonl` and `rule-candidate-summary-v2.json`.  The v1
+// schema was already published as a compatibility surface and must not be
+// silently overwritten.
 
-// -----------------------------------------------------------------------------
-// Path constants
-// -----------------------------------------------------------------------------
-
-/// Relative path to the rule-candidate schema file.
 let ruleCandidateSchemaRelativePath =
-    "factory/evidence/fsharp-diagnostics/schemas/rule-candidate-v1.schema.json"
+    "factory/evidence/fsharp-diagnostics/schemas/rule-candidate-v2.schema.json"
 
-/// Relative path to the rule-candidates corpus directory.
+let ruleCandidateSummarySchemaRelativePath =
+    "factory/evidence/fsharp-diagnostics/schemas/rule-candidate-summary-v2.schema.json"
+
 let ruleCandidatesCorpusRelativePath =
     "factory/evidence/fsharp-diagnostics/corpus/normalized"
 
-/// Relative path to the rule-candidates JSONL output.
 let ruleCandidatesJsonlRelativePath =
-    "factory/evidence/fsharp-diagnostics/corpus/normalized/rule-candidates-v1.jsonl"
+    "factory/evidence/fsharp-diagnostics/corpus/normalized/rule-candidates-v2.jsonl"
 
-/// Relative path to the rule-candidate summary JSON output.
 let ruleCandidatesSummaryRelativePath =
-    "factory/evidence/fsharp-diagnostics/corpus/normalized/rule-candidate-summary-v1.json"
+    "factory/evidence/fsharp-diagnostics/corpus/normalized/rule-candidate-summary-v2.json"
 
 /// Convert a relative path to an absolute path given a repository root.
 let toAbsolutePath (repoRoot: string) (relativePath: string) : string =

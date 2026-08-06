@@ -1,11 +1,29 @@
 module Circus.Tooling.FSharpDiagnostics.RuleCandidates.Classification
 
+// =============================================================================
 // Parser-family classification for ParserCascadeRepair candidates.
+// =============================================================================
+//
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-EXTRACTION01-CORRECTION01
+//
+// Authority invariants enforced here:
+//   * Only positive transition assessments may contribute to a candidate.
+//     Unassessable, Ambiguous, RegressionObservation, and
+//     MultiplicityWorseningObservation transitions must never be counted as
+//     positive support - even when they look parser-family.
+//   * Unassessable / ambiguous / regression transitions remain attached as
+//     contextual or counterevidence observations.  They must be partitioned
+//     from the supporting transitions.
+//   * Repository path normalization is delegated to the shared authority.
 
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
+open Circus.Tooling.FSharpDiagnostics.RepoPaths
 open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Domain
 
+// -----------------------------------------------------------------------------
 // Classification failure reasons
+// -----------------------------------------------------------------------------
+
 type ClassificationFailure =
     | InsufficientTransitions of count: int
     | MissingRequiredCode of requiredCode: string
@@ -13,22 +31,52 @@ type ClassificationFailure =
     | PathNotInChangeSet of path: string
     | PathDeletedOnly of path: string
     | UnsupportedTransitionAssessment of assessment: string
+    | NoPositiveSupportingTransition of path: string
 
+// -----------------------------------------------------------------------------
 // Classification result
+// -----------------------------------------------------------------------------
+
 type ClassificationResult =
     | ClassifiedAsParserCascade of groupFacts: TransitionGroupFacts
     | NotClassified of reason: ClassificationFailure
 
-// Normalize a source path by stripping the <REPO> prefix if present
-let private normalizeSourcePath (path: string) : string =
-    if path.StartsWith("<REPO>/") then
-        path.Substring(7) // Length of "<REPO>/" is 7
-    else
-        path
+// -----------------------------------------------------------------------------
+// Transition partition
+// -----------------------------------------------------------------------------
 
-// Check if transition qualifies as repair-supporting
-// For ParserCascadeRepair: allow unassessable parser-family diagnostics
-// since their disappearance IS the repair evidence
+/// What a single transition contributes to the candidate.  The partition is
+/// computed independently of parser-family heuristics.  Parser-family status
+/// may add the transition to the candidate group facts, but it never
+/// promotes an Unassessable transition to positive support.
+type TransitionRole =
+    | Supporting
+    | Context
+    | Counterevidence
+    | Excluded
+
+/// Classify the role of a transition relative to the candidate.  This is the
+/// single source of truth for transition assessment authority.
+let classifyTransitionRole (t: DiagnosticTransition) : TransitionRole =
+    if t.TransitionKind = ExactTransitionKind.IntroducedAfter then
+        // IntroducedAfter is a structural exclusion: the diagnostic did not
+        // exist before the change.
+        Excluded
+    elif isPositiveTransitionAssessment t.Assessment then
+        Supporting
+    elif isCounterevidenceTransitionAssessment t.Assessment then
+        Counterevidence
+    elif isContextTransitionAssessment t.Assessment then
+        Context
+    else
+        Excluded
+
+// -----------------------------------------------------------------------------
+// Repair-supporting transition predicate
+// -----------------------------------------------------------------------------
+
+/// A transition is repair-supporting only when its role is `Supporting`.
+/// Path scoping is checked but assessment authority is the deciding factor.
 let isRepairSupportingTransition
     (episode: RepairEpisode)
     (changeSet: GitChangeSet)
@@ -39,7 +87,7 @@ let isRepairSupportingTransition
     elif Option.isNone transition.SourcePath then
         false
     else
-        let normalizedPath = normalizeSourcePath transition.SourcePath.Value
+        let normalizedPath = normalizeRepositoryPath transition.SourcePath.Value
 
         if
             not (List.exists (fun (e: GitChangeEntry) -> e.CanonicalPath = normalizedPath) changeSet.Entries)
@@ -57,37 +105,47 @@ let isRepairSupportingTransition
                 false
             elif transition.TransitionKind = ExactTransitionKind.IntroducedAfter then
                 false
-            // Ambiguous is always excluded - insufficient evidence
-            elif transition.Assessment = TransitionAssessment.Ambiguous then
+            elif classifyTransitionRole transition <> Supporting then
                 false
-            // Unassessable is ALLOWED for parser-family diagnostics
-            // because their elimination after repair IS the evidence
-            elif transition.Assessment = TransitionAssessment.Unassessable then
-                // Check if this is a parser-family diagnostic
-                match transition.Code with
-                | None -> false // No code means we can't verify it's parser-family
-                | Some code ->
-                    // Allow unassessable parser-family diagnostics
-                    isParserDiagnostic code
             else
                 true
 
-// Check if path qualifies as repair-supporting
+// -----------------------------------------------------------------------------
+// Path scoping predicate
+// -----------------------------------------------------------------------------
+
+/// Check if a transition's path belongs to the change set and was not
+/// deleted.  This predicate is purely geometric; assessment authority lives
+/// in `isRepairSupportingTransition`.
 let isRepairSupportingPath (changeSet: GitChangeSet) (transition: DiagnosticTransition) : bool =
     match transition.SourcePath with
     | None -> false
     | Some path ->
-        let normalizedPath = normalizeSourcePath path
+        let normalizedPath = normalizeRepositoryPath path
         match List.tryFind (fun (e: GitChangeEntry) -> e.CanonicalPath = normalizedPath) changeSet.Entries with
         | None -> false
         | Some entry -> entry.ChangeKind <> GitChangeKind.Deleted
 
-// Classify a transition group for ParserCascadeRepair eligibility
+// -----------------------------------------------------------------------------
+// Group classification
+// -----------------------------------------------------------------------------
+
+/// Classify a transition group for ParserCascadeRepair eligibility.
+///
+/// Returns `ClassifiedAsParserCascade` only when:
+///   * Every transition belongs to the same episode.
+///   * Every transition shares one normalized path.
+///   * Every diagnostic code is parser-family.
+///   * The path appears in the change set and was not deleted.
+///   * At least two transitions are present.
+///   * The group contains at least one `FS0010` or `FS3118` diagnostic.
+///   * The group contains at least one positively assessed transition.
 let classifyGroup
     (episode: RepairEpisode)
     (changeSet: GitChangeSet)
     (transitions: DiagnosticTransition list)
     : ClassificationResult =
+
     // Requirement 1: All transitions must belong to the same episode
     let allSameEpisode =
         List.forall (fun (t: DiagnosticTransition) -> t.EpisodeId = episode.EpisodeId) transitions
@@ -99,13 +157,14 @@ let classifyGroup
         let paths =
             transitions
             |> List.choose (fun (t: DiagnosticTransition) -> t.SourcePath)
-            |> List.map normalizeSourcePath
+            |> List.map normalizeRepositoryPath
             |> List.distinct
 
         if paths.Length <> 1 then
             NotClassified(UnsupportedTransitionAssessment "multiple_paths")
         else
             let path = paths.Head
+
             // Requirement 3: Every diagnostic code must belong to parser family
             let nonParserCodes =
                 transitions
@@ -137,22 +196,68 @@ let classifyGroup
                     if not hasRequiredCode then
                         NotClassified(MissingRequiredCode "FS0010 or FS3118")
                     else
-                        // Derive group facts
-                        let distinctCodes = codes |> List.distinct |> List.sort
-
-                        let earliestLine =
+                        // Requirement 9: at least one positive assessment
+                        let hasPositive =
                             transitions
-                            |> List.choose (fun (t: DiagnosticTransition) -> t.Span.StartLine)
-                            |> function
-                                | [] -> None
-                                | lines -> Some(List.min lines)
+                            |> List.exists (fun t -> classifyTransitionRole t = Supporting)
 
-                        let transitionIds =
-                            transitions |> List.map (fun (t: DiagnosticTransition) -> t.ExactFingerprint)
+                        if not hasPositive then
+                            NotClassified(NoPositiveSupportingTransition path)
+                        else
+                            // Derive group facts
+                            let distinctCodes = codes |> List.distinct |> List.sort
 
-                        ClassifiedAsParserCascade
-                            { Path = path
-                              TransitionCount = transitions.Length
-                              DiagnosticCodes = distinctCodes
-                              EarliestLine = earliestLine
-                              TransitionIds = transitionIds }
+                            let earliestLine =
+                                transitions
+                                |> List.choose (fun (t: DiagnosticTransition) -> t.Span.StartLine)
+                                |> function
+                                    | [] -> None
+                                    | lines -> Some(List.min lines)
+
+                            let transitionIds =
+                                transitions
+                                |> List.map (fun (t: DiagnosticTransition) -> t.ExactFingerprint)
+
+                            ClassifiedAsParserCascade
+                                { Path = path
+                                  TransitionCount = transitions.Length
+                                  DiagnosticCodes = distinctCodes
+                                  EarliestLine = earliestLine
+                                  TransitionIds = transitionIds }
+
+// -----------------------------------------------------------------------------
+// Partition construction
+// -----------------------------------------------------------------------------
+
+/// Build the supporting / context / counterevidence partition for a
+/// classified transition group.  The classifier never injects unassessable
+/// or regression transitions into the supporting set.
+let buildPartition
+    (gf: TransitionGroupFacts)
+    (allTransitions: DiagnosticTransition list)
+    : RuleCandidateTransitionPartition =
+    let inGroup =
+        allTransitions
+        |> List.filter (fun t -> List.contains t.ExactFingerprint gf.TransitionIds)
+
+    let supporting =
+        inGroup
+        |> List.filter (fun t -> classifyTransitionRole t = Supporting)
+        |> List.map (fun t -> t.ExactFingerprint)
+        |> List.sort
+
+    let counterevidence =
+        inGroup
+        |> List.filter (fun t -> classifyTransitionRole t = Counterevidence)
+        |> List.map (fun t -> t.ExactFingerprint)
+        |> List.sort
+
+    let context =
+        inGroup
+        |> List.filter (fun t -> classifyTransitionRole t = Context)
+        |> List.map (fun t -> t.ExactFingerprint)
+        |> List.sort
+
+    { SupportingTransitionIds = supporting
+      ContextTransitionIds = context
+      CounterevidenceTransitionIds = counterevidence }

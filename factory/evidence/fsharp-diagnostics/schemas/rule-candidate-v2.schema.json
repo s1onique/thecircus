@@ -1,0 +1,194 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circus.local/schemas/fsharp-diagnostics/rule-candidate-v2.schema.json",
+  "title": "F# rule candidate (v2)",
+  "description": "Observation-only rule candidate extracted from qualified repair episodes. v2 was introduced in ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-EXTRACTION01-CORRECTION01 to restore the candidate/advice boundary, partition transitions by assessment authority, and remove imperative repair text. v1 had already been published as a compatibility surface and must not be silently mutated; consumers reading v1 artifacts must migrate to v2.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "status",
+    "kind",
+    "evidence_strength",
+    "title",
+    "symptom",
+    "applicability_conditions",
+    "observation",
+    "candidate_hypothesis",
+    "limitations",
+    "primary_path",
+    "diagnostic_codes",
+    "diagnostic_count",
+    "earliest_line",
+    "changed_paths",
+    "causal_family_curated",
+    "repair_advice_available",
+    "llm_tip_available",
+    "transition_partition",
+    "evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "rule-candidate-v2"
+    },
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 hash over canonical encodings of all identity-bearing fields, recomputed by the verifier."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["proposed"],
+      "description": "Status in the curation pipeline. Only 'proposed' is permitted by v2."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["parser_cascade_repair"],
+      "description": "Rule candidate family classification."
+    },
+    "evidence_strength": {
+      "type": "string",
+      "enum": ["single_episode_observed_repair"],
+      "description": "Strength of evidence supporting this candidate."
+    },
+    "title": {
+      "type": "string",
+      "description": "Concise descriptive title for the candidate. Never imperative."
+    },
+    "symptom": {
+      "type": "string",
+      "description": "Description of the observed symptom."
+    },
+    "applicability_conditions": {
+      "type": "string",
+      "description": "Conditions under which this candidate may apply."
+    },
+    "observation": {
+      "type": "string",
+      "description": "Specific observation from the supporting episode."
+    },
+    "candidate_hypothesis": {
+      "type": "string",
+      "description": "Provisional, descriptive hypothesis. Never instructs an agent to modify code."
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Structural limitations of this candidate."
+    },
+    "primary_path": {
+      "type": "string",
+      "description": "Primary file path involved in the repair."
+    },
+    "diagnostic_codes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Distinct diagnostic codes that were observed."
+    },
+    "diagnostic_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of transitions in the supporting group."
+    },
+    "earliest_line": {
+      "type": ["integer", "null"],
+      "description": "Earliest line number where diagnostics occurred (null if unknown)."
+    },
+    "changed_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Paths changed in the repair commit."
+    },
+    "causal_family_curated": {
+      "type": "boolean",
+      "const": false,
+      "description": "Always false in v2. Set true only by an explicit causal-family curation act."
+    },
+    "repair_advice_available": {
+      "type": "boolean",
+      "const": false,
+      "description": "Always false in v2. Repair advice must never be embedded in a candidate."
+    },
+    "llm_tip_available": {
+      "type": "boolean",
+      "const": false,
+      "description": "Always false in v2. LLM tips must never be embedded in a candidate."
+    },
+    "transition_partition": {
+      "type": "object",
+      "required": [
+        "supporting_transition_ids",
+        "context_transition_ids",
+        "counterevidence_transition_ids"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "supporting_transition_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "description": "Positively assessed transitions (ObservedResolutionCandidate or MultiplicityImprovementCandidate)."
+        },
+        "context_transition_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "description": "Unassessable, ambiguous, exact-persistence, or source-removed transitions attached for context."
+        },
+        "counterevidence_transition_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "description": "Regression, multiplicity-worsening, or introduced-after-source-addition transitions."
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "episode_id",
+        "episode_key",
+        "change_set_id",
+        "verification_evidence_ids",
+        "before_commit_oid",
+        "before_tree_oid",
+        "after_commit_oid",
+        "after_tree_oid"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "episode_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "episode_key": {
+          "type": "string"
+        },
+        "change_set_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "verification_evidence_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "before_commit_oid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "before_tree_oid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "after_commit_oid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "after_tree_oid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    }
+  }
+}
