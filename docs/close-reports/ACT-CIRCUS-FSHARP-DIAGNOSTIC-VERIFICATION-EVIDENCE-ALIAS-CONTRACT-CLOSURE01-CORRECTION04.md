@@ -41,8 +41,8 @@ parser_precedence_swap_commit:      29818e5   # kind → status → command → 
 fixture_parse_and_assert_commit:    29818e5   # strict-parsing seam + matrix refactor
 pre_existing_failure_cleanup_commit: 29818e5   # Normalization, RuleCandidate, Publication
 
-final_act_commit: 29818e5054bef3a1df9207cfd4de83085490a16a
-final_act_tree:   e38692788ed2b019b29f6e53f282ce5af8fe2a69
+final_act_commit: d43968a436c47af880f76feb66d529384f87005a
+final_act_tree:   9ab21d04aa272ca636a92860b6cad4dc4d5deb3a
 ```
 
 ## Test totals by category
@@ -246,10 +246,10 @@ test -z "$(git status --short)" (final)                                         
 
 ```text
 $ git rev-parse HEAD
-29818e5054bef3a1df9207cfd4de83085490a16a
+d43968a436c47af880f76feb66d529384f87005a
 
 $ git rev-parse 'HEAD^{tree}'
-e38692788ed2b019b29f6e53f282ce5af8fe2a69
+9ab21d04aa272ca636a92860b6cad4dc4d5deb3a
 
 $ git status --short
 (empty)
@@ -356,8 +356,8 @@ repository:
   working_tree:    clean
   final_commit_recorded: true
   final_tree_recorded:   true
-  final_commit:    29818e5054bef3a1df9207cfd4de83085490a16a
-  final_tree:      e38692788ed2b019b29f6e53f282ce5af8fe2a69
+  final_commit:    d43968a436c47af880f76feb66d529384f87005a
+  final_tree:      9ab21d04aa272ca636a92860b6cad4dc4d5deb3a
 
 documentation:
   arithmetic_corrected: true
