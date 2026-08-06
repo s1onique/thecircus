@@ -13,6 +13,8 @@ BASE_COMMIT       = 6de38fe249cc0b49f2fb65ebedb1d9dc93388a1e
 BASE_TREE         = f29bbc62d5cf412a4c3142cd57014c78f626513c
 IMPLEMENTATION_I  = 4df9f261891e76148fc751070240bfbeeb9694d4
 IMPLEMENTATION_T  = 921ec25c3abce601ff41d78ddabd7784acdd96e3
+FINAL_F           = ef10112a3d4b1aaf31ef3a3b2b6f3d03efee2e75
+FINAL_F_TREE      = 225119483ba9a31ba7b0220e2c7d560d39dc5781
 ```
 
 `git diff --check` and `git status --short` were clean after the implementation
