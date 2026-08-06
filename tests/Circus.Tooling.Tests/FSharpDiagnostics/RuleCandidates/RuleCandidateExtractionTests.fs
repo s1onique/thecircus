@@ -24,8 +24,16 @@ open Circus.Tooling.FSharpDiagnostics.RuleCandidates.Serialization
 // Helpers
 // -----------------------------------------------------------------------------
 
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION03:
+// The previous traversal had one hop too many and returned the parent of
+// the repository root, which caused every test in this file that called
+// extractCandidates to look for the production corpus at a non-existent
+// path and fail with DirectoryNotFoundException.  The correct number of
+// .Parent hops from __SOURCE_DIRECTORY__ (which is
+// tests/Circus.Tooling.Tests/FSharpDiagnostics/RuleCandidates) is three,
+// since GetParent already walks one level up.
 let private repoRoot () : string =
-    Directory.GetParent(__SOURCE_DIRECTORY__).Parent.Parent.Parent.Parent.FullName
+    Directory.GetParent(__SOURCE_DIRECTORY__).Parent.Parent.Parent.FullName
 
 let private emptySpan: Circus.Tooling.FSharpDiagnostics.Domain.SourceSpan =
     { StartLine = None
