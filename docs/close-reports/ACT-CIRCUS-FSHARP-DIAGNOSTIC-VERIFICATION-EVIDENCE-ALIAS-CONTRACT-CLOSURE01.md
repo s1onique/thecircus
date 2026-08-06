@@ -28,10 +28,9 @@ fixture_sha256_commit:         abdd0ed
 matrix_implementation_commit: b9e5a48
 precedence_pathfix_commit:     b149520
 rulecandidate_pathfix_commit:  6005225
-
-report_commit: 6005225   # final commit at the time of this report
-final_act_commit: 600522573adf70c5cd5c8058da3a0122e730e963
-final_act_tree:    965c7b621d77ca652e33a482d86e7b5a470b8105
+close_report_commit:          7add115
+final_act_commit: 7add115122ebf4c4b11d8186faf1602e543fee6f
+final_act_tree:    1f63b851cb66247e7d5263deba7c734769f00312
 ```
 
 ## What Was Done in This Act
@@ -410,10 +409,10 @@ test -z "$(git status --short)" (final)                                         
 
 ```text
 $ git rev-parse HEAD
-600522573adf70c5cd5c8058da3a0122e730e963
+7add115122ebf4c4b11d8186faf1602e543fee6f
 
 $ git rev-parse 'HEAD^{tree}'
-965c7b621d77ca652e33a482d86e7b5a470b8105
+1f63b851cb66247e7d5263deba7c734769f00312
 
 $ git status --short
 (empty)
