@@ -102,26 +102,20 @@ let private jsonTypeName (v: JsonValue) : string =
 
 /// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01:
 /// Spec §8 - detect raw duplicate JSON property names.  Returns the
-/// lexicographically first duplicated property name and its occurrence
-/// count, or None if there are no duplicates.  Case-sensitive matching.
+/// lexicographically (ordinal) first duplicated property name and its
+/// occurrence count, or None if there are no duplicates.  Case-sensitive
+/// matching.  Multiple duplicate property names are sorted explicitly with
+/// `String.CompareOrdinal` before the first one is returned; the result
+/// does NOT depend on `List.groupBy` iteration order.
 let private checkRawDuplicateRawPropertyName
     (fields: (string * JsonValue) list)
     : (string * int) option =
-    let grouped =
-        fields
-        |> List.groupBy (fun (k, _) -> k)
-        |> List.filter (fun (_, vs) -> List.length vs > 1)
-        |> List.map (fun (k, vs) -> k, List.length vs)
-
-    match grouped with
-    | [] -> None
-    | (k, _) :: _ ->
-        let minCount =
-            grouped
-            |> List.find (fun (k2, _) -> k2 = k)
-            |> snd
-
-        Some(k, minCount)
+    fields
+    |> List.countBy (fun (k, _) -> k)
+    |> List.filter (fun (_, count) -> count > 1)
+    |> List.map (fun (k, count) -> (k, count))
+    |> List.sortWith (fun (left, _) (right, _) -> String.CompareOrdinal(left, right))
+    |> List.tryHead
 
 /// Type-aware string field lookup that distinguishes Missing vs WrongType.
 let private lookupFieldString (fields: (string * JsonValue) list) (name: string) : FieldLookup<string> =
@@ -608,23 +602,25 @@ let rec private parseVerificationEvidenceStrict
         match v with
         | JsonObject fields ->
             // ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01:
-            // spec §8 - detect raw duplicate property names before any
-            // semantic alias resolution.  No first-wins or last-wins
-            // interpretation.  When multiple names are duplicated, the
-            // lexicographically first is reported.
-            (match checkRawDuplicateRawPropertyName fields with
-             | Some(propertyName, occurrenceCount) ->
-                 Result.Error(
-                     VerificationEvidenceParseError.DuplicateRawProperty(
-                         source,
-                         lineNumber,
-                         propertyName,
-                         occurrenceCount
-                     )
-                 )
-             | None ->
-                 Ok ()) |> ignore
-            // Validate schema version first
+            // spec §8 - detect raw duplicate property names BEFORE any
+            // semantic alias resolution.  When a duplicate is found, return
+            // the DuplicateRawProperty error immediately and skip the rest
+            // of the parser.  The selection of which duplicate is reported
+            // is done by `checkRawDuplicateRawPropertyName` using an
+            // explicit ordinal sort, so the choice is independent of
+            // `List.groupBy` iteration order.
+            match checkRawDuplicateRawPropertyName fields with
+            | Some(propertyName, occurrenceCount) ->
+                Result.Error(
+                    VerificationEvidenceParseError.DuplicateRawProperty(
+                        source,
+                        lineNumber,
+                        propertyName,
+                        occurrenceCount
+                    )
+                )
+            | None ->
+                // Validate schema version first
             // Workstream 1: Strict schema_version parsing with lookupFieldString
             // Missing → MissingField, WrongType → WrongFieldType, unsupported string → UnsupportedSchemaVersion
             match lookupFieldString fields "schema_version" with
