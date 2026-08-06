@@ -69,6 +69,23 @@
     <Compile Include="FSharpDiagnostics/RepairEpisodes/VerificationEvidenceFixtureIdentityTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/VerificationEvidenceProductionRegressionTests.fs" />
     <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateExtractionTests.fs" />
+    <!-- ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01:
+         Compile order: shared fixture -> corpus/parser tests -> identity/reference tests
+         -> binding/classification tests -> verification/publication tests
+         -> CLI tests -> production regression.  The shared fixture must
+         compile before every test module that depends on it. -->
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateFailClosedFixture.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateSelfVerificationTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateCorpusPresenceTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateJsonlSchemaFailureTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateIdentityFailureTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateReferenceIntegrityTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateVerificationBindingFailureTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateClassificationCardinalityTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateCanonicalVerificationFailureTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidatePublicationFailureTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateCliFailureTests.fs" />
+    <Compile Include="FSharpDiagnostics/RuleCandidates/RuleCandidateProductionRegressionTests.fs" />
 
     <!-- Canonical evidence provider tests (ACT-CIRCUS-CANONICAL-EVIDENCE-PROVIDER-FOUNDATION01 CORRECTION01).
          Compile order: Domain tests => Execution tests => Writer tests => CLI tests. -->

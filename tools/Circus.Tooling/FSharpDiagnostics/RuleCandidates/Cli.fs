@@ -162,6 +162,44 @@ let renderError (err: EngineError) : string =
         sprintf "Malformed transition JSON at line %d: %s" line msg
     | EngineError.MalformedVerificationEvidenceJson(line, msg) ->
         sprintf "Malformed verification-evidence JSON at line %d: %s" line msg
+    // ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01:
+    // Typed failure rendering.  Each variant renders its typed fields
+    // verbatim — no swallowed strings, no collapsing into a generic
+    // policyFailure.
+    | EngineError.RequiredCorpusMissing(kind, path) ->
+        sprintf "Required corpus missing: kind=%s path=%s" kind path
+    | EngineError.CorpusPathNotFile(kind, path) ->
+        sprintf "Corpus path is not a file: kind=%s path=%s" kind path
+    | EngineError.CorpusUnreadable(kind, path, op, exn) ->
+        sprintf "Corpus unreadable: kind=%s path=%s op=%s exception=%s" kind path op exn
+    | EngineError.EmptyRequiredCorpus(kind, path) ->
+        sprintf "Empty required corpus: kind=%s path=%s" kind path
+    | EngineError.MalformedJsonlRecord(kind, path, line, detail) ->
+        sprintf "Malformed JSONL record: kind=%s path=%s line=%d detail=%s" kind path line detail
+    | EngineError.UnsupportedInputSchema(kind, path, line, actual, expected) ->
+        sprintf "Unsupported schema: kind=%s path=%s line=%d actual=%s expected=%s" kind path line actual expected
+    | EngineError.EmptyInputIdentity(kind, path, line) ->
+        sprintf "Empty identity: kind=%s path=%s line=%d" kind path line
+    | EngineError.DuplicateInputIdentity(kind, ident, occurrences) ->
+        sprintf "Duplicate identity: kind=%s identity=%s occurrences=%d" kind ident (List.length occurrences)
+    | EngineError.DuplicateEpisodeKey(key, ids) ->
+        sprintf "Duplicate episode key: key=%s episode_ids=%s" key (String.concat "," ids)
+    | EngineError.UnresolvedInputReference(ownerKind, ownerId, field, missing) ->
+        sprintf "Unresolved reference: ownerKind=%s ownerIdentity=%s field=%s missingIdentity=%s" ownerKind ownerId field missing
+    | EngineError.DuplicateReferenceWithinOwner(ownerKind, ownerId, field, dup) ->
+        sprintf "Duplicate reference within owner: ownerKind=%s ownerIdentity=%s field=%s duplicate=%s" ownerKind ownerId field dup
+    | EngineError.VerificationBindingRejected(episodeId, evidenceId, reason) ->
+        sprintf "Verification binding rejected: episode=%s evidence=%s reason=%s" episodeId evidenceId reason
+    | EngineError.NoCandidatesProduced reasons ->
+        sprintf "No candidates produced: reasons=%s" (String.concat "|" reasons)
+    | EngineError.AmbiguousCandidateSelection(episodeId, keys) ->
+        sprintf "Ambiguous candidate selection: episode=%s keys=%s" episodeId (String.concat "," keys)
+    | EngineError.CardinalityMismatch(expected, actual) ->
+        sprintf "Cardinality mismatch: expected=%d actual=%d" expected actual
+    | EngineError.PublicationFailure(op, path, detail) ->
+        sprintf "Publication failure: op=%s path=%s detail=%s" op path detail
+    | EngineError.CanonicalStateMayHaveChanged detail ->
+        sprintf "Canonical state may have changed: %s" detail
 
 let runInventory (repoRoot: string) : int =
     let result = extractCandidates repoRoot

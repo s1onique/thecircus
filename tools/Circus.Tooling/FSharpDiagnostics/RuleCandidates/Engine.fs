@@ -76,6 +76,79 @@ type EngineError =
     | MalformedChangeSetJson of line: int * message: string
     | MalformedTransitionJson of line: int * message: string
     | MalformedVerificationEvidenceJson of line: int * message: string
+    // ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01:
+    // Typed failure taxonomy required by the fail-closed matrix.  These
+    // variants coexist with the existing string-only variants above and
+    // are emitted by the new typed checks in addition to (or instead of,
+    // depending on the call site) the generic ones.
+    | RequiredCorpusMissing of corpusKind: string * path: string
+    | CorpusPathNotFile of corpusKind: string * path: string
+    | CorpusUnreadable of corpusKind: string * path: string * operation: string * exceptionType: string
+    | EmptyRequiredCorpus of corpusKind: string * path: string
+    | MalformedJsonlRecord of corpusKind: string * path: string * lineNumber: int * detail: string
+    | UnsupportedInputSchema of corpusKind: string * path: string * lineNumber: int * actualVersion: string * expectedVersion: string
+    | EmptyInputIdentity of identityKind: string * path: string * lineNumber: int
+    | DuplicateInputIdentity of identityKind: string * identity: string * occurrences: int list
+    | DuplicateEpisodeKey of episodeKey: string * episodeIds: string list
+    | UnresolvedInputReference of ownerKind: string * ownerIdentity: string * fieldName: string * missingIdentity: string
+    | DuplicateReferenceWithinOwner of ownerKind: string * ownerIdentity: string * fieldName: string * duplicateIdentity: string
+    | VerificationBindingRejected of episodeId: string * evidenceId: string * reason: string
+    | NoCandidatesProduced of excludedReasons: string list
+    | AmbiguousCandidateSelection of episodeId: string * equallyRankedCandidateKeys: string list
+    | CardinalityMismatch of expected: int * actual: int
+    | PublicationFailure of operation: string * path: string * detail: string
+    | CanonicalStateMayHaveChanged of detail: string
+
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01:
+// Typed failure taxonomy — exposed so tests can pattern-match without
+// relying on string-only discrimination.
+type RuleCandidateCorpusKind =
+    | RepairEpisodes
+    | ChangeSets
+    | DiagnosticTransitions
+    | VerificationEvidence
+    | CanonicalCandidates
+    | CanonicalSummary
+
+let corpusKindToken (k: RuleCandidateCorpusKind) : string =
+    match k with
+    | RuleCandidateCorpusKind.RepairEpisodes -> "repair_episodes"
+    | RuleCandidateCorpusKind.ChangeSets -> "change_sets"
+    | RuleCandidateCorpusKind.DiagnosticTransitions -> "diagnostic_transitions"
+    | RuleCandidateCorpusKind.VerificationEvidence -> "verification_evidence"
+    | RuleCandidateCorpusKind.CanonicalCandidates -> "canonical_candidates"
+    | RuleCandidateCorpusKind.CanonicalSummary -> "canonical_summary"
+
+type VerificationBindingFailure =
+    | VerificationStatusNotPass of actualStatus: string
+    | VerificationExitCodeNotZero of actualExitCode: int
+    | TestedCommitMismatch of expected: string * actual: string
+    | TestedTreeMismatch of expected: string * actual: string
+    | EvidenceEpisodeMismatch of expected: string * actual: string
+    | RequiredVerificationFieldMissing of fieldName: string
+    | InconsistentVerificationOutcome of status: string * exitCode: int
+
+type RuleCandidateSelectionFailure =
+    | NoEligibleEpisodes
+    | NoCandidatesProduced of excludedReasons: string list
+    | AmbiguousCandidateSelection of episodeId: string * equallyRankedCandidateKeys: string list
+    | CardinalityMismatch of expected: int * actual: int
+
+type RuleCandidatePublicationFailure =
+    | StagingFailure of operation: string * path: string * detail: string
+    | FlushFailure of path: string * detail: string
+    | CommitFailure of operation: string * path: string * detail: string
+    | RollbackFailure of operation: string * path: string * detail: string
+    | CleanupFailure of path: string * detail: string
+    | PreviousCanonicalSnapshotUnavailable of path: string * detail: string
+    | CanonicalStateMayHaveChanged of detail: string
+
+/// Success result of a typed publication.
+type RuleCandidatePublicationSuccess =
+    { CanonicalJsonlSha256: string
+      CanonicalSummarySha256: string
+      OutputHashes: (string * string) list
+      RetainedTempPaths: string list }
 
 // -----------------------------------------------------------------------------
 // Identity validation helpers
@@ -171,34 +244,73 @@ let private buildPending
     { JsonlBody = (clines |> String.concat "\n") + "\n"
       SummaryBody = renderRuleCandidateSummary summary }
 
-/// Publish candidates atomically.  Returns true on success; on failure the
-/// canonical outputs remain byte-identical to the pre-publication state.
-let publishCandidates (repoRoot: string) (result: ExtractionResult) : bool =
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01:
+// Typed publication outcome.  Delegates to the shared `AtomicPublish.publish`
+// and projects the underlying `PublishOutcome` to the typed authority
+// required by the matrix.  On any failure the canonical outputs remain
+// byte-identical to the pre-publication state; the typed failure list is
+// never collapsed into a Boolean.
+let publishCandidatesDetailed
+    (repoRoot: string)
+    (result: ExtractionResult)
+    : Result<RuleCandidatePublicationSuccess, RuleCandidatePublicationFailure list> =
     let canonicalDir =
         Path.GetDirectoryName(toAbsolutePath repoRoot ruleCandidatesJsonlRelativePath)
 
+    let canonicalJsonl = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesJsonlRelativePath)
+    let canonicalSummary = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesSummaryRelativePath)
+
+    let pending = buildPending canonicalDir result.Candidates result.EligibleEpisodes result.EpisodesWithCandidates
+
+    let files =
+        [ { CanonicalFileName = Path.GetFileName ruleCandidatesJsonlRelativePath
+            Body = pending.JsonlBody }
+          { CanonicalFileName = Path.GetFileName ruleCandidatesSummaryRelativePath
+            Body = pending.SummaryBody } ]
+
     try
-        let canonicalJsonl = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesJsonlRelativePath)
-        let canonicalSummary = Path.Combine(canonicalDir, Path.GetFileName ruleCandidatesSummaryRelativePath)
-
-        let pending = buildPending canonicalDir result.Candidates result.EligibleEpisodes result.EpisodesWithCandidates
-
-        let files =
-            [ { CanonicalFileName = Path.GetFileName ruleCandidatesJsonlRelativePath
-                Body = pending.JsonlBody }
-              { CanonicalFileName = Path.GetFileName ruleCandidatesSummaryRelativePath
-                Body = pending.SummaryBody } ]
-
         match publish canonicalDir true false files with
-        | outcome when outcome.Success -> true
+        | outcome when outcome.Success ->
+            let jsonlHash =
+                match List.tryFind (fun (n, _) -> n = Path.GetFileName ruleCandidatesJsonlRelativePath) outcome.OutputHashes with
+                | Some (_, h) -> h
+                | None -> ""
+            let summaryHash =
+                match List.tryFind (fun (n, _) -> n = Path.GetFileName ruleCandidatesSummaryRelativePath) outcome.OutputHashes with
+                | Some (_, h) -> h
+                | None -> ""
+            Ok
+                { CanonicalJsonlSha256 = jsonlHash
+                  CanonicalSummarySha256 = summaryHash
+                  OutputHashes = outcome.OutputHashes
+                  RetainedTempPaths = outcome.RetainedTempPaths }
         | outcome ->
-            eprintfn "error: rule-candidate publication failed: %A" outcome
-            // Preserve the actual canonical paths so a debug reader sees
-            // what we attempted to write.
-            ignore canonicalJsonl
-            ignore canonicalSummary
-            false
-    with _ ->
+            let typed =
+                if not outcome.CanonicalByteIdenticalAfterFailure then
+                    [ RuleCandidatePublicationFailure.CanonicalStateMayHaveChanged "atomic publish reported non-byte-identical canonical state" ]
+                elif not (List.isEmpty outcome.RetainedTempPaths) then
+                    outcome.RetainedTempPaths
+                    |> List.map (fun p -> RuleCandidatePublicationFailure.CleanupFailure(p, "staging residue after publish failure"))
+                else
+                    [ RuleCandidatePublicationFailure.CommitFailure("publish", canonicalJsonl, "atomic publish reported failure") ]
+            Error typed
+    with _ex ->
+        Error
+            [ RuleCandidatePublicationFailure.CommitFailure(
+                "publish",
+                canonicalJsonl,
+                sprintf "unexpected exception during publish: %s" _ex.Message) ]
+
+/// Backwards-compatible Boolean wrapper.  Returns true on success and on
+/// failure delegates exactly once to `publishCandidatesDetailed`.  The
+/// failure list is rendered for the operator via stderr; the boolean value
+/// is preserved so existing callers do not need to be rewritten.
+let publishCandidates (repoRoot: string) (result: ExtractionResult) : bool =
+    match publishCandidatesDetailed repoRoot result with
+    | Ok _ -> true
+    | Error failures ->
+        for f in failures do
+            eprintfn "error: rule-candidate publication failure: %A" f
         false
 
 // -----------------------------------------------------------------------------
@@ -494,15 +606,132 @@ let extractCandidates (repoRoot: string) : ExtractionResult =
           EpisodesWithCandidates = epWC
           Errors = errs |> Seq.toList }
 
+// -----------------------------------------------------------------------------
+// Typed binding authority (ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01)
+// -----------------------------------------------------------------------------
+
+/// Render a `VerificationBindingFailure` to a deterministic string.  Used
+/// to embed the typed reason in the legacy `EngineError.VerificationBindingRejected`
+/// variant for backward compatibility without leaking the typed DU into
+/// existing error rendering.
+let renderVerificationBindingFailure (f: VerificationBindingFailure) : string =
+    match f with
+    | VerificationBindingFailure.VerificationStatusNotPass s -> "verification_status_not_pass:" + s
+    | VerificationBindingFailure.VerificationExitCodeNotZero c -> "verification_exit_code_not_zero:" + string c
+    | VerificationBindingFailure.TestedCommitMismatch(e, a) -> "tested_commit_mismatch:" + e + "|" + a
+    | VerificationBindingFailure.TestedTreeMismatch(e, a) -> "tested_tree_mismatch:" + e + "|" + a
+    | VerificationBindingFailure.EvidenceEpisodeMismatch(e, a) -> "evidence_episode_mismatch:" + e + "|" + a
+    | VerificationBindingFailure.RequiredVerificationFieldMissing n -> "required_field_missing:" + n
+    | VerificationBindingFailure.InconsistentVerificationOutcome(s, c) -> "inconsistent_outcome:" + s + "|" + string c
+
+/// Typed variant of `validateVerificationBinding`.  Returns a typed
+/// `VerificationBindingRejected` for the first failing record in the
+/// ordered reference list.  Determinism is preserved by sorting the
+/// `VerificationBindingFailure` details using `String.CompareOrdinal`.
+let validateVerificationBindingTyped
+    (ep: RepairEpisode)
+    (verificationMap: Map<string, LocatedVerificationEvidence>)
+    : EngineError option =
+    let evidIds = ep.VerificationEvidenceIds |> List.sort
+
+    if List.isEmpty evidIds then
+        Some(VerificationBindingRejected(ep.EpisodeId, "", renderVerificationBindingFailure (VerificationBindingFailure.VerificationStatusNotPass "no_references")))
+    else
+        let mutable firstTypedError: EngineError option = None
+
+        let sortedRefs =
+            evidIds
+            |> List.sortWith (fun a b -> String.Compare(a, b, StringComparison.Ordinal))
+
+        for evid in sortedRefs do
+            match Map.tryFind evid verificationMap with
+            | None ->
+                if firstTypedError.IsNone then
+                    firstTypedError <-
+                        Some(
+                            UnresolvedInputReference(
+                                "verification_evidence",
+                                ep.EpisodeId,
+                                "verification_evidence_ids",
+                                evid
+                            )
+                        )
+            | Some locatedRecord ->
+                let record = locatedRecord.Evidence
+                if firstTypedError.IsNone then
+                    if record.EpisodeId <> ep.EpisodeId then
+                        firstTypedError <-
+                            Some(
+                                VerificationBindingRejected(
+                                    ep.EpisodeId,
+                                    evid,
+                                    renderVerificationBindingFailure (VerificationBindingFailure.EvidenceEpisodeMismatch(ep.EpisodeId, record.EpisodeId))
+                                )
+                            )
+                    elif record.Status <> VerificationStatus.Pass then
+                        firstTypedError <-
+                            Some(
+                                VerificationBindingRejected(
+                                    ep.EpisodeId,
+                                    evid,
+                                    renderVerificationBindingFailure (VerificationBindingFailure.VerificationStatusNotPass(verificationStatusToken record.Status))
+                                )
+                            )
+                    elif record.ExitCode <> 0 then
+                        firstTypedError <-
+                            Some(
+                                VerificationBindingRejected(
+                                    ep.EpisodeId,
+                                    evid,
+                                    renderVerificationBindingFailure (VerificationBindingFailure.VerificationExitCodeNotZero record.ExitCode)
+                                )
+                            )
+                    elif record.TestedCommitOid <> ep.AfterCommitOid then
+                        firstTypedError <-
+                            Some(
+                                VerificationBindingRejected(
+                                    ep.EpisodeId,
+                                    evid,
+                                    renderVerificationBindingFailure (VerificationBindingFailure.TestedCommitMismatch(ep.AfterCommitOid, record.TestedCommitOid))
+                                )
+                            )
+                    elif record.TestedTreeOid <> ep.AfterTreeOid then
+                        firstTypedError <-
+                            Some(
+                                VerificationBindingRejected(
+                                    ep.EpisodeId,
+                                    evid,
+                                    renderVerificationBindingFailure (VerificationBindingFailure.TestedTreeMismatch(ep.AfterTreeOid, record.TestedTreeOid))
+                                )
+                            )
+
+        firstTypedError
+
 let runExtraction (repoRoot: string) : ExtractionResult =
     let result = extractCandidates repoRoot
 
     if result.Errors.IsEmpty && not (List.isEmpty result.Candidates) then
-        if not (publishCandidates repoRoot result) then
-            { result with
-                Errors = [ EngineError.PublicationFailed "Failed to write output files" ] }
-        else
-            result
+        match publishCandidatesDetailed repoRoot result with
+        | Ok _ -> result
+        | Error failures ->
+            let mapped =
+                failures
+                |> List.map (function
+                    | RuleCandidatePublicationFailure.CommitFailure(op, p, d) ->
+                        EngineError.PublicationFailure(op, p, d)
+                    | RuleCandidatePublicationFailure.CleanupFailure(p, d) ->
+                        EngineError.PublicationFailure("cleanup", p, d)
+                    | RuleCandidatePublicationFailure.CanonicalStateMayHaveChanged d ->
+                        EngineError.CanonicalStateMayHaveChanged d
+                    | RuleCandidatePublicationFailure.StagingFailure(op, p, d) ->
+                        EngineError.PublicationFailure(op, p, d)
+                    | RuleCandidatePublicationFailure.FlushFailure(p, d) ->
+                        EngineError.PublicationFailure("flush", p, d)
+                    | RuleCandidatePublicationFailure.RollbackFailure(op, p, d) ->
+                        EngineError.PublicationFailure(op, p, d)
+                    | RuleCandidatePublicationFailure.PreviousCanonicalSnapshotUnavailable(p, d) ->
+                        EngineError.PublicationFailure("snapshot", p, d))
+            { result with Errors = mapped }
     else
         result
 
