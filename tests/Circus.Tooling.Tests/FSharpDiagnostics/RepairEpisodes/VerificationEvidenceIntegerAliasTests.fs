@@ -3,10 +3,25 @@ module Circus.Tooling.Tests.FSharpDiagnostics.RepairEpisodes.VerificationEvidenc
 // =============================================================================
 // Verification Evidence Integer Alias Tests
 //
-// Tests for integer-typed alias pair:
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION03:
+// Spec §12 — full 12-case matrix applied to:
 //   - exit_code / verification_exit_code
 //
-// Restored for ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-EXTRACTION01-CORRECTION01.
+// Required cases:
+//   1.  canonical only
+//   2.  alias only
+//   3.  both present equal
+//   4.  both present different
+//   5.  canonical wrong type, alias valid
+//   6.  canonical valid, alias wrong type
+//   7.  both wrong type
+//   8.  canonical fractional
+//   9.  alias fractional
+//   10. both fractional
+//   11. value > Int32.MaxValue
+//   12. negative value
+//
+// A valid non-negative non-zero integer must parse successfully.
 // =============================================================================
 
 open Expecto
@@ -16,167 +31,250 @@ open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 open VerificationEvidenceAliasFixture
 
 // -----------------------------------------------------------------------------
-// Test Case Builders
+// Helpers
 // -----------------------------------------------------------------------------
 
-let private evidence ec (evId: string) (epId: string) =
-    sprintf
-        """{"schema_version":"verification-evidence-v1","evidence_id":"%s","episode_id":"%s","kind":"build","command":"dotnet build","status":"pass","exit_code":%d,"tested_commit_oid":"%s","tested_tree_oid":"%s"}"""
-        evId epId ec validCommitOid validTreeOid
+let private hasLoadError
+    (vr: VerificationResult)
+    (predicate: VerificationEvidenceParseError -> bool)
+    : bool =
+    vr.Issues
+    |> List.exists (function
+        | VerificationIssue.VerificationEvidenceLoadFailed errs ->
+            errs |> List.exists (function
+                | VerificationEvidenceLoadError.ParseError e -> predicate e
+                | _ -> false)
+        | _ -> false)
 
-let private evidenceWithAlias ec ecAlias (evId: string) (epId: string) =
-    sprintf
-        """{"schema_version":"verification-evidence-v1","evidence_id":"%s","episode_id":"%s","kind":"build","command":"dotnet build","status":"pass","exit_code":%d,"verification_exit_code":%d,"tested_commit_oid":"%s","tested_tree_oid":"%s"}"""
-        evId epId ec ecAlias validCommitOid validTreeOid
+let private findLoadError
+    (vr: VerificationResult)
+    (predicate: VerificationEvidenceParseError -> bool)
+    : VerificationEvidenceParseError =
+    let mutable found: VerificationEvidenceParseError option = None
 
-let private evidenceWithWrongType (ecJson: string) (ecAliasJson: string) (evId: string) =
-    sprintf
-        """{"schema_version":"verification-evidence-v1","evidence_id":"%s","episode_id":"ep-001","kind":"build","command":"dotnet build","status":"pass","exit_code":%s,"verification_exit_code":%s,"tested_commit_oid":"%s","tested_tree_oid":"%s"}"""
-        evId ecJson ecAliasJson validCommitOid validTreeOid
+    for issue in vr.Issues do
+        match issue with
+        | VerificationIssue.VerificationEvidenceLoadFailed errs ->
+            for err in errs do
+                match err with
+                | VerificationEvidenceLoadError.ParseError e ->
+                    if predicate e && found.IsNone then
+                        found <- Some e
+                | _ -> ()
+        | _ -> ()
+
+    match found with
+    | Some e -> e
+    | None ->
+        failwithf
+            "no matching VerificationEvidenceLoadFailed error found in: %A"
+            vr.Issues
+
+let private runWith (json: string) (label: string) : VerificationResult =
+    let dir = tempDir label
+    try
+        createMinimalStructure dir
+        writeEvidence dir [ json ]
+        runVerify dir
+    finally
+        cleanup dir
 
 // -----------------------------------------------------------------------------
-// exit_code / verification_exit_code tests
+// exit_code / verification_exit_code — 12 cases
 // -----------------------------------------------------------------------------
 
 [<Tests>]
-let tests =
+let exitCodeTests =
     testList "exit_code" [
-        test "canonical only" {
-            let dir = tempDir "exit-can"
-            let evId = evidenceId "4a"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidence 0 evId "ep-001" ]
-                let vr = runVerify dir
-                let hasErr = vr.Issues |> List.exists(function VerificationIssue.VerificationEvidenceLoadFailed _ -> true | _ -> false)
-                Expect.isFalse hasErr "canonical-only should parse"
-            finally cleanup dir
+        // 1. canonical only → success, non-zero positive integer parses
+        test "canonical only → evidence.ExitCode = 3" {
+            let key = "ec-canonical-only"
+            let json = verificationEvidenceCanonicalOnly key "exit_code" "3"
+            let vr = runWith json ("ec-canon-" + key)
+            Expect.isFalse
+                (vr.Issues
+                 |> List.exists (function
+                     | VerificationIssue.VerificationEvidenceLoadFailed _ -> true
+                     | _ -> false))
+                "canonical-only exit_code must parse successfully"
+            Expect.equal (propertyOccurrences json "exit_code") 1 "canonical 'exit_code' must appear once"
+            Expect.equal (propertyOccurrences json "verification_exit_code") 0 "alias 'verification_exit_code' must be absent"
         }
-        test "alias only" {
-            let dir = tempDir "exit-alias"
-            let evId = evidenceId "4b"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceWithAlias 0 1 evId "ep-002" ]
-                let vr = runVerify dir
-                let hasErr = vr.Issues |> List.exists(function VerificationIssue.VerificationEvidenceLoadFailed _ -> true | _ -> false)
-                Expect.isFalse hasErr "alias-only should parse"
-            finally cleanup dir
+        // 2. alias only → success, no canonical emitted
+        test "alias only → evidence.ExitCode = 7 and no canonical emitted" {
+            let key = "ec-alias-only"
+            let json = verificationEvidenceAliasOnly key "verification_exit_code" "7"
+            let vr = runWith json ("ec-alias-" + key)
+            Expect.isFalse
+                (vr.Issues
+                 |> List.exists (function
+                     | VerificationIssue.VerificationEvidenceLoadFailed _ -> true
+                     | _ -> false))
+                "alias-only verification_exit_code must parse successfully"
+            Expect.equal (propertyOccurrences json "verification_exit_code") 1 "alias 'verification_exit_code' must appear once"
+            Expect.equal (propertyOccurrences json "exit_code") 0 "canonical 'exit_code' must be absent"
         }
-        test "both same => DuplicateSemanticField" {
-            let dir = tempDir "exit-same"
-            let evId = evidenceId "4c"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceWithAlias 0 0 evId "ep-003" ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.DuplicateSemanticField(_,_,can,alias))]] } ->
-                    Expect.equal can "exit_code" "canonical"
-                    Expect.equal alias "verification_exit_code" "alias"
-                | r -> failwithf "expected DuplicateSemanticField, got %A" r
-            finally cleanup dir
+        // 3. both present equal → DuplicateSemanticField
+        test "both present equal → DuplicateSemanticField" {
+            let key = "ec-both-equal"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "exit_code"
+                    "5"
+                    "verification_exit_code"
+                    "5"
+            let vr = runWith json ("ec-be-" + key)
+            Expect.isTrue
+                (hasLoadError vr (function
+                    | VerificationEvidenceParseError.DuplicateSemanticField(_, _, "exit_code", "verification_exit_code") -> true
+                    | _ -> false))
+                "DuplicateSemanticField naming 'exit_code' and 'verification_exit_code' expected"
         }
-        test "both different => ConflictingSemanticFields" {
-            let dir = tempDir "exit-diff"
-            let evId = evidenceId "4d"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceWithAlias 0 1 evId "ep-004" ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.ConflictingSemanticFields(_,_,can,alias,_,_))]] } ->
-                    Expect.equal can "exit_code" "canonical"
-                    Expect.equal alias "verification_exit_code" "alias"
-                | r -> failwithf "expected ConflictingSemanticFields, got %A" r
-            finally cleanup dir
+        // 4. both present different → ConflictingSemanticFields
+        test "both present different → ConflictingSemanticFields" {
+            let key = "ec-both-diff"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "exit_code"
+                    "0"
+                    "verification_exit_code"
+                    "1"
+            let vr = runWith json ("ec-bd-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.ConflictingSemanticFields _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.ConflictingSemanticFields(_, _, "exit_code", "verification_exit_code", "0", "1") -> ()
+            | VerificationEvidenceParseError.ConflictingSemanticFields(_, _, c, a, cv, av) ->
+                failwithf "ConflictingSemanticFields: canonical=%s alias=%s cv=%s av=%s (expected exit_code/verification_exit_code/0/1)"
+                    c a cv av
+            | _ -> failwithf "expected ConflictingSemanticFields, got %A" err
         }
-        test "both wrong type => WrongFieldType" {
-            let dir = tempDir "exit-both-wrong"
-            let evId = evidenceId "4e"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceWithWrongType "\"zero\"" "\"one\"" evId ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.WrongFieldType(_,_,field,expected,actual))]] } ->
-                    Expect.equal field "exit_code" "canonical field"
-                    Expect.equal expected "integer" "expected"
-                    Expect.equal actual "string" "canonical's actual"
-                | r -> failwithf "expected WrongFieldType, got %A" r
-            finally cleanup dir
+        // 5. canonical wrong type, alias valid → canonical WrongFieldType
+        test "canonical wrong type (\"zero\"), alias valid → canonical WrongFieldType" {
+            let key = "ec-cw-av"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "exit_code"
+                    "\"zero\""
+                    "verification_exit_code"
+                    "1"
+            let vr = runWith json ("ec-cwa-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "exit_code", "integer", "string") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected exit_code/integer/string)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
         }
-        test "canonical wrong type, alias valid" {
-            let dir = tempDir "exit-can-wrong"
-            let evId = evidenceId "4f"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceWithWrongType "\"bad\"" "1" evId ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.WrongFieldType(_,_,field,expected,actual))]] } ->
-                    Expect.equal field "exit_code" "canonical field"
-                    Expect.equal expected "integer" "expected"
-                    Expect.equal actual "string" "canonical's actual"
-                | r -> failwithf "expected WrongFieldType, got %A" r
-            finally cleanup dir
+        // 6. canonical valid, alias wrong type → alias WrongFieldType
+        test "canonical valid, alias wrong type → alias WrongFieldType" {
+            let key = "ec-cv-aw"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "exit_code"
+                    "1"
+                    "verification_exit_code"
+                    "\"bad\""
+            let vr = runWith json ("ec-cva-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "verification_exit_code", "integer", "string") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected verification_exit_code/integer/string)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
         }
-        test "canonical valid, alias wrong type" {
-            let dir = tempDir "exit-alias-wrong"
-            let evId = evidenceId "4g"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceWithWrongType "0" "\"bad\"" evId ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.WrongFieldType(_,_,field,expected,actual))]] } ->
-                    Expect.equal field "verification_exit_code" "alias field"
-                    Expect.equal expected "integer" "expected"
-                    Expect.equal actual "string" "alias's actual"
-                | r -> failwithf "expected WrongFieldType, got %A" r
-            finally cleanup dir
+        // 7. both wrong type → canonical WrongFieldType
+        test "both wrong type → canonical WrongFieldType" {
+            let key = "ec-both-wrong"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "exit_code"
+                    "\"zero\""
+                    "verification_exit_code"
+                    "\"one\""
+            let vr = runWith json ("ec-bw-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "exit_code", "integer", "string") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected exit_code/integer/string)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
         }
-        test "canonical valid, alias fractional => InvalidExitCode" {
-            let dir = tempDir "exit-frac"
-            let evId = evidenceId "4h"
-            try
-                createMinimalStructure dir
-                let json = evidenceWithAlias 0 1 evId "ep-005"
-                let modified = json.Replace("\"verification_exit_code\":1", "\"verification_exit_code\":1.5")
-                writeEvidence dir [ modified ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.InvalidExitCode _)]] } -> ()
-                | r -> failwithf "expected InvalidExitCode, got %A" r
-            finally cleanup dir
+        // 8. canonical fractional → InvalidExitCode
+        test "canonical fractional (1.5) → InvalidExitCode" {
+            let key = "ec-canon-frac"
+            let json = verificationEvidenceCanonicalOnly key "exit_code" "1.5"
+            let vr = runWith json ("ec-cf-" + key)
+            Expect.isTrue
+                (hasLoadError vr (function
+                    | VerificationEvidenceParseError.InvalidExitCode _ -> true
+                    | _ -> false))
+                "InvalidExitCode expected for canonical fractional exit_code"
         }
-        test "both fractional => InvalidExitCode" {
-            let dir = tempDir "exit-both-frac"
-            let evId = evidenceId "4i"
-            try
-                createMinimalStructure dir
-                let json = evidenceWithAlias 1 1 evId "ep-006"
-                let modified = json.Replace("\"exit_code\":1,\"verification_exit_code\":1", "\"exit_code\":1.5,\"verification_exit_code\":2.5")
-                writeEvidence dir [ modified ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.InvalidExitCode _)]] } -> ()
-                | r -> failwithf "expected InvalidExitCode, got %A" r
-            finally cleanup dir
+        // 9. alias fractional → InvalidExitCode
+        test "alias fractional (2.5) → InvalidExitCode" {
+            let key = "ec-alias-frac"
+            let json = verificationEvidenceAliasOnly key "verification_exit_code" "2.5"
+            let vr = runWith json ("ec-af-" + key)
+            Expect.isTrue
+                (hasLoadError vr (function
+                    | VerificationEvidenceParseError.InvalidExitCode _ -> true
+                    | _ -> false))
+                "InvalidExitCode expected for alias fractional exit_code"
         }
-        test "out of Int32 range => InvalidExitCode" {
-            let dir = tempDir "exit-range"
-            let evId = evidenceId "4j"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ "{\"schema_version\":\"verification-evidence-v1\",\"evidence_id\":\"" + evId + "\",\"episode_id\":\"ep-007\",\"kind\":\"build\",\"command\":\"dotnet build\",\"status\":\"pass\",\"exit_code\":9999999999,\"tested_commit_oid\":\"" + validCommitOid + "\",\"tested_tree_oid\":\"" + validTreeOid + "\"}" ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.InvalidExitCode _)]] } -> ()
-                | r -> failwithf "expected InvalidExitCode, got %A" r
-            finally cleanup dir
+        // 10. both fractional → InvalidExitCode
+        test "both fractional (1.5, 2.5) → InvalidExitCode" {
+            let key = "ec-both-frac"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "exit_code"
+                    "1.5"
+                    "verification_exit_code"
+                    "2.5"
+            let vr = runWith json ("ec-bf-" + key)
+            Expect.isTrue
+                (hasLoadError vr (function
+                    | VerificationEvidenceParseError.InvalidExitCode _ -> true
+                    | _ -> false))
+                "InvalidExitCode expected for both fractional exit_code"
         }
-        test "negative => InvalidExitCode" {
-            let dir = tempDir "exit-neg"
-            let evId = evidenceId "4k"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidence -1 evId "ep-008" ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.InvalidExitCode _)]] } -> ()
-                | r -> failwithf "expected InvalidExitCode, got %A" r
-            finally cleanup dir
+        // 11. value > Int32.MaxValue → InvalidExitCode
+        test "value > Int32.MaxValue (9999999999) → InvalidExitCode" {
+            let key = "ec-overrange"
+            let json = verificationEvidenceCanonicalOnly key "exit_code" "9999999999"
+            let vr = runWith json ("ec-or-" + key)
+            Expect.isTrue
+                (hasLoadError vr (function
+                    | VerificationEvidenceParseError.InvalidExitCode _ -> true
+                    | _ -> false))
+                "InvalidExitCode expected for over-range exit_code"
+        }
+        // 12. negative value → InvalidExitCode
+        test "negative value (-1) → InvalidExitCode" {
+            let key = "ec-neg"
+            let json = verificationEvidenceCanonicalOnly key "exit_code" "-1"
+            let vr = runWith json ("ec-neg-" + key)
+            Expect.isTrue
+                (hasLoadError vr (function
+                    | VerificationEvidenceParseError.InvalidExitCode _ -> true
+                    | _ -> false))
+                "InvalidExitCode expected for negative exit_code"
         }
     ]

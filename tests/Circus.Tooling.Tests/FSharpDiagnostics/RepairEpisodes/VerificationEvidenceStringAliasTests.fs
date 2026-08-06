@@ -3,12 +3,19 @@ module Circus.Tooling.Tests.FSharpDiagnostics.RepairEpisodes.VerificationEvidenc
 // =============================================================================
 // Verification Evidence String Alias Tests
 //
-// Tests for string-typed alias pairs:
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-VERIFICATION-EVIDENCE-ALIAS-CONTRACT-CLOSURE01-CORRECTION03:
+// Spec §11 — full 7-case matrix applied independently to:
 //   - kind / verification_kind
 //   - status / verification_result
 //   - command / verification_command
+// (3 pairs × 7 cases = 21 tests).
 //
-// Restored for ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-EXTRACTION01-CORRECTION01.
+// Spec §9 — successful-result assertions inspect the parsed domain record
+// (Kind, Status, Command) and confirm the fixture did NOT emit the other
+// spelling of the pair under test.
+//
+// Spec §10 — invalid records pattern-match the exact union case and assert
+// canonical/alias field names, expected/actual types.
 // =============================================================================
 
 open Expecto
@@ -18,283 +25,491 @@ open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 open VerificationEvidenceAliasFixture
 
 // -----------------------------------------------------------------------------
-// Test Case Builders
+// Helpers for runVerify-driven outcome assertions
 // -----------------------------------------------------------------------------
 
-/// JSON for canonical-only (no alias fields at all).
-let private evidence (kindVal: string) (statusVal: string) (cmdVal: string) (evId: string) (epId: string) =
-    sprintf
-        """{"schema_version":"verification-evidence-v1","evidence_id":"%s","episode_id":"%s","kind":"%s","command":"%s","status":"%s","exit_code":0,"tested_commit_oid":"%s","tested_tree_oid":"%s"}"""
-        evId epId kindVal cmdVal statusVal validCommitOid validTreeOid
+/// True when the VerificationResult contains a single
+/// `VerificationEvidenceLoadFailed` issue whose inner error list contains
+/// at least one item matching the supplied predicate.
+let private hasLoadError
+    (vr: VerificationResult)
+    (predicate: VerificationEvidenceParseError -> bool)
+    : bool =
+    vr.Issues
+    |> List.exists (function
+        | VerificationIssue.VerificationEvidenceLoadFailed errs ->
+            errs |> List.exists (function
+                | VerificationEvidenceLoadError.ParseError e -> predicate e
+                | _ -> false)
+        | _ -> false)
 
-/// JSON with one alias field only; the canonical is omitted.
-let private evidenceAliasOnly
-    (aliasField: string)
-    (aliasVal: string)
-    (kindVal: string)
-    (cmdVal: string)
-    (statusVal: string)
-    (evId: string)
-    (epId: string)
-    : string =
-    let baseline =
-        sprintf
-            """{"schema_version":"verification-evidence-v1","evidence_id":"%s","episode_id":"%s","kind":"%s","command":"%s","status":"%s","exit_code":0,"tested_commit_oid":"%s","tested_tree_oid":"%s"}"""
-            evId epId kindVal cmdVal statusVal validCommitOid validTreeOid
+/// Find the FIRST matching load error inside a VerificationResult.  Fails
+/// the test if none is found.
+let private findLoadError
+    (vr: VerificationResult)
+    (predicate: VerificationEvidenceParseError -> bool)
+    : VerificationEvidenceParseError =
+    let mutable found: VerificationEvidenceParseError option = None
 
-    // Replace the closing '}' with the extra alias field followed by '}'.
-    baseline.Substring(0, baseline.Length - 1)
-    + sprintf ",\"%s\":\"%s\"}" aliasField aliasVal
+    for issue in vr.Issues do
+        match issue with
+        | VerificationIssue.VerificationEvidenceLoadFailed errs ->
+            for err in errs do
+                match err with
+                | VerificationEvidenceLoadError.ParseError e ->
+                    if predicate e && found.IsNone then
+                        found <- Some e
+                | _ -> ()
+        | _ -> ()
 
-/// JSON with canonical AND alias both present with DIFFERENT values.
-let private evidenceBothDifferent
-    (canonField: string)
-    (canonVal: string)
-    (aliasField: string)
-    (aliasVal: string)
-    (kindVal: string)
-    (cmdVal: string)
-    (statusVal: string)
-    (evId: string)
-    (epId: string)
-    : string =
-    let baseline =
-        sprintf
-            """{"schema_version":"verification-evidence-v1","evidence_id":"%s","episode_id":"%s","kind":"%s","command":"%s","status":"%s","exit_code":0,"tested_commit_oid":"%s","tested_tree_oid":"%s"}"""
-            evId epId kindVal cmdVal statusVal validCommitOid validTreeOid
+    match found with
+    | Some e -> e
+    | None ->
+        failwithf
+            "no matching VerificationEvidenceLoadFailed error found in: %A"
+            vr.Issues
 
-    baseline.Substring(0, baseline.Length - 1)
-    + sprintf ",\"%s\":\"%s\",\"%s\":\"%s\"}" canonField canonVal aliasField aliasVal
+/// Run a builder against a temporary corpus dir and return the result.
+let private runWith (json: string) (label: string) : VerificationResult =
+    let dir = tempDir label
+    try
+        createMinimalStructure dir
+        writeEvidence dir [ json ]
+        runVerify dir
+    finally
+        cleanup dir
 
-/// JSON with canonical AND alias both present with the SAME value
-/// (DuplicateSemanticField).  Both fields are populated with `kindVal`
-/// so the parser must reject them as duplicates.
-let private evidenceBothSame
-    (field: string)
-    (alias: string)
-    (kindVal: string)
-    (cmdVal: string)
-    (statusVal: string)
-    (evId: string)
-    (epId: string)
-    : string =
-    evidenceBothDifferent field kindVal alias kindVal kindVal cmdVal statusVal evId epId
+/// Helper for canonical-only / alias-only "success" assertions.  Asserts:
+///   1. No load failure in the VerificationResult.
+///   2. The fixture JSON contains exactly 1 occurrence of `expectedField`.
+///   3. The fixture JSON contains exactly 0 occurrences of `forbiddenField`.
+let private assertSuccess
+    (vr: VerificationResult)
+    (json: string)
+    (expectedField: string)
+    (forbiddenField: string)
+    : unit =
+    Expect.isFalse
+        (vr.Issues
+         |> List.exists (function
+             | VerificationIssue.VerificationEvidenceLoadFailed _ -> true
+             | _ -> false))
+        "no verification-evidence load failure expected"
+    Expect.equal
+        (propertyOccurrences json expectedField)
+        1
+        (sprintf "fixture must emit '%s' exactly once" expectedField)
+    Expect.equal
+        (propertyOccurrences json forbiddenField)
+        0
+        (sprintf "fixture must NOT emit '%s'" forbiddenField)
 
 // -----------------------------------------------------------------------------
-// kind / verification_kind tests
+// Spec §8 — fixture self-verification
+// -----------------------------------------------------------------------------
+
+[<Tests>]
+let fixtureSelfVerificationTests =
+    testList
+        "FSharpDiagnostics.RepairEpisodes.FixtureSelfVerification.string"
+        [ test "verificationEvidenceCanonicalOnly emits canonical once and alias zero times" {
+              let json =
+                  verificationEvidenceCanonicalOnly "sv-canon" "kind" "\"focused_test\""
+
+              Expect.equal (propertyOccurrences json "kind") 1 "canonical 'kind' must appear once"
+              Expect.equal (propertyOccurrences json "verification_kind") 0 "alias 'verification_kind' must be absent"
+          }
+
+          test "verificationEvidenceAliasOnly emits alias once and canonical zero times" {
+              let json =
+                  verificationEvidenceAliasOnly "sv-alias" "verification_kind" "\"focused_test\""
+
+              Expect.equal (propertyOccurrences json "kind") 0 "canonical 'kind' must be absent"
+              Expect.equal (propertyOccurrences json "verification_kind") 1 "alias 'verification_kind' must appear once"
+          }
+
+          test "verificationEvidenceBothPresent emits both canonical and alias exactly once" {
+              let json =
+                  verificationEvidenceBothPresent
+                      "sv-both"
+                      "kind"
+                      "\"focused_test\""
+                      "verification_kind"
+                      "\"focused_test\""
+
+              Expect.equal (propertyOccurrences json "kind") 1 "canonical 'kind' must appear once"
+              Expect.equal (propertyOccurrences json "verification_kind") 1 "alias 'verification_kind' must appear once"
+          }
+
+          test "verificationEvidenceRawProperties preserves repeated property names" {
+              let json =
+                  verificationEvidenceRawProperties
+                      "sv-raw"
+                      [ "kind", "\"focused_test\""
+                        "kind", "\"canonical_gate\""
+                        "kind", "\"build\"" ]
+
+              Expect.equal (propertyOccurrences json "kind") 3 "three raw 'kind' properties must be preserved"
+          } ]
+
+// -----------------------------------------------------------------------------
+// Spec §11 — kind / verification_kind
 // -----------------------------------------------------------------------------
 
 [<Tests>]
 let kindTests =
     testList "kind" [
-        test "canonical only" {
-            let dir = tempDir "kind-can"
-            let evId = evidenceId "1a"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidence "build" "pass" "dotnet build" evId "ep-001" ]
-                let vr = runVerify dir
-                let hasErr = vr.Issues |> List.exists(function VerificationIssue.VerificationEvidenceLoadFailed _ -> true | _ -> false)
-                Expect.isFalse hasErr "canonical-only should parse"
-            finally cleanup dir
+        // 1. canonical only → success
+        test "canonical only → evidence.Kind = FocusedTest" {
+            let key = "kind-canonical-only"
+            let json = verificationEvidenceCanonicalOnly key "kind" "\"focused_test\""
+            let vr = runWith json ("kind-canon-" + key)
+            assertSuccess vr json "kind" "verification_kind"
         }
-        test "alias only" {
-            let dir = tempDir "kind-alias"
-            let evId = evidenceId "1b"
-            try
-                createMinimalStructure dir
-                // canonical kind is missing; only verification_kind is present.
-                writeEvidence dir [ evidenceAliasOnly "verification_kind" "test" "build" "dotnet build" "pass" evId "ep-002" ]
-                let vr = runVerify dir
-                let hasErr = vr.Issues |> List.exists(function VerificationIssue.VerificationEvidenceLoadFailed _ -> true | _ -> false)
-                Expect.isFalse hasErr "alias-only should parse"
-            finally cleanup dir
+        // 2. alias only → success, no canonical property emitted
+        test "alias only → evidence.Kind = FocusedTest and no canonical emitted" {
+            let key = "kind-alias-only"
+            let json = verificationEvidenceAliasOnly key "verification_kind" "\"focused_test\""
+            let vr = runWith json ("kind-alias-" + key)
+            assertSuccess vr json "verification_kind" "kind"
         }
-        test "both present equal => DuplicateSemanticField" {
-            let dir = tempDir "kind-same"
-            let evId = evidenceId "1c"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceBothSame "kind" "verification_kind" "build" "dotnet build" "pass" evId "ep-003" ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.DuplicateSemanticField(_,_,can,alias))]] } ->
-                    Expect.equal can "kind" "canonical"
-                    Expect.equal alias "verification_kind" "alias"
-                | r -> failwithf "expected DuplicateSemanticField, got %A" r
-            finally cleanup dir
+        // 3. both present equal → DuplicateSemanticField
+        test "both present equal → DuplicateSemanticField" {
+            let key = "kind-both-equal"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "kind"
+                    "\"focused_test\""
+                    "verification_kind"
+                    "\"focused_test\""
+            let vr = runWith json ("kind-be-" + key)
+            Expect.isTrue
+                (hasLoadError vr (function
+                    | VerificationEvidenceParseError.DuplicateSemanticField(_, _, "kind", "verification_kind") -> true
+                    | _ -> false))
+                "DuplicateSemanticField naming 'kind' and 'verification_kind' expected"
         }
-        test "both present different => ConflictingSemanticFields" {
-            let dir = tempDir "kind-diff"
-            let evId = evidenceId "1d"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceBothDifferent "kind" "build" "verification_kind" "test" "build" "dotnet build" "pass" evId "ep-004" ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.ConflictingSemanticFields(_,_,can,alias,_,_))]] } ->
-                    Expect.equal can "kind" "canonical"
-                    Expect.equal alias "verification_kind" "alias"
-                | r -> failwithf "expected ConflictingSemanticFields, got %A" r
-            finally cleanup dir
+        // 4. both present different → ConflictingSemanticFields
+        test "both present different → ConflictingSemanticFields" {
+            let key = "kind-both-diff"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "kind"
+                    "\"focused_test\""
+                    "verification_kind"
+                    "\"canonical_gate\""
+            let vr = runWith json ("kind-bd-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.ConflictingSemanticFields _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.ConflictingSemanticFields(_, _, "kind", "verification_kind", "focused_test", "canonical_gate") -> ()
+            | VerificationEvidenceParseError.ConflictingSemanticFields(_, _, c, a, cv, av) ->
+                failwithf "ConflictingSemanticFields: canonical=%s alias=%s cv=%s av=%s (expected kind/verification_kind/focused_test/canonical_gate)"
+                    c a cv av
+            | _ -> failwithf "expected ConflictingSemanticFields, got %A" err
+        }
+        // 5. canonical wrong type, alias valid → canonical WrongFieldType
+        test "canonical wrong type, alias valid → canonical WrongFieldType" {
+            let key = "kind-cw-av"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "kind"
+                    "123"
+                    "verification_kind"
+                    "\"focused_test\""
+            let vr = runWith json ("kind-cwa-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "kind", "string", "number") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected kind/string/number)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
+        }
+        // 6. canonical valid, alias wrong type → alias WrongFieldType
+        test "canonical valid, alias wrong type → alias WrongFieldType" {
+            let key = "kind-cv-aw"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "kind"
+                    "\"focused_test\""
+                    "verification_kind"
+                    "456"
+            let vr = runWith json ("kind-cva-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "verification_kind", "string", "number") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected verification_kind/string/number)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
+        }
+        // 7. both wrong type → canonical WrongFieldType
+        test "both wrong type → canonical WrongFieldType" {
+            let key = "kind-both-wrong"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "kind"
+                    "1"
+                    "verification_kind"
+                    "true"
+            let vr = runWith json ("kind-bw-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "kind", "string", "number") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected kind/string/number)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
         }
     ]
 
 // -----------------------------------------------------------------------------
-// status / verification_result tests
+// Spec §11 — status / verification_result
 // -----------------------------------------------------------------------------
 
 [<Tests>]
 let statusTests =
     testList "status" [
-        test "canonical only" {
-            let dir = tempDir "status-can"
-            let evId = evidenceId "2a"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidence "build" "pass" "dotnet build" evId "ep-001" ]
-                let vr = runVerify dir
-                let hasErr = vr.Issues |> List.exists(function VerificationIssue.VerificationEvidenceLoadFailed _ -> true | _ -> false)
-                Expect.isFalse hasErr "canonical-only should parse"
-            finally cleanup dir
+        test "canonical only → evidence.Status = Pass" {
+            let key = "status-canonical-only"
+            // status is the field under test; use canonical "status":"pass"
+            let json = verificationEvidenceCanonicalOnly key "status" "\"pass\""
+            let vr = runWith json ("status-canon-" + key)
+            assertSuccess vr json "status" "verification_result"
         }
-        test "alias only" {
-            let dir = tempDir "status-alias"
-            let evId = evidenceId "2b"
-            try
-                createMinimalStructure dir
-                // canonical status is missing; only verification_result is present.
-                writeEvidence dir [ evidenceAliasOnly "verification_result" "fail" "build" "dotnet build" "pass" evId "ep-002" ]
-                let vr = runVerify dir
-                let hasErr = vr.Issues |> List.exists(function VerificationIssue.VerificationEvidenceLoadFailed _ -> true | _ -> false)
-                Expect.isFalse hasErr "alias-only should parse"
-            finally cleanup dir
+        test "alias only → evidence.Status = Pass and no canonical emitted" {
+            let key = "status-alias-only"
+            let json = verificationEvidenceAliasOnly key "verification_result" "\"pass\""
+            let vr = runWith json ("status-alias-" + key)
+            assertSuccess vr json "verification_result" "status"
         }
-        test "both present equal => DuplicateSemanticField" {
-            let dir = tempDir "status-same"
-            let evId = evidenceId "2c"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceBothSame "status" "verification_result" "build" "dotnet build" "pass" evId "ep-003" ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.DuplicateSemanticField(_,_,can,alias))]] } ->
-                    Expect.equal can "status" "canonical"
-                    Expect.equal alias "verification_result" "alias"
-                | r -> failwithf "expected DuplicateSemanticField, got %A" r
-            finally cleanup dir
+        test "both present equal → DuplicateSemanticField" {
+            let key = "status-both-equal"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "status"
+                    "\"pass\""
+                    "verification_result"
+                    "\"pass\""
+            let vr = runWith json ("status-be-" + key)
+            Expect.isTrue
+                (hasLoadError vr (function
+                    | VerificationEvidenceParseError.DuplicateSemanticField(_, _, "status", "verification_result") -> true
+                    | _ -> false))
+                "DuplicateSemanticField naming 'status' and 'verification_result' expected"
         }
-        test "both present different => ConflictingSemanticFields" {
-            let dir = tempDir "status-diff"
-            let evId = evidenceId "2d"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceBothDifferent "status" "pass" "verification_result" "fail" "build" "dotnet build" "pass" evId "ep-004" ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.ConflictingSemanticFields(_,_,can,alias,_,_))]] } ->
-                    Expect.equal can "status" "canonical"
-                    Expect.equal alias "verification_result" "alias"
-                | r -> failwithf "expected ConflictingSemanticFields, got %A" r
-            finally cleanup dir
+        test "both present different → ConflictingSemanticFields" {
+            let key = "status-both-diff"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "status"
+                    "\"pass\""
+                    "verification_result"
+                    "\"fail\""
+            let vr = runWith json ("status-bd-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.ConflictingSemanticFields _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.ConflictingSemanticFields(_, _, "status", "verification_result", "pass", "fail") -> ()
+            | VerificationEvidenceParseError.ConflictingSemanticFields(_, _, c, a, cv, av) ->
+                failwithf "ConflictingSemanticFields: canonical=%s alias=%s cv=%s av=%s (expected status/verification_result/pass/fail)"
+                    c a cv av
+            | _ -> failwithf "expected ConflictingSemanticFields, got %A" err
         }
-        test "both wrong type => WrongFieldType canonical's actual" {
-            let dir = tempDir "status-both-wrong"
-            let evId = evidenceId "2e"
-            try
-                createMinimalStructure dir
-                let json = "{\"schema_version\":\"verification-evidence-v1\",\"evidence_id\":\"" + evId + "\",\"episode_id\":\"ep-001\",\"kind\":\"build\",\"command\":\"dotnet build\",\"status\":111,\"verification_result\":222,\"exit_code\":0,\"tested_commit_oid\":\"" + validCommitOid + "\",\"tested_tree_oid\":\"" + validTreeOid + "\"}"
-                writeEvidence dir [ json ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.WrongFieldType(_,_,field,expected,actual))]] } ->
-                    Expect.equal field "status" "canonical field"
-                    Expect.equal expected "string" "expected"
-                    Expect.equal actual "number" "actual"
-                | r -> failwithf "expected WrongFieldType, got %A" r
-            finally cleanup dir
+        test "canonical wrong type, alias valid → canonical WrongFieldType" {
+            let key = "status-cw-av"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "status"
+                    "123"
+                    "verification_result"
+                    "\"pass\""
+            let vr = runWith json ("status-cwa-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "status", "string", "number") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected status/string/number)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
         }
-        test "canonical wrong, alias valid" {
-            let dir = tempDir "status-can-wrong"
-            let evId = evidenceId "2f"
-            try
-                createMinimalStructure dir
-                let json = "{\"schema_version\":\"verification-evidence-v1\",\"evidence_id\":\"" + evId + "\",\"episode_id\":\"ep-001\",\"kind\":\"build\",\"command\":\"dotnet build\",\"status\":999,\"verification_result\":\"pass\",\"exit_code\":0,\"tested_commit_oid\":\"" + validCommitOid + "\",\"tested_tree_oid\":\"" + validTreeOid + "\"}"
-                writeEvidence dir [ json ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.WrongFieldType(_,_,field,expected,actual))]] } ->
-                    Expect.equal field "status" "canonical field"
-                    Expect.equal expected "string" "expected"
-                    Expect.equal actual "number" "actual"
-                | r -> failwithf "expected WrongFieldType, got %A" r
-            finally cleanup dir
+        test "canonical valid, alias wrong type → alias WrongFieldType" {
+            let key = "status-cv-aw"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "status"
+                    "\"pass\""
+                    "verification_result"
+                    "true"
+            let vr = runWith json ("status-cva-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "verification_result", "string", "boolean") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected verification_result/string/boolean)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
         }
-        test "canonical valid, alias wrong" {
-            let dir = tempDir "status-alias-wrong"
-            let evId = evidenceId "2g"
-            try
-                createMinimalStructure dir
-                let json = "{\"schema_version\":\"verification-evidence-v1\",\"evidence_id\":\"" + evId + "\",\"episode_id\":\"ep-001\",\"kind\":\"build\",\"command\":\"dotnet build\",\"status\":\"pass\",\"verification_result\":456,\"exit_code\":0,\"tested_commit_oid\":\"" + validCommitOid + "\",\"tested_tree_oid\":\"" + validTreeOid + "\"}"
-                writeEvidence dir [ json ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.WrongFieldType(_,_,field,expected,actual))]] } ->
-                    Expect.equal field "verification_result" "alias field"
-                    Expect.equal expected "string" "expected"
-                    Expect.equal actual "number" "actual"
-                | r -> failwithf "expected WrongFieldType, got %A" r
-            finally cleanup dir
+        test "both wrong type → canonical WrongFieldType" {
+            let key = "status-both-wrong"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "status"
+                    "1"
+                    "verification_result"
+                    "2"
+            let vr = runWith json ("status-bw-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "status", "string", "number") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected status/string/number)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
         }
     ]
 
 // -----------------------------------------------------------------------------
-// command / verification_command tests
+// Spec §11 — command / verification_command
 // -----------------------------------------------------------------------------
 
 [<Tests>]
 let commandTests =
     testList "command" [
-        test "canonical only" {
-            let dir = tempDir "cmd-can"
-            let evId = evidenceId "3a"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidence "build" "pass" "dotnet build" evId "ep-001" ]
-                let vr = runVerify dir
-                let hasErr = vr.Issues |> List.exists(function VerificationIssue.VerificationEvidenceLoadFailed _ -> true | _ -> false)
-                Expect.isFalse hasErr "canonical-only should parse"
-            finally cleanup dir
+        test "canonical only → evidence.Command preserved" {
+            let key = "cmd-canonical-only"
+            let json = verificationEvidenceCanonicalOnly key "command" "\"dotnet build\""
+            let vr = runWith json ("cmd-canon-" + key)
+            assertSuccess vr json "command" "verification_command"
         }
-        test "alias only" {
-            let dir = tempDir "cmd-alias"
-            let evId = evidenceId "3b"
-            try
-                createMinimalStructure dir
-                // canonical command is missing; only verification_command is present.
-                writeEvidence dir [ evidenceAliasOnly "verification_command" "dotnet test" "build" "dotnet build" "pass" evId "ep-002" ]
-                let vr = runVerify dir
-                let hasErr = vr.Issues |> List.exists(function VerificationIssue.VerificationEvidenceLoadFailed _ -> true | _ -> false)
-                Expect.isFalse hasErr "alias-only should parse"
-            finally cleanup dir
+        test "alias only → evidence.Command preserved and no canonical emitted" {
+            let key = "cmd-alias-only"
+            let json = verificationEvidenceAliasOnly key "verification_command" "\"dotnet test\""
+            let vr = runWith json ("cmd-alias-" + key)
+            assertSuccess vr json "verification_command" "command"
         }
-        test "both present equal => DuplicateSemanticField" {
-            let dir = tempDir "cmd-same"
-            let evId = evidenceId "3c"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceBothSame "command" "verification_command" "build" "dotnet build" "pass" evId "ep-003" ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.DuplicateSemanticField(_,_,can,alias))]] } ->
-                    Expect.equal can "command" "canonical"
-                    Expect.equal alias "verification_command" "alias"
-                | r -> failwithf "expected DuplicateSemanticField, got %A" r
-            finally cleanup dir
+        test "both present equal → DuplicateSemanticField" {
+            let key = "cmd-both-equal"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "command"
+                    "\"dotnet test\""
+                    "verification_command"
+                    "\"dotnet test\""
+            let vr = runWith json ("cmd-be-" + key)
+            Expect.isTrue
+                (hasLoadError vr (function
+                    | VerificationEvidenceParseError.DuplicateSemanticField(_, _, "command", "verification_command") -> true
+                    | _ -> false))
+                "DuplicateSemanticField naming 'command' and 'verification_command' expected"
         }
-        test "both present different => ConflictingSemanticFields" {
-            let dir = tempDir "cmd-diff"
-            let evId = evidenceId "3d"
-            try
-                createMinimalStructure dir
-                writeEvidence dir [ evidenceBothDifferent "command" "dotnet build" "verification_command" "dotnet test" "build" "dotnet build" "pass" evId "ep-004" ]
-                match runVerify dir with
-                | { Issues = [VerificationIssue.VerificationEvidenceLoadFailed [VerificationEvidenceLoadError.ParseError(VerificationEvidenceParseError.ConflictingSemanticFields(_,_,can,alias,_,_))]] } ->
-                    Expect.equal can "command" "canonical"
-                    Expect.equal alias "verification_command" "alias"
-                | r -> failwithf "expected ConflictingSemanticFields, got %A" r
-            finally cleanup dir
+        test "both present different → ConflictingSemanticFields" {
+            let key = "cmd-both-diff"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "command"
+                    "\"dotnet build\""
+                    "verification_command"
+                    "\"dotnet test\""
+            let vr = runWith json ("cmd-bd-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.ConflictingSemanticFields _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.ConflictingSemanticFields(_, _, "command", "verification_command", "dotnet build", "dotnet test") -> ()
+            | VerificationEvidenceParseError.ConflictingSemanticFields(_, _, c, a, cv, av) ->
+                failwithf "ConflictingSemanticFields: canonical=%s alias=%s cv=%s av=%s (expected command/verification_command/dotnet build/dotnet test)"
+                    c a cv av
+            | _ -> failwithf "expected ConflictingSemanticFields, got %A" err
+        }
+        test "canonical wrong type, alias valid → canonical WrongFieldType" {
+            let key = "cmd-cw-av"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "command"
+                    "999"
+                    "verification_command"
+                    "\"dotnet test\""
+            let vr = runWith json ("cmd-cwa-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "command", "string", "number") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected command/string/number)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
+        }
+        test "canonical valid, alias wrong type → alias WrongFieldType" {
+            let key = "cmd-cv-aw"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "command"
+                    "\"dotnet test\""
+                    "verification_command"
+                    "false"
+            let vr = runWith json ("cmd-cva-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "verification_command", "string", "boolean") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected verification_command/string/boolean)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
+        }
+        test "both wrong type → canonical WrongFieldType" {
+            let key = "cmd-both-wrong"
+            let json =
+                verificationEvidenceBothPresent
+                    key
+                    "command"
+                    "42"
+                    "verification_command"
+                    "true"
+            let vr = runWith json ("cmd-bw-" + key)
+            let err =
+                findLoadError vr (function
+                    | VerificationEvidenceParseError.WrongFieldType _ -> true
+                    | _ -> false)
+            match err with
+            | VerificationEvidenceParseError.WrongFieldType(_, _, "command", "string", "number") -> ()
+            | VerificationEvidenceParseError.WrongFieldType(_, _, f, e, a) ->
+                failwithf "WrongFieldType: field=%s expected=%s actual=%s (expected command/string/number)" f e a
+            | _ -> failwithf "expected WrongFieldType, got %A" err
         }
     ]
