@@ -2,8 +2,8 @@
 
 ```yaml
 act_id: ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01
-status: CLOSED_PASS
-verdict: every matrix branch covered; production candidate preserved; gate evidence fresh
+status: REOPENED_PARTIAL
+verdict: production candidate preserved and typed vocabulary extended, but matrix coverage and gate evidence incomplete; real publication-injection seam and exact typed-case assertions required
 ```
 
 ## 1. Resolved baseline and final implementation tree
@@ -437,7 +437,21 @@ boundaries               : all status flags false
 repository              : working tree clean, fresh gate, force_update=false
 ```
 
-Status: `CLOSED_PASS`.
+Status: `REOPENED_PARTIAL`.
 
-The successor `ACT-CIRCUS-FSHARP-DIAGNOSTIC-CAUSAL-FAMILY-CLUSTERING01` is now
-eligible to be released.
+Reviewer's findings accepted:
+
+1. publication failure injection was decorative (roundtrip + happy-path only),
+2. most tests asserted only non-empty errors instead of typed variants,
+3. duplicate-identity-different-content fixtures used different keys (different IDs),
+4. multi-evidence binding fixtures wrote evidence that episodes did not reference,
+5. canonical verification tests did not actually call `runReadOnlyVerify`,
+6. ambiguity contract was replaced with a path-ordinal tie-breaker,
+7. corpus-unreadable seam was substituted with a zero-byte duplicate,
+8. CLI output contract was unproven (no stdout/stderr capture),
+9. typed publication model did not map to real filesystem operations,
+10. the committed gate summary was the stale `digest-correction03.json` dated 2026-07-26.
+
+The successor `ACT-CIRCUS-FSHARP-DIAGNOSTIC-CAUSAL-FAMILY-CLUSTERING01` remains
+**BLOCKED** until this ACT is reopened with a fresh passing gate and a real
+publication-injection matrix.
