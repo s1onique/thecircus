@@ -769,29 +769,298 @@ let private pathDisciplineTest =
                 (canonical.StartsWith(tmpPath, StringComparison.Ordinal))
                 "canonical is not under system temp"
 
-            // After success, a backup file may remain under the canonical
-            // parent.  Confirm any backup stays on the same parent.
-            let canonicalName = Path.GetFileName canonical
-            let sep = string Path.DirectorySeparatorChar
-            let candidateFragment = canonicalName + sep + candidateFileName
-            let summaryFragment = canonicalName + sep + summaryFileName
+            // After a successful publication the ReplaceFile seam leaves
+            // the destination backup file (the original canonical bytes)
+            // inside canonicalDir as <filename>.bak.  Confirm it lives
+            // inside canonicalDir (not its parent) and shares the parent
+            // filesystem tree with staging.
             let backups =
-                Directory.GetFiles(canonicalParent, "*.bak", SearchOption.TopDirectoryOnly)
+                Directory.GetFiles(canonical, "*.bak", SearchOption.TopDirectoryOnly)
                 |> Array.filter (fun p ->
-                    p.Contains(candidateFragment)
-                    || p.Contains(summaryFragment))
+                    p.Contains(candidateFileName)
+                    || p.Contains(summaryFileName))
+
+            // At least one backup must remain after a successful commit.
+            Expect.isTrue
+                (backups.Length >= 1)
+                "at least one destination backup remains inside canonicalDir"
 
             for bp in backups do
+                // The backup must live inside canonicalDir, not its parent.
                 Expect.equal
                     (Path.GetDirectoryName bp)
-                    canonicalParent
-                    "backup path is under canonical parent"
+                    canonical
+                    "backup path is inside canonicalDir"
+
+                // And canonicalDir must share its parent with the staging
+                // directory so replacement stays on the same filesystem.
+                Expect.equal
+                    (Path.GetDirectoryName canonical)
+                    stagingParent
+                    "canonicalDir parent matches stagingDir parent"
         finally
             cleanupDir repo
 
 // -----------------------------------------------------------------------------
 // Wire-up
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// Cardinality rejection (Correction06B reviewer feedback)
+// -----------------------------------------------------------------------------
+
+let private canonicalPairCardinalityEmptyTest =
+    testCase "canonical pair cardinality: zero files -> no canonical mutation, no staging, no commit"
+    <| fun () ->
+        assertABDistinction ()
+
+        let repo = newTempRepo ()
+
+        try
+            let canonical = seedExistingAA repo
+            let preA, preB = canonicalBytes canonical
+
+            // Capture ops with a seam that explodes if it is touched.  A
+            // cardinality rejection must raise BEFORE any filesystem
+            // primitive runs through the seam.
+            let ops, calls =
+                buildOps canonical NoCommitFault
+
+            let result =
+                publishWithDependencies ops canonical []
+
+            match result with
+            | AtomicPublishResult.Failed report ->
+                Expect.hasLength report.Failures 1 "exactly one cardinality failure"
+                let failure = report.Failures.[0]
+                Expect.equal failure.Phase AtomicPublishPhase.Install "cardinality failure reported as Install phase"
+                Expect.equal failure.Operation "canonical-pair-cardinality" "cardinality operation token"
+                Expect.isTrue (failure.Detail.Contains "0") "cardinality detail mentions the actual count"
+
+                Expect.equal report.RecoveryState AtomicRecoveryState.NeverModified "cardinality failure is NeverModified"
+            | _ ->
+                failwithf "expected Failed for empty files, got %A" result
+
+            Expect.isEmpty (List.ofSeq calls) "no seam call observed before cardinality rejection"
+
+            let postA, postB = canonicalBytes canonical
+            Expect.equal postA preA "canonical candidate unchanged"
+            Expect.equal postB preB "canonical summary unchanged"
+        finally
+            cleanupDir repo
+
+let private canonicalPairCardinalityOneFileTest =
+    testCase "canonical pair cardinality: one file -> cardinality failure, no canonical mutation"
+    <| fun () ->
+        assertABDistinction ()
+
+        let repo = newTempRepo ()
+
+        try
+            let canonical = seedExistingAA repo
+            let preA, preB = canonicalBytes canonical
+
+            let ops, calls =
+                buildOps canonical NoCommitFault
+
+            let singleFile =
+                [ { CanonicalFileName = candidateFileName
+                    Body = "candidate-B" } ]
+
+            let result =
+                publishWithDependencies ops canonical singleFile
+
+            match result with
+            | AtomicPublishResult.Failed report ->
+                Expect.hasLength report.Failures 1 "exactly one cardinality failure"
+                let failure = report.Failures.[0]
+                Expect.equal failure.Operation "canonical-pair-cardinality" "cardinality operation token"
+                Expect.isTrue (failure.Detail.Contains "1") "cardinality detail mentions the actual count"
+                Expect.equal report.RecoveryState AtomicRecoveryState.NeverModified "one-file failure is NeverModified"
+            | _ ->
+                failwithf "expected Failed for single file, got %A" result
+
+            let postA, postB = canonicalBytes canonical
+            Expect.equal postA preA "canonical candidate unchanged"
+            Expect.equal postB preB "canonical summary unchanged"
+        finally
+            cleanupDir repo
+
+let private canonicalPairCardinalityThreeFilesTest =
+    testCase "canonical pair cardinality: three files -> cardinality failure, only the first two are addressed"
+    <| fun () ->
+        assertABDistinction ()
+
+        let repo = newTempRepo ()
+
+        try
+            let canonical = seedExistingAA repo
+
+            let ops, _ =
+                buildOps canonical NoCommitFault
+
+            let threeFiles =
+                [ { CanonicalFileName = candidateFileName
+                    Body = stagedCandidateBBytes }
+                  { CanonicalFileName = summaryFileName
+                    Body = stagedSummaryBBytes }
+                  { CanonicalFileName = "extra.json"
+                    Body = "extra-body" } ]
+
+            let result =
+                publishWithDependencies ops canonical threeFiles
+
+            match result with
+            | AtomicPublishResult.Failed report ->
+                Expect.hasLength report.Failures 1 "exactly one cardinality failure"
+                Expect.equal report.Failures.[0].Operation "canonical-pair-cardinality" "cardinality operation token"
+                Expect.isTrue (report.Failures.[0].Detail.Contains "3") "cardinality detail mentions the actual count"
+                Expect.equal report.RecoveryState AtomicRecoveryState.NeverModified "three-file failure is NeverModified"
+            | _ ->
+                failwithf "expected Failed for three files, got %A" result
+        finally
+            cleanupDir repo
+
+// -----------------------------------------------------------------------------
+// Missing backup surfaces as a typed RollbackRestore failure
+// (Correction06B reviewer feedback)
+// -----------------------------------------------------------------------------
+
+type MissingBackupMoveFile =
+    | NoMissingBackup
+    | MissingBackupCandidate
+
+let private buildOpsWithMissingBackup
+    (canonicalDir : string)
+    (missing : MissingBackupMoveFile)
+    : AtomicPublishOps * ResizeArray<Op> =
+    let calls = ResizeArray<Op> ()
+
+    let createDirImpl (path : string) =
+        calls.Add(CreateDirectory path)
+        Directory.CreateDirectory(path) |> ignore
+
+    let openWriteImpl (path : string) : IAtomicWriteHandle =
+        let label = Path.GetFileName path
+        calls.Add(OpenWrite label)
+
+        let fs =
+            new FileStream(
+                path,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.Read,
+                bufferSize = 4096,
+                useAsync = false)
+
+        upcast new RecordingWriteHandle(calls, label, fs)
+
+    let readImpl (path : string) : byte[] =
+        let label = Path.GetFileName path
+        let canonicalPrefix = canonicalDir + string Path.DirectorySeparatorChar
+        if path.StartsWith(canonicalPrefix, StringComparison.Ordinal) then
+            calls.Add(SnapshotRead label)
+        else
+            calls.Add(ReadBytes label)
+        File.ReadAllBytes path
+
+    let fileExistsImpl (path : string) : bool =
+        let label = Path.GetFileName path
+        calls.Add(FileExists label)
+        File.Exists path
+
+    let moveFileImpl (source : string) (_dest : string) : unit =
+        let sourceLabel = Path.GetFileName source
+        calls.Add(MoveFile sourceLabel)
+        File.Move(source, _dest)
+
+    let replaceFileImpl (source : string) (_dest : string) (_backup : string) : unit =
+        let sourceLabel = Path.GetFileName source
+        calls.Add(ReplaceFile sourceLabel)
+
+        // For the "missing backup" test: claim to replace the candidate
+        // successfully without actually creating the destination backup
+        // file.  The production rollback will then observe a missing
+        // backup and surface a typed RollbackRestore failure.
+        if sourceLabel = candidateFileName && missing = MissingBackupCandidate then
+            // Move source into destination without writing the backup.
+            // Simulate File.Replace by copying source -> destination and
+            // then deleting source, but NEVER touching the backup path.
+            File.Copy(source, _dest, overwrite = true)
+            File.Delete(source)
+        elif sourceLabel = summaryFileName then
+            // Summary install must fail so the rollback runs against the
+            // candidate that was replaced-without-backup.  We raise
+            // here so commitCanonicalPairFromStaging observes an
+            // Install-phase failure and the rollback path runs.
+            raise (IOException("injected summary replace fault for missing-backup test"))
+        else
+            File.Replace(source, _dest, _backup)
+
+    let deleteFileImpl (path : string) : unit =
+        let label = Path.GetFileName path
+        calls.Add(DeleteFile label)
+        File.Delete path
+
+    let ops =
+        {
+          CreateDirectory = createDirImpl
+          OpenWrite = openWriteImpl
+          ReadAllBytes = readImpl
+          FileExists = fileExistsImpl
+          MoveFile = moveFileImpl
+          ReplaceFile = replaceFileImpl
+          DeleteFile = deleteFileImpl
+        }
+    ops, calls
+
+let private missingBackupRollbackTest =
+    testCase "rollback surfaces typed failure when destination backup is missing (cannot silently no-op)"
+    <| fun () ->
+        assertABDistinction ()
+
+        let repo = newTempRepo ()
+
+        try
+            let canonical = seedExistingAA repo
+
+            let ops, _ =
+                buildOpsWithMissingBackup canonical MissingBackupCandidate
+
+            let result =
+                publishWithDependencies ops canonical (stagedPendingFiles ())
+
+            match result with
+            | AtomicPublishResult.Failed report ->
+                // The candidate "Replace" claimed success but produced no
+                // backup.  The subsequent summary install faulted, the
+                // rollback observed a missing candidate backup and surfaced
+                // it as a typed RollbackRestore failure, and the recovery
+                // state must report MayHaveChanged because rollback did
+                // not provably restore the canonical pair.
+                Expect.isTrue
+                    (report.Failures |> List.exists (fun f -> f.Phase = AtomicPublishPhase.RollbackRestore))
+                    "RollbackRestore failure reported"
+
+                let restoreFailures =
+                    report.Failures |> List.filter (fun f -> f.Phase = AtomicPublishPhase.RollbackRestore)
+                Expect.isFalse
+                    (List.isEmpty restoreFailures)
+                    "at least one RollbackRestore failure"
+
+                Expect.isTrue
+                    (restoreFailures
+                     |> List.exists (fun f -> f.Detail.Contains "missing"))
+                    "missing-backup detail is preserved"
+
+                Expect.equal
+                    report.RecoveryState
+                    AtomicRecoveryState.MayHaveChanged
+                    "missing-backup rollback is MayHaveChanged, never NeverModified"
+            | _ ->
+                failwithf "expected Failed with RollbackRestore, got %A" result
+        finally
+            cleanupDir repo
 
 [<Tests>]
 let commitRollbackSeamTests =
@@ -805,4 +1074,8 @@ let commitRollbackSeamTests =
           existingRollbackOrderTest
           absentRollbackOrderTest
           snapshotDistinguishesAbsentFromEmptyTest
-          pathDisciplineTest ]
+          pathDisciplineTest
+          canonicalPairCardinalityEmptyTest
+          canonicalPairCardinalityOneFileTest
+          canonicalPairCardinalityThreeFilesTest
+          missingBackupRollbackTest ]

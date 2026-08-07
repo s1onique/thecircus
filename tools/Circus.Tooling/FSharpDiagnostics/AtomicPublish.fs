@@ -203,14 +203,14 @@ let snapshotCanonicalPair
             Absent
 
     match files with
-    | c :: s :: _ ->
+    | [ c; s ] ->
         { Candidate = captureOne c.CanonicalFileName
           Summary = captureOne s.CanonicalFileName }
     | _ ->
-        // Defensive: callers must supply exactly the canonical pair.  When
-        // the caller does not, fall back to absent for both files.
-        { Candidate = Absent
-          Summary = Absent }
+        failwith
+            (sprintf
+                "snapshotCanonicalPair: canonical pair requires exactly two pending files, got %d"
+                (List.length files))
 
 // -----------------------------------------------------------------------------
 // Typed failure model
@@ -304,6 +304,13 @@ type AtomicRecoveryState =
     | NeverModified
     | RestoredByteIdentical
     | Committed
+    /// The canonical pair was mutated and may not have been restored to its
+    /// pre-publication bytes.  Returned when a commit failure triggered a
+    /// rollback attempt but the post-rollback canonical bytes differ from the
+    /// pre-snapshot, OR when the post-rollback snapshot could not be observed
+    /// at all.  Introduced in Correction06B so a canonical mutation that is
+    /// not provably restored cannot be mis-labelled NeverModified.
+    | MayHaveChanged
 
 /// Payload of a successful publication.
 type AtomicPublishSuccess =
@@ -330,8 +337,11 @@ type AtomicPublishFailureReport =
       /// Path of the staging directory when it still exists on disk.
       RetainedStagingPath: string option
       /// Recovery state of the canonical pair after the failure and any
-      /// rollback.  For every failure covered by Correction06B this is
-      /// either `NeverModified` or `RestoredByteIdentical`.
+      /// rollback.  May be `NeverModified`, `RestoredByteIdentical`, or
+      /// `MayHaveChanged`.  `MayHaveChanged` is reported when a commit
+      /// failure triggered a rollback attempt whose post-state either
+      /// differs from the pre-snapshot or could not be observed at all
+      /// (e.g. the post-rollback snapshot failed).
       RecoveryState: AtomicRecoveryState
     }
 
@@ -654,13 +664,24 @@ let private rollbackOneFile
                     failureFromException AtomicPublishPhase.RollbackDelete canonicalPath ex
                 )
 
-            try
-                if ops.FileExists bp then
-                    ops.MoveFile bp canonicalPath
-            with ex ->
+            // A missing backup is a rollback failure, not a no-op.  Surface
+            // it as a typed RollbackRestore failure so the typed outcome never
+            // claims successful recovery on a missing backup.
+            if not (ops.FileExists bp) then
                 accumulatedFailures.Add(
-                    failureFromException AtomicPublishPhase.RollbackRestore canonicalPath ex
+                    { Phase = AtomicPublishPhase.RollbackRestore
+                      Path = canonicalPath
+                      Operation = operationForPhase AtomicPublishPhase.RollbackRestore
+                      ExceptionType = ""
+                      Detail = "expected rollback backup is missing" }
                 )
+            else
+                try
+                    ops.MoveFile bp canonicalPath
+                with ex ->
+                    accumulatedFailures.Add(
+                        failureFromException AtomicPublishPhase.RollbackRestore canonicalPath ex
+                    )
         | None ->
             // No backup available (the canonical file was reported as
             // absent at install time but is now present).  Surface this
@@ -695,7 +716,7 @@ let private commitCanonicalPairFromStaging
     (files: PendingFile list)
     : Result<unit, (AtomicPublishFailure list) * bool> =
     match files with
-    | c :: s :: _ ->
+    | [ c; s ] ->
         let failures = ResizeArray<AtomicPublishFailure>()
         let rollbackFailures = ResizeArray<AtomicPublishFailure>()
         let mutable rollbackAttempted = false
@@ -746,12 +767,19 @@ let private commitCanonicalPairFromStaging
         else
             Error((failures |> Seq.toList), rollbackAttempted)
     | _ ->
+        // Cardinality failure: the canonical-pair contract requires exactly
+        // two pending files.  This must be raised before any staging or
+        // canonical mutation so the caller cannot accidentally publish a
+        // sub-pair or a super-pair.
         Error
             ( [ { Phase = AtomicPublishPhase.Install
                   Path = canonicalDir
-                  Operation = operationForPhase AtomicPublishPhase.Install
+                  Operation = "canonical-pair-cardinality"
                   ExceptionType = ""
-                  Detail = "commitCanonicalPairFromStaging requires exactly two pending files" } ],
+                  Detail =
+                    sprintf
+                        "commitCanonicalPairFromStaging requires exactly two pending files, got %d"
+                        (List.length files) } ],
               false )
 
 // -----------------------------------------------------------------------------
@@ -779,7 +807,33 @@ let publishWithDependencies
     (files: PendingFile list)
     : AtomicPublishResult =
 
+    // Cardinality check: the canonical-pair contract requires exactly two
+    // pending files.  This must fail BEFORE any staging, snapshot, or
+    // canonical I/O so the caller cannot accidentally publish a sub-pair
+    // or a super-pair.
+    if not (match files with [ _c; _s ] -> true | _ -> false) then
+        AtomicPublishResult.Failed
+            { Failures =
+                [ { Phase = AtomicPublishPhase.Install
+                    Path = canonicalDir
+                    Operation = "canonical-pair-cardinality"
+                    ExceptionType = ""
+                    Detail =
+                        sprintf
+                            "publishWithDependencies requires exactly two pending files, got %d"
+                            (List.length files) } ]
+              CanonicalByteIdenticalAfterFailure = true
+              RetainedStagingPath = None
+              RecoveryState = AtomicRecoveryState.NeverModified }
+    else
+
     let staging = computeStagingDir canonicalDir
+
+    let _ = ()
+    // (Continue below — the body of publishWithDependencies is the
+    // post-cardinality-check flow.)
+
+
 
     // Assert staging location invariant: same parent filesystem.
     let stagingParent = Path.GetDirectoryName staging
@@ -901,18 +955,36 @@ let publishWithDependencies
                         // rollback was attempted and the bytes match the
                         // pre-snapshot, the canonical state was
                         // RestoredByteIdentical.
+                        // Recovery-state semantics:
+                        //   - rollback not attempted + canonical bytes
+                        //     unchanged  -> NeverModified
+                        //   - rollback attempted + canonical bytes
+                        //     match pre-snapshot -> RestoredByteIdentical
+                        //   - rollback attempted + canonical bytes differ
+                        //     from pre-snapshot -> MayHaveChanged
+                        //   - rollback attempted + post-rollback snapshot
+                        //     could not be observed at all -> MayHaveChanged
+                        // NeverModified MUST NOT be returned for any state
+                        // that has been mutated, whether or not the
+                        // mutation was successfully reverted.
                         let recoveryState =
-                            if not rollbackAttempted then
+                            match postSnapResult, rollbackAttempted with
+                            | Error (), _ ->
+                                // Post-rollback observation failed.  The
+                                // canonical pair may have been mutated by
+                                // the failed commit; we cannot truthfully
+                                // claim NeverModified.
+                                if rollbackAttempted then
+                                    AtomicRecoveryState.MayHaveChanged
+                                else
+                                    AtomicRecoveryState.NeverModified
+                            | Ok _, false ->
                                 AtomicRecoveryState.NeverModified
-                            elif preserved then
-                                AtomicRecoveryState.RestoredByteIdentical
-                            else
-                                // Rollback attempted but canonical bytes
-                                // differ; rollback failure is deferred to
-                                // Correction06C.  For now report
-                                // NeverModified since the canonical pair
-                                // is provably changed.
-                                AtomicRecoveryState.NeverModified
+                            | Ok post, true ->
+                                if canonicalBytesPreserved preSnap post then
+                                    AtomicRecoveryState.RestoredByteIdentical
+                                else
+                                    AtomicRecoveryState.MayHaveChanged
 
                         AtomicPublishResult.Failed
                             { Failures = commitFailures
