@@ -880,6 +880,10 @@ let private canonicalPairCardinalityOneFileTest =
             | _ ->
                 failwithf "expected Failed for single file, got %A" result
 
+            // Cardinality rejection must fire BEFORE any staging, snapshot, or
+            // canonical I/O.  Assert the seam was never touched.
+            Expect.isEmpty (List.ofSeq calls) "no seam calls observed before cardinality rejection"
+
             let postA, postB = canonicalBytes canonical
             Expect.equal postA preA "canonical candidate unchanged"
             Expect.equal postB preB "canonical summary unchanged"
@@ -896,7 +900,7 @@ let private canonicalPairCardinalityThreeFilesTest =
         try
             let canonical = seedExistingAA repo
 
-            let ops, _ =
+            let ops, calls =
                 buildOps canonical NoCommitFault
 
             let threeFiles =
@@ -918,6 +922,15 @@ let private canonicalPairCardinalityThreeFilesTest =
                 Expect.equal report.RecoveryState AtomicRecoveryState.NeverModified "three-file failure is NeverModified"
             | _ ->
                 failwithf "expected Failed for three files, got %A" result
+
+            // Cardinality rejection must fire BEFORE any staging, snapshot, or
+            // canonical I/O.  Assert the seam was never touched and no canonical
+            // bytes were changed.
+            Expect.isEmpty (List.ofSeq calls) "no seam calls observed before cardinality rejection"
+
+            let postA, postB = canonicalBytes canonical
+            Expect.equal postA "candidate-A"B "canonical candidate unchanged"
+            Expect.equal postB "summary-A"B "canonical summary unchanged"
         finally
             cleanupDir repo
 

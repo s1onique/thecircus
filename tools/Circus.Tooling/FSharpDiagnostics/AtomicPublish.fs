@@ -40,10 +40,13 @@ module Circus.Tooling.FSharpDiagnostics.AtomicPublish
 //      DeleteFile(new canonical) when the previous canonical file was
 //      absent.
 //
-// Path discipline:
-//   Staging, backup, and canonical paths are all siblings under
-//   `parent(canonicalDir)`.  No staging or backup is placed under
-//   `Path.GetTempPath()` or `/tmp`.
+// Path discipline (Correction06B reviewer-verified):
+//   - staging directory is a sibling of canonicalDir (same parent filesystem)
+//   - backup file is a SIBLING of the canonical FILE (lives inside canonicalDir)
+//   - canonical, staging, and backup are therefore all on the same
+//     filesystem tree; `File.Replace` requires this for its atomic swap
+//     semantics.  No staging or backup is placed under
+//     `Path.GetTempPath()` or `/tmp`.
 
 open System
 open System.IO
@@ -944,12 +947,16 @@ let publishWithDependencies
                             with _ ->
                                 Error()
 
-                        let postSnap =
+                        // Post-rollback observation: when the post-rollback snapshot
+                        // succeeded, compare byte-for-byte against the pre-snapshot.
+                        // When it FAILED (postSnapResult = Error), we MUST NOT
+                        // fabricate byte identity by falling back to preSnap; the
+                        // only honest value for CanonicalByteIdenticalAfterFailure
+                        // is `false` until a proper post-state observation succeeds.
+                        let preserved =
                             match postSnapResult with
-                            | Ok s -> s
-                            | Error () -> preSnap
-
-                        let preserved = canonicalBytesPreserved preSnap postSnap
+                            | Ok post -> canonicalBytesPreserved preSnap post
+                            | Error () -> false
                         // When no rollback was attempted, the canonical
                         // state is unchanged (NeverModified).  When
                         // rollback was attempted and the bytes match the
