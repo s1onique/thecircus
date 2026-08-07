@@ -1027,6 +1027,155 @@ let private buildOpsWithMissingBackup
         }
     ops, calls
 
+// -----------------------------------------------------------------------------
+// Install mutates, then throws (post-mutation failure)
+// -----------------------------------------------------------------------------
+//
+// `File.Replace` is documented as atomic on a single volume, but the seam
+// is precisely what guards against an implementation that mutates the
+// destination and then throws BEFORE writing the backup.  When that
+// happens, the canonical state has been changed but the rollback never
+// runs (because no backup was created and the commit reported failure).
+// The honest recovery state is therefore MayHaveChanged — NOT
+// NeverModified, even though rollback was never attempted.
+
+type private CommitFaultV2 =
+    | NoCommitFaultV2
+    | MutateThenThrowCandidate
+    | MutateThenThrowSummary
+
+let private buildOpsV2
+    (canonicalDir : string)
+    (fault : CommitFaultV2)
+    : AtomicPublishOps * ResizeArray<Op> =
+    let calls = ResizeArray<Op> ()
+
+    let openWriteImpl (path : string) : IAtomicWriteHandle =
+        let label = Path.GetFileName path
+        calls.Add(OpenWrite label)
+
+        let fs =
+            new FileStream(
+                path,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.Read,
+                bufferSize = 4096,
+                useAsync = false)
+
+        upcast new RecordingWriteHandle(calls, label, fs)
+
+    let readImpl (path : string) : byte[] =
+        let label = Path.GetFileName path
+        let canonicalPrefix = canonicalDir + string Path.DirectorySeparatorChar
+        if path.StartsWith(canonicalPrefix, StringComparison.Ordinal) then
+            calls.Add(SnapshotRead label)
+        else
+            calls.Add(ReadBytes label)
+        File.ReadAllBytes path
+
+    let createDirImpl (path : string) =
+        calls.Add(CreateDirectory path)
+        Directory.CreateDirectory(path) |> ignore
+
+    let fileExistsImpl (path : string) : bool =
+        let label = Path.GetFileName path
+        calls.Add(FileExists label)
+        File.Exists path
+
+    let moveFileImpl (source : string) (_dest : string) : unit =
+        let sourceLabel = Path.GetFileName source
+        calls.Add(MoveFile sourceLabel)
+        File.Move(source, _dest)
+
+    let replaceFileImpl (source : string) (_dest : string) (_backup : string) : unit =
+        let sourceLabel = Path.GetFileName source
+        calls.Add(ReplaceFile sourceLabel)
+
+        // Post-mutation failure simulation.  We perform the equivalent of
+        // the first half of File.Replace (move source onto destination,
+        // mutating the canonical state) and then throw before creating the
+        // backup.  In a real implementation this is exactly the state a
+        // failing File.Replace could leave behind on some platforms.
+        match fault, sourceLabel with
+        | MutateThenThrowCandidate, candidateFileName ->
+            File.Copy(source, _dest, overwrite = true)
+            File.Delete(source)
+            raise (IOException("injected post-mutation candidate fault"))
+        | MutateThenThrowSummary, summaryFileName ->
+            File.Copy(source, _dest, overwrite = true)
+            File.Delete(source)
+            raise (IOException("injected post-mutation summary fault"))
+        | _ ->
+            File.Replace(source, _dest, _backup)
+
+    let deleteFileImpl (path : string) : unit =
+        let label = Path.GetFileName path
+        calls.Add(DeleteFile label)
+        File.Delete path
+
+    let ops =
+        {
+          CreateDirectory = createDirImpl
+          OpenWrite = openWriteImpl
+          ReadAllBytes = readImpl
+          FileExists = fileExistsImpl
+          MoveFile = moveFileImpl
+          ReplaceFile = replaceFileImpl
+          DeleteFile = deleteFileImpl
+        }
+    ops, calls
+
+let private mutateThenThrowCandidateInstallTest =
+    testCase "install mutates then throws (post-mutation candidate fault) -> MayHaveChanged, NOT NeverModified"
+    <| fun () ->
+        assertABDistinction ()
+
+        let repo = newTempRepo ()
+
+        try
+            let canonical = seedExistingAA repo
+            let ops, calls =
+                buildOpsV2 canonical MutateThenThrowCandidate
+
+            let result =
+                publishWithDependencies ops canonical (stagedPendingFiles ())
+
+            match result with
+            | AtomicPublishResult.Failed report ->
+                Expect.hasLength report.Failures 1 "exactly one install failure"
+                let failure = report.Failures.[0]
+                Expect.equal failure.Phase AtomicPublishPhase.Install "phase is install"
+
+                // The candidate canonical file was mutated (now contains
+                // staged body) BEFORE the install threw.  No rollback ran
+                // because no backup existed to restore from.  The honest
+                // recovery state is therefore MayHaveChanged — NOT
+                // NeverModified, even though rollback was never attempted.
+                Expect.equal
+                    report.CanonicalByteIdenticalAfterFailure
+                    false
+                    "canonical pair no longer matches pre-snapshot"
+                Expect.equal
+                    report.RecoveryState
+                    AtomicRecoveryState.MayHaveChanged
+                    "post-mutation install failure must be MayHaveChanged, not NeverModified"
+
+                // And the canonical file on disk is now the staged body
+                // (the mutation succeeded but the install reported failure).
+                let onDiskCandidate =
+                    File.ReadAllBytes(Path.Combine(canonical, candidateFileName))
+                let expectedStaged =
+                    System.Text.Encoding.UTF8.GetBytes(stagedCandidateBBytes + "\n")
+                Expect.equal
+                    onDiskCandidate
+                    expectedStaged
+                    "candidate canonical now contains the staged bytes"
+            | _ ->
+                failwithf "expected Failed for post-mutation candidate fault, got %A" result
+        finally
+            cleanupDir repo
+
 let private missingBackupRollbackTest =
     testCase "rollback surfaces typed failure when destination backup is missing (cannot silently no-op)"
     <| fun () ->
@@ -1091,4 +1240,5 @@ let commitRollbackSeamTests =
           canonicalPairCardinalityEmptyTest
           canonicalPairCardinalityOneFileTest
           canonicalPairCardinalityThreeFilesTest
-          missingBackupRollbackTest ]
+          missingBackupRollbackTest
+          mutateThenThrowCandidateInstallTest ]

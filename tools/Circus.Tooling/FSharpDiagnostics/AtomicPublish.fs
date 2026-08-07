@@ -963,35 +963,48 @@ let publishWithDependencies
                         // pre-snapshot, the canonical state was
                         // RestoredByteIdentical.
                         // Recovery-state semantics:
-                        //   - rollback not attempted + canonical bytes
-                        //     unchanged  -> NeverModified
-                        //   - rollback attempted + canonical bytes
-                        //     match pre-snapshot -> RestoredByteIdentical
-                        //   - rollback attempted + canonical bytes differ
-                        //     from pre-snapshot -> MayHaveChanged
-                        //   - rollback attempted + post-rollback snapshot
-                        //     could not be observed at all -> MayHaveChanged
-                        // NeverModified MUST NOT be returned for any state
-                        // that has been mutated, whether or not the
-                        // mutation was successfully reverted.
+                        //   - post-state observed, equals pre-state, rollback
+                        //     was not required -> NeverModified
+                        //   - post-state observed, equals pre-state, rollback
+                        //     was attempted -> RestoredByteIdentical
+                        //   - post-state observed, differs from pre-state ->
+                        //     MayHaveChanged
+                        //   - post-state could not be observed at all ->
+                        //     MayHaveChanged
+                        //
+                        // Invariant: NeverModified implies "post-state was
+                        // observed and equals pre-state"; it MUST NOT be
+                        // returned for any state that was mutated, whether
+                        // or not the mutation was successfully reverted.
                         let recoveryState =
-                            match postSnapResult, rollbackAttempted with
-                            | Error (), _ ->
-                                // Post-rollback observation failed.  The
-                                // canonical pair may have been mutated by
-                                // the failed commit; we cannot truthfully
+                            match postSnapResult with
+                            | Error () ->
+                                // Post-rollback observation failed entirely.
+                                // The canonical pair may have been mutated by
+                                // the failed commit and we cannot truthfully
                                 // claim NeverModified.
+                                AtomicRecoveryState.MayHaveChanged
+
+                            | Ok post ->
+                                let postMatchesPre =
+                                    canonicalBytesPreserved preSnap post
+
                                 if rollbackAttempted then
-                                    AtomicRecoveryState.MayHaveChanged
+                                    if postMatchesPre then
+                                        AtomicRecoveryState.RestoredByteIdentical
+                                    else
+                                        AtomicRecoveryState.MayHaveChanged
                                 else
-                                    AtomicRecoveryState.NeverModified
-                            | Ok _, false ->
-                                AtomicRecoveryState.NeverModified
-                            | Ok post, true ->
-                                if canonicalBytesPreserved preSnap post then
-                                    AtomicRecoveryState.RestoredByteIdentical
-                                else
-                                    AtomicRecoveryState.MayHaveChanged
+                                    // No rollback was attempted.  The
+                                    // canonical state could still be unchanged
+                                    // (the install threw before mutating) OR
+                                    // it could be changed (the install threw
+                                    // AFTER mutating).  We must rely on the
+                                    // observed post-state to decide.
+                                    if postMatchesPre then
+                                        AtomicRecoveryState.NeverModified
+                                    else
+                                        AtomicRecoveryState.MayHaveChanged
 
                         AtomicPublishResult.Failed
                             { Failures = commitFailures
