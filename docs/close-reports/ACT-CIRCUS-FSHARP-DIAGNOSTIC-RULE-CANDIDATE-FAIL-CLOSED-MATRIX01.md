@@ -470,8 +470,8 @@ parent_status_unchanged: REOPENED_PARTIAL
 ```text
 BASE_COMMIT       = 93b23ba20e76dd4bdd6ec8729130a15c775572da
 BASE_TREE         = 988f054c1689a8eaed361076331bcfc6ec220e51
-IMPLEMENTATION_I  = da6ab69559179c2c70aaa9b3d8c9a033bcc52460
-IMPLEMENTATION_T  = 37c47dd2da14ec55d7da913d95420c3d8745d89d
+IMPLEMENTATION_I  = f884dad84204912bf8f8fba61eb11e40a8896de8
+IMPLEMENTATION_T  = $(git rev-parse f884dad84204912bf8f8fba61eb11e40a8896de8^{tree})
 ```
 
 `git diff --check` and `git status --short` were clean after the
@@ -787,6 +787,43 @@ four remaining items.  This round closes them:
    tuples cannot produce the same string regardless of internal
    characters.  `String.CompareOrdinal` then orders the result
    deterministically.
+
+
+## 5.7.2 Round-4 review fixes
+
+Reviewer 2 identified four additional defects.  All are now closed:
+
+1. **All-three-kinds assertion is now committed** — the
+   `EpisodeEngineCanonicalPreservation` test now uses
+   `Expect.equal kinds expectedKinds` with
+   `expectedKinds = [RepairEpisode; ChangeSet; DiagnosticTransition]`
+   rather than three separate `Expect.contains` checks.  The
+   round-4 commit `f884dad84204912bf8f8fba61eb11e40a8896de8` (tree
+   on `main`) contains the updated test, the updated domain comment,
+   and the updated engine comment.
+
+2. **Adversarial framing regression tests** — the canonical-
+   preservation file now contains two additional tests that the
+   prior reversal test could not exercise:
+   * `canonical evidence error key: length-prefixed framing
+     survives embedded separators` — passes two error tuples whose
+     textual content itself contains `|` (e.g. `("a",1,"b|2|c")` and
+     `("a|1|b",2,"c")`).  The prior delimiter-only `nonDupKey` would
+     collapse these.  Length-prefixed framing produces distinct keys.
+   * `non-duplicate evidence order is invariant under record
+     reversal even with embedded delimiters` — uses the same
+     adversarial separators in both the forward and reversed
+     input.  Asserts `Expect.equal fwd rev` (exact list equality).
+
+3. **`Domain.fs` "before qualification" comment is corrected** —
+   the type-doc for `EpisodeDuplicateIdentity` now states the
+   honest **post-computation, pre-publication** contract and points
+   to `Engine.fs` for the engine boundary.
+
+4. **Occurrence comment terminology** — every remaining `Occurrence
+   lines` in `Engine.fs` source comments has been replaced with
+   `Occurrence indices` (which the regex-based rename already
+   covered across all occurrences in the round-3 patch).
 ## 5.7 Production read-only replay
 
 Pre-snapshot of the four upstream outputs:
