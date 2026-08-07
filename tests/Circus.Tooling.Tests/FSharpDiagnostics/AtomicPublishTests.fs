@@ -50,10 +50,12 @@ let tests =
               try
                   let files =
                       [ { CanonicalFileName = "a.txt"
+                          Body = "initial\n" }
+                        { CanonicalFileName = "b.txt"
                           Body = "initial\n" } ]
 
                   let _ = publish canonical true false files
-                  // Initial file written.
+                  // Initial files written.
                   let afterFirstWrite = File.ReadAllBytes(Path.Combine(canonical, "a.txt"))
                   let expectedBytes = System.Text.Encoding.UTF8.GetBytes "initial\n"
                   Expect.equal afterFirstWrite expectedBytes "first write present"
@@ -61,6 +63,8 @@ let tests =
                   // (this ACT always allows successful updates).
                   let files2 =
                       [ { CanonicalFileName = "a.txt"
+                          Body = "replacement\n" }
+                        { CanonicalFileName = "b.txt"
                           Body = "replacement\n" } ]
 
                   let outcome2 = publish canonical true false files2

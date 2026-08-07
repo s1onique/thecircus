@@ -186,10 +186,18 @@ let private buildRecordingOps (canonicalDir: string) (fault: FaultPhase) : Atomi
             with _ -> pathStr
         calls.Add("read:" + label)
 
-        match fault with
-        | FirstVerifyFault when label = "a.json" ->
+        // Faults are injected only on staging-path reads (verify-after-write),
+        // NOT on canonical-path reads (snapshot).  Snapshot must succeed so
+        // the staging path can proceed and the verify-after-write phase
+        // actually fires.
+        let isCanonicalPath =
+            let pathParent = Path.GetDirectoryName path
+            pathParent = canonicalDir
+
+        match fault, isCanonicalPath with
+        | FirstVerifyFault, false when label = "a.json" ->
             raise (IOException("injected read fault for " + label))
-        | SecondVerifyFault when label = "b.json" ->
+        | SecondVerifyFault, false when label = "b.json" ->
             raise (IOException("injected read fault for " + label))
         | _ -> File.ReadAllBytes path
 
@@ -205,6 +213,10 @@ let private buildRecordingOps (canonicalDir: string) (fault: FaultPhase) : Atomi
           CreateDirectory = createDirImpl
           OpenWrite = openWriteImpl
           ReadAllBytes = readImpl
+          FileExists = fun (path: string) -> File.Exists path
+          MoveFile = fun (source: string) (dest: string) -> File.Move(source, dest)
+          ReplaceFile = fun (source: string) (dest: string) (backup: string) -> File.Replace(source, dest, backup)
+          DeleteFile = fun (path: string) -> File.Delete path
         }
     ops, calls
 
@@ -320,8 +332,17 @@ let private faultTest (fault: FaultPhase) =
                     opsCalls
                     |> List.findIndex (fun c -> c = "a.json:flush")
                 | FirstVerifyFault ->
+                    // Snapshot reads canonical/a.json first, then verify-after-write
+                    // reads staging/a.json.  Find the SECOND occurrence.
+                    let mutable count = 0
                     opsCalls
-                    |> List.findIndex (fun c -> c = "read:a.json")
+                    |> List.findIndex (fun c ->
+                        if c = "read:a.json" then
+                            // increment BEFORE check so first occurrence has count=1
+                            count <- count + 1
+                            count = 2
+                        else
+                            false)
                 | SecondOpenFault ->
                     opsCalls
                     |> List.findIndex (fun c -> c = "open:b.json")
@@ -332,8 +353,17 @@ let private faultTest (fault: FaultPhase) =
                     opsCalls
                     |> List.findIndex (fun c -> c = "b.json:flush")
                 | SecondVerifyFault ->
+                    // Snapshot reads canonical/b.json first, then verify-after-write
+                    // reads staging/b.json.  Find the SECOND occurrence.
+                    let mutable count = 0
                     opsCalls
-                    |> List.findIndex (fun c -> c = "read:b.json")
+                    |> List.findIndex (fun c ->
+                        if c = "read:b.json" then
+                            // increment BEFORE check so first occurrence has count=1
+                            count <- count + 1
+                            count = 2
+                        else
+                            false)
                 | NoneFault -> -1
 
             let faultCallIndex = findFaultCall ()
@@ -507,7 +537,11 @@ let private stagingParentTest =
             let ops =
                 { CreateDirectory = captureCreate
                   OpenWrite = noopOpen
-                  ReadAllBytes = noopRead }
+                  ReadAllBytes = noopRead
+                  FileExists = fun (_: string) -> false
+                  MoveFile = fun (_: string) (_: string) -> ()
+                  ReplaceFile = fun (_: string) (_: string) (_: string) -> ()
+                  DeleteFile = fun (_: string) -> () }
 
             let _ =
                 publishWithDependencies ops canonical (stagedPendingFiles ())
@@ -560,7 +594,17 @@ let private operationOrderTest =
             let iWriteA = opsCalls |> List.findIndex (fun x -> x = "a.json:write")
             let iFlushA = opsCalls |> List.findIndex (fun x -> x = "a.json:flush")
             let iDisposeA = opsCalls |> List.findIndex (fun x -> x = "a.json:dispose")
-            let iReadA = opsCalls |> List.findIndex (fun x -> x = "read:a.json")
+            // Snapshot reads canonical/a.json first; the verify-after-write
+            // read is the SECOND occurrence of "read:a.json".
+            let mutable count = 0
+            let iReadA =
+                opsCalls
+                |> List.findIndex (fun x ->
+                    if x = "read:a.json" then
+                        count <- count + 1
+                        count = 2
+                    else
+                        false)
             let iOpenB = opsCalls |> List.findIndex (fun x -> x = "open:b.json")
 
             Expect.isTrue (iOpenA < iWriteA) "open:a.json precedes write:a.json"

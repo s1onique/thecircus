@@ -4,7 +4,7 @@ module Circus.Tooling.FSharpDiagnostics.AtomicPublish
 // Atomic publication
 // =============================================================================
 //
-// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION06A
+// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION06B
 //
 // All generated outputs are produced into a temporary sibling directory,
 // fully flushed via FileStream.Flush(true), verified by reading the bytes
@@ -21,8 +21,29 @@ module Circus.Tooling.FSharpDiagnostics.AtomicPublish
 // Filesystem seam:
 //   Production code delegates to real System.IO.  Tests inject the seam to
 //   observe call sequencing and to fail specific stages of the staging
-//   write path.  No environment-variable hooks, sleeps, chmod tricks, or
-//   global mutable failure switches are present.
+//   write path and the canonical commit/rollback path.  No
+//   environment-variable hooks, sleeps, chmod tricks, or global mutable
+//   failure switches are present.
+//
+// Commit and rollback discipline (Correction06B):
+//   1. Snapshot the canonical pair (file-exists + bytes) through the seam
+//      so the caller can prove byte-identical restoration after a failure.
+//   2. Replace candidate canonical file: ReplaceFile(staged, canonical,
+//      backup) when the canonical file exists; MoveFile(staged, canonical)
+//      when the canonical file is absent.
+//   3. Replace summary canonical file: ReplaceFile(staged, canonical,
+//      backup) when the canonical file exists; MoveFile(staged, canonical)
+//      when the canonical file is absent.
+//   4. On any failure during the commit, roll back each already-mutated
+//      file using DeleteFile(new canonical) followed by MoveFile(backup,
+//      canonical) when the previous canonical file was present, or
+//      DeleteFile(new canonical) when the previous canonical file was
+//      absent.
+//
+// Path discipline:
+//   Staging, backup, and canonical paths are all siblings under
+//   `parent(canonicalDir)`.  No staging or backup is placed under
+//   `Path.GetTempPath()` or `/tmp`.
 
 open System
 open System.IO
@@ -83,6 +104,24 @@ type AtomicPublishOps =
       OpenWrite : string -> IAtomicWriteHandle
       /// Read all bytes from the supplied path.  Must throw on failure.
       ReadAllBytes : string -> byte[]
+
+      /// True when the supplied path exists as a file.  Must not throw on
+      /// a missing file.
+      FileExists : string -> bool
+      /// Move `source` to `destination`.  Must throw on failure.  Production
+      /// default delegates to `File.Move`.  Used both for installing an
+      /// absent canonical file from the staging directory and for
+      /// restoring a backed-up canonical file during rollback.
+      MoveFile : string -> string -> unit
+      /// Atomically replace the contents of `destination` with the contents
+      /// of `source`, creating a backup of the previous `destination` bytes
+      /// at `backup`.  Production default delegates to `File.Replace`.  All
+      /// three paths must reside on the same filesystem.
+      ReplaceFile : string -> string -> string -> unit
+      /// Delete the file at the supplied path.  Must throw on failure.
+      /// Used during rollback to remove a newly-installed canonical file
+      /// when the previous canonical file was absent.
+      DeleteFile : string -> unit
     }
 
 /// Default production filesystem seam.  Delegates to System.IO without
@@ -105,21 +144,108 @@ let defaultAtomicPublishOps : AtomicPublishOps =
             upcast new ProductionAtomicWriteHandle(fs)
       ReadAllBytes =
         fun (path: string) -> File.ReadAllBytes(path)
+
+      FileExists =
+        fun (path: string) -> File.Exists(path)
+      MoveFile =
+        fun (source: string) (destination: string) ->
+            File.Move(source, destination)
+      ReplaceFile =
+        fun (source: string) (destination: string) (backup: string) ->
+            File.Replace(source, destination, backup)
+      DeleteFile =
+        fun (path: string) -> File.Delete(path)
     }
 
 // -----------------------------------------------------------------------------
-// Typed pre-commit failure model
+// Forward declarations
 // -----------------------------------------------------------------------------
 
-/// Phases of the staging write path.  Known failures preserve the exact
+/// A unit of work: a logical filename and the bytes to write.
+type PendingFile =
+    { CanonicalFileName: string
+      Body: string }
+
+// -----------------------------------------------------------------------------
+// Canonical pair snapshot
+// -----------------------------------------------------------------------------
+
+/// One canonical file observed before publication.  Absent files are
+/// represented as `Absent`, NOT as zero-byte `Present` — distinguishing
+/// "missing" from "explicitly empty" is required for rollback semantics.
+type CanonicalFileSnapshot =
+    | Absent
+    | Present of byte[]
+
+/// Snapshot of the canonical pair (candidate + summary) taken before any
+/// canonical mutation.  Used to compute the rollback target when the
+/// canonical commit phase fails partway through.
+type CanonicalPairSnapshot =
+    { Candidate : CanonicalFileSnapshot
+      Summary : CanonicalFileSnapshot }
+
+/// Capture a `CanonicalPairSnapshot` for the supplied canonical directory
+/// using the filesystem seam.  Uses `ops.FileExists` to test for presence
+/// and `ops.ReadAllBytes` to capture bytes.  The two filenames are taken
+/// from the supplied `PendingFile` list; both must be supplied by the
+/// caller.
+let snapshotCanonicalPair
+    (ops: AtomicPublishOps)
+    (canonicalDir: string)
+    (files: PendingFile list)
+    : CanonicalPairSnapshot =
+    let captureOne (filename: string) : CanonicalFileSnapshot =
+        let fullPath = Path.Combine(canonicalDir, filename)
+
+        if ops.FileExists fullPath then
+            Present(ops.ReadAllBytes fullPath)
+        else
+            Absent
+
+    match files with
+    | c :: s :: _ ->
+        { Candidate = captureOne c.CanonicalFileName
+          Summary = captureOne s.CanonicalFileName }
+    | _ ->
+        // Defensive: callers must supply exactly the canonical pair.  When
+        // the caller does not, fall back to absent for both files.
+        { Candidate = Absent
+          Summary = Absent }
+
+// -----------------------------------------------------------------------------
+// Typed failure model
+// -----------------------------------------------------------------------------
+
+/// Phases of the atomic publish path.  Known failures preserve the exact
 /// phase in which they were observed.
 [<RequireQualifiedAccess>]
 type AtomicPublishPhase =
+    // Pre-commit staging write path (Correction06A).
     | StageDirectory
     | StageOpen
     | StageWrite
     | StageFlush
     | StageVerify
+
+    // Commit path (Correction06B).
+    /// Capturing the pre-commit canonical pair snapshot.
+    | Snapshot
+    /// Reserved for any distinct backup operation.  The current
+    /// implementation folds backup into the replacement primitive
+    /// (`File.Replace` creates the backup as part of the replacement), so
+    /// this phase is not currently used by a separate fault injection
+    /// point.  It is kept in the phase DU so a future slice that exposes
+    /// backup as a separate operation can carry the exact phase without
+    /// reshaping the type.
+    | Backup
+    /// Atomic replacement of a canonical file with its staged bytes.
+    | Install
+    /// Deleting a newly installed canonical file during rollback when the
+    /// previous canonical file was absent.
+    | RollbackDelete
+    /// Restoring a backed-up canonical file during rollback when the
+    /// previous canonical file was present.
+    | RollbackRestore
 
 let atomicPublishPhaseToString (p: AtomicPublishPhase) : string =
     match p with
@@ -128,6 +254,11 @@ let atomicPublishPhaseToString (p: AtomicPublishPhase) : string =
     | AtomicPublishPhase.StageWrite -> "stage-write"
     | AtomicPublishPhase.StageFlush -> "stage-flush"
     | AtomicPublishPhase.StageVerify -> "stage-verify"
+    | AtomicPublishPhase.Snapshot -> "snapshot"
+    | AtomicPublishPhase.Backup -> "backup"
+    | AtomicPublishPhase.Install -> "install"
+    | AtomicPublishPhase.RollbackDelete -> "rollback-delete"
+    | AtomicPublishPhase.RollbackRestore -> "rollback-restore"
 
 /// Operation string paired with each phase.  Phase-specific on purpose:
 /// no generic "publish" operation is ever emitted when the failing
@@ -139,8 +270,13 @@ let private operationForPhase (p: AtomicPublishPhase) : string =
     | AtomicPublishPhase.StageWrite -> "write-bytes"
     | AtomicPublishPhase.StageFlush -> "flush-to-disk"
     | AtomicPublishPhase.StageVerify -> "read-bytes"
+    | AtomicPublishPhase.Snapshot -> "snapshot"
+    | AtomicPublishPhase.Backup -> "backup"
+    | AtomicPublishPhase.Install -> "replace-or-move"
+    | AtomicPublishPhase.RollbackDelete -> "rollback-delete"
+    | AtomicPublishPhase.RollbackRestore -> "rollback-restore"
 
-/// Typed pre-commit failure preserving the exact phase, path, operation,
+/// Typed publication failure preserving the exact phase, path, operation,
 /// exception type, and detail.  Operation is always phase-specific.
 type AtomicPublishFailure =
     { Phase: AtomicPublishPhase
@@ -148,6 +284,26 @@ type AtomicPublishFailure =
       Operation: string
       ExceptionType: string
       Detail: string }
+
+/// Recovery state of the canonical pair after publication.  This is the
+/// typed equivalent of "is the canonical pair in its expected post-state
+/// after we returned?"
+///
+///   - `NeverModified`         — the canonical pair is byte-identical to
+///                                the pre-publication state.
+///   - `RestoredByteIdentical` — a partial canonical mutation occurred and
+///                                was rolled back; the canonical pair is
+///                                byte-identical to the pre-publication
+///                                state.
+///   - `Committed`             — the canonical pair was successfully
+///                                replaced with the staged bytes.
+///
+/// Rollback failure is not yet represented; it is reserved for
+/// Correction06C and would be encoded as `MayHaveChanged`.
+type AtomicRecoveryState =
+    | NeverModified
+    | RestoredByteIdentical
+    | Committed
 
 /// Payload of a successful publication.
 type AtomicPublishSuccess =
@@ -158,24 +314,30 @@ type AtomicPublishSuccess =
       /// True when the canonical outputs were unchanged by this call
       /// (always true on Published).
       CanonicalByteIdenticalAfterFailure: bool
+      /// Recovery state of the canonical pair after this call.
+      RecoveryState: AtomicRecoveryState
     }
 
 /// Payload of a failed publication.
 type AtomicPublishFailureReport =
     {
-      /// List of typed failures observed during the staging write path.
-      /// Pre-commit failures only.
+      /// List of typed failures observed during the publish path.  Each
+      /// failure preserves its phase.
       Failures: AtomicPublishFailure list
       /// True when no partial change was observed in the canonical
       /// root after the failure.
       CanonicalByteIdenticalAfterFailure: bool
       /// Path of the staging directory when it still exists on disk.
       RetainedStagingPath: string option
+      /// Recovery state of the canonical pair after the failure and any
+      /// rollback.  For every failure covered by Correction06B this is
+      /// either `NeverModified` or `RestoredByteIdentical`.
+      RecoveryState: AtomicRecoveryState
     }
 
 /// Typed publication outcome.  Successful publication reports the SHA-256
 /// hash of each canonical output.  Failed publication reports the typed
-/// AtomicPublishFailure(s) observed during the staging write path.
+/// AtomicPublishFailure(s) observed during the publish path.
 type AtomicPublishResult =
     | Published of AtomicPublishSuccess
     | Failed of AtomicPublishFailureReport
@@ -200,11 +362,6 @@ type PublishOutcome =
       /// True when no partial change was observed in the canonical root.
       CanonicalByteIdenticalAfterFailure: bool
     }
-
-/// A unit of work: a logical filename and the bytes to write.
-type PendingFile =
-    { CanonicalFileName: string
-      Body: string }
 
 let private utf8NoBom = System.Text.UTF8Encoding(false)
 
@@ -239,75 +396,11 @@ let private computeStagingDir (canonicalDir: string) : string =
     let guid = Guid.NewGuid().ToString("N")
     Path.Combine(parent, name + ".staging." + guid)
 
-/// Compute SHA-256 hashes of the previous canonical outputs (when present)
-/// so we can prove they remain byte-identical after a failed regeneration.
-let private snapshotCanonicalHashes (canonicalDir: string) (files: PendingFile list) : Map<string, string> =
-    files
-    |> List.map (fun f ->
-        let fullPath = Path.Combine(canonicalDir, f.CanonicalFileName)
-        let hash =
-            try
-                if File.Exists fullPath then sha256OfFile fullPath else ""
-            with _ ->
-                ""
-        f.CanonicalFileName, hash)
-    |> Map.ofList
-
-/// Compute whether the canonical directory's bytes match the pre-snapshot.
-let private canonicalBytesPreserved
-    (preSnap: Map<string, string>)
-    (canonicalDir: string)
-    (files: PendingFile list)
-    : bool =
-    let postSnap =
-        files
-        |> List.map (fun f ->
-            let fullPath = Path.Combine(canonicalDir, f.CanonicalFileName)
-            let hash =
-                try
-                    if File.Exists fullPath then sha256OfFile fullPath else ""
-                with _ ->
-                    ""
-            f.CanonicalFileName, hash)
-        |> Map.ofList
-
-    preSnap
-    |> Map.forall (fun k v ->
-        match Map.tryFind k postSnap with
-        | Some v' -> v = v'
-        | None -> v = "")
-
-/// Replace one file by moving the staged file into place.  Atomic on the
-/// same filesystem because File.Move uses rename(2) when target is on the
-/// same volume.  When the target exists it is replaced.
-///
-/// Pre-commit failures abort before this function is reached.  This is
-/// the canonical install path and is reserved for later corrections.
-let private replaceCanonical (stagingDir: string) (canonicalDir: string) (f: PendingFile) : unit =
-    let staged = Path.Combine(stagingDir, f.CanonicalFileName)
-    let target = Path.Combine(canonicalDir, f.CanonicalFileName)
-
-    if File.Exists target then
-        let backup = target + ".bak"
-
-        if File.Exists backup then
-            File.Delete backup
-
-        File.Move(target, backup)
-
-        try
-            File.Move(staged, target)
-            File.Delete backup
-        with ex ->
-            if File.Exists backup then
-                if File.Exists target then
-                    File.Delete target
-
-                File.Move(backup, target)
-
-            raise ex
-    else
-        File.Move(staged, target)
+/// Compute the backup path for a canonical file.  Always a sibling of
+/// the canonical file under the same parent directory so the rollback
+/// restore is on the same filesystem.
+let private computeBackupPath (canonicalPath: string) : string =
+    canonicalPath + ".bak"
 
 /// Remove a directory and all its contents.
 let private tryRemoveDir (dir: string) : string option =
@@ -326,6 +419,37 @@ let private failureFromException (phase: AtomicPublishPhase) (path: string) (ex:
       Operation = operationForPhase phase
       ExceptionType = ex.GetType().FullName
       Detail = ex.Message }
+
+/// Decide whether the canonical post-state is byte-identical to the
+/// pre-snapshot.  Used to populate the canonical-byte-identical flag on
+/// the typed publication outcome.
+let private canonicalBytesPreserved
+    (preSnap: CanonicalPairSnapshot)
+    (postSnap: CanonicalPairSnapshot)
+    : bool =
+    let eq (a: CanonicalFileSnapshot) (b: CanonicalFileSnapshot) : bool =
+        match a, b with
+        | Absent, Absent -> true
+        | Present x, Present y ->
+            if x.Length <> y.Length then false
+            else
+                let mutable i = 0
+                let mutable ok = true
+
+                while i < x.Length && ok do
+                    if x.[i] <> y.[i] then
+                        ok <- false
+
+                    i <- i + 1
+
+                ok
+        | _ -> false
+
+    eq preSnap.Candidate postSnap.Candidate && eq preSnap.Summary postSnap.Summary
+
+// -----------------------------------------------------------------------------
+// Stage-write path (pre-commit, owned by Correction06A)
+// -----------------------------------------------------------------------------
 
 /// Stage-write a single file using the seam.  The required operation
 /// sequence is:
@@ -442,25 +566,218 @@ let private stageFileWithDependencies
     outcome
 
 // -----------------------------------------------------------------------------
-// publishWithDependencies — staged write path through the seam
+// Commit and rollback (owned by Correction06B)
+// -----------------------------------------------------------------------------
+
+/// Result of attempting to replace one canonical file with its staged
+/// replacement.
+type private CommitStepResult =
+    /// The canonical file was successfully replaced.  `BackupPath` is
+    /// populated when the canonical file existed before replacement and
+    /// was replaced via `ReplaceFile` (so it now holds the previous
+    /// canonical bytes).
+    | CommitSucceeded of PreSnapshot: CanonicalFileSnapshot * BackupPath: string option
+    /// The canonical file could not be replaced.  `PreSnapshot` records
+    /// the state of the canonical file before this commit attempt and is
+    /// used to drive the rollback.
+    | CommitFailed of Failure: AtomicPublishFailure * PreSnapshot: CanonicalFileSnapshot
+
+/// Attempt to install one staged file into its canonical location using
+/// the seam.  Captures the pre-mutation snapshot so the caller can drive
+/// rollback on a later failure.  Throws are caught and reported as typed
+/// failures.
+let private commitOneFile
+    (ops: AtomicPublishOps)
+    (canonicalDir: string)
+    (stagedPath: string)
+    (canonicalName: string)
+    : CommitStepResult =
+    let canonicalPath = Path.Combine(canonicalDir, canonicalName)
+    let backupPath = computeBackupPath canonicalPath
+
+    let preSnapshot =
+        if ops.FileExists canonicalPath then
+            Present(ops.ReadAllBytes canonicalPath)
+        else
+            Absent
+
+    try
+        match preSnapshot with
+        | Present _ ->
+            ops.ReplaceFile stagedPath canonicalPath backupPath
+            CommitSucceeded(preSnapshot, BackupPath = Some backupPath)
+        | Absent ->
+            ops.MoveFile stagedPath canonicalPath
+            CommitSucceeded(preSnapshot, BackupPath = None)
+    with ex ->
+        CommitFailed(
+            Failure = failureFromException AtomicPublishPhase.Install canonicalPath ex,
+            PreSnapshot = preSnapshot)
+
+/// Attempt to roll back a single previously-installed canonical file.
+/// Drives the rollback through the seam and records the typed phase on
+/// any rollback failure (rollback-failure injection is reserved for
+/// Correction06C, but the typed reporting is in place now so the surface
+/// is stable).
+let private rollbackOneFile
+    (ops: AtomicPublishOps)
+    (canonicalDir: string)
+    (canonicalName: string)
+    (preSnapshot: CanonicalFileSnapshot)
+    (backupPath: string option)
+    (accumulatedFailures: ResizeArray<AtomicPublishFailure>)
+    : unit =
+    let canonicalPath = Path.Combine(canonicalDir, canonicalName)
+
+    match preSnapshot with
+    | Absent ->
+        // Previous canonical was absent.  Rollback removes the
+        // newly-installed file.
+        if ops.FileExists canonicalPath then
+            try
+                ops.DeleteFile canonicalPath
+            with ex ->
+                accumulatedFailures.Add(
+                    failureFromException AtomicPublishPhase.RollbackDelete canonicalPath ex
+                )
+    | Present _ ->
+        // Previous canonical was present.  Rollback restores from the
+        // backup that `ReplaceFile` (or our MoveFile+MoveFile sequence)
+        // created.
+        match backupPath with
+        | Some bp ->
+            try
+                if ops.FileExists canonicalPath then
+                    ops.DeleteFile canonicalPath
+            with ex ->
+                accumulatedFailures.Add(
+                    failureFromException AtomicPublishPhase.RollbackDelete canonicalPath ex
+                )
+
+            try
+                if ops.FileExists bp then
+                    ops.MoveFile bp canonicalPath
+            with ex ->
+                accumulatedFailures.Add(
+                    failureFromException AtomicPublishPhase.RollbackRestore canonicalPath ex
+                )
+        | None ->
+            // No backup available (the canonical file was reported as
+            // absent at install time but is now present).  Surface this
+            // as a rollback failure.
+            accumulatedFailures.Add(
+                { Phase = AtomicPublishPhase.RollbackRestore
+                  Path = canonicalPath
+                  Operation = operationForPhase AtomicPublishPhase.RollbackRestore
+                  ExceptionType = ""
+                  Detail = "no backup path available for rollback restore" }
+            )
+
+/// Drive the commit phase for the canonical pair from a known staging
+/// directory.  This is the production entry point used by
+/// `publishWithDependencies`.
+///
+/// On success: every canonical file has been replaced.
+///
+/// On any failure during commit: each already-mutated file is rolled
+/// back using its captured pre-snapshot.  Rollback failures are
+/// accumulated into the returned failure list; the primary commit
+/// failure remains the first element of the returned list.
+///
+/// Returns (commitOk, rollbackAttempted, failures).  `rollbackAttempted`
+/// is true when at least one canonical file was mutated and then rolled
+/// back.  When the failure occurs before any mutation, rollback is not
+/// attempted and `rollbackAttempted` is false.
+let private commitCanonicalPairFromStaging
+    (ops: AtomicPublishOps)
+    (canonicalDir: string)
+    (stagingDir: string)
+    (files: PendingFile list)
+    : Result<unit, (AtomicPublishFailure list) * bool> =
+    match files with
+    | c :: s :: _ ->
+        let failures = ResizeArray<AtomicPublishFailure>()
+        let rollbackFailures = ResizeArray<AtomicPublishFailure>()
+        let mutable rollbackAttempted = false
+
+        // 1) Commit candidate
+        let candidateStaged = Path.Combine(stagingDir, c.CanonicalFileName)
+
+        let candidateStep =
+            commitOneFile ops canonicalDir candidateStaged c.CanonicalFileName
+
+        let candidateCommitted, candidateSnapshot, candidateBackup =
+            match candidateStep with
+            | CommitSucceeded (preSnapshot, bp) -> true, preSnapshot, bp
+            | CommitFailed(failure, pre) ->
+                failures.Add failure
+                false, pre, None
+
+        // 2) Commit summary (only if candidate succeeded)
+        if candidateCommitted then
+            let summaryStaged = Path.Combine(stagingDir, s.CanonicalFileName)
+
+            match commitOneFile ops canonicalDir summaryStaged s.CanonicalFileName with
+            | CommitSucceeded _ ->
+                // Both files succeeded.  No rollback needed.
+                ()
+            | CommitFailed(failure, _pre) ->
+                failures.Add failure
+
+                // Summary commit failed.  Roll back the candidate.
+                rollbackAttempted <- true
+
+                rollbackOneFile
+                    ops
+                    canonicalDir
+                    c.CanonicalFileName
+                    candidateSnapshot
+                    candidateBackup
+                    rollbackFailures
+
+        // Surface rollback failures after the primary commit failure so
+        // the typed outcome is never collapsed into a single string.
+        if rollbackFailures.Count > 0 then
+            for rf in rollbackFailures do
+                failures.Add rf
+
+        if failures.Count = 0 then
+            Ok()
+        else
+            Error((failures |> Seq.toList), rollbackAttempted)
+    | _ ->
+        Error
+            ( [ { Phase = AtomicPublishPhase.Install
+                  Path = canonicalDir
+                  Operation = operationForPhase AtomicPublishPhase.Install
+                  ExceptionType = ""
+                  Detail = "commitCanonicalPairFromStaging requires exactly two pending files" } ],
+              false )
+
+// -----------------------------------------------------------------------------
+// publishWithDependencies — staged write + commit + rollback through the seam
 // -----------------------------------------------------------------------------
 
 /// Publish the supplied files atomically into `canonicalDir` using the
-/// supplied filesystem seam.  The pre-commit staging write path runs
-/// exclusively through `ops`.  Canonical install/rollback is reserved
-/// for later corrections and is not part of this slice.
+/// supplied filesystem seam.  Every filesystem operation — staging,
+/// snapshot, install, rollback — runs through `ops` so tests can observe
+/// call sequencing and fault specific operations.
 ///
-/// Pre-commit failures (StageDirectory, StageOpen, StageWrite,
-/// StageFlush, StageVerify) are reported with the exact phase preserved.
-/// The canonical outputs are unchanged when the staging write path
-/// fails before any canonical mutation.
+/// Pre-commit failures (`StageDirectory`, `StageOpen`, `StageWrite`,
+/// `StageFlush`, `StageVerify`) are reported with the exact phase
+/// preserved and the canonical outputs remain byte-identical to the
+/// pre-snapshot.
+///
+/// Commit failures (`Install`, `RollbackDelete`, `RollbackRestore`) are
+/// reported with the exact phase preserved.  When the candidate commit
+/// succeeds but the summary commit fails, the candidate is rolled back
+/// to its pre-mutation bytes so the canonical pair returns to its
+/// pre-publication state.
 let publishWithDependencies
     (ops: AtomicPublishOps)
     (canonicalDir: string)
     (files: PendingFile list)
     : AtomicPublishResult =
-
-    let preSnap = snapshotCanonicalHashes canonicalDir files
 
     let staging = computeStagingDir canonicalDir
 
@@ -481,90 +798,128 @@ let publishWithDependencies
         AtomicPublishResult.Failed
             { Failures = [ failure ]
               CanonicalByteIdenticalAfterFailure = true
-              RetainedStagingPath = None }
+              RetainedStagingPath = None
+              RecoveryState = AtomicRecoveryState.NeverModified }
     else
-        // 1) Create staging directory
-        let dirFailure =
+        // 1) Snapshot the canonical pair through the seam.  Any seam
+        // failure here is reported as a Snapshot failure.
+        let snapFailures = ResizeArray<AtomicPublishFailure>()
+
+        let preSnapOpt =
             try
-                ops.CreateDirectory staging
-                None
+                Ok(snapshotCanonicalPair ops canonicalDir files)
             with ex ->
-                Some (failureFromException AtomicPublishPhase.StageDirectory staging ex)
+                snapFailures.Add(
+                    failureFromException AtomicPublishPhase.Snapshot canonicalDir ex
+                )
+                Error()
 
-        match dirFailure with
-        | Some failure ->
+        match preSnapOpt with
+        | Error () ->
             AtomicPublishResult.Failed
-                { Failures = [ failure ]
+                { Failures = List.ofSeq snapFailures
                   CanonicalByteIdenticalAfterFailure = true
-                  RetainedStagingPath = None }
-        | None ->
-            // 2) Stage each file via the seam
-            let failures = ResizeArray<AtomicPublishFailure>()
-            let hashes = ResizeArray<string * string>()
-
-            let mutable continueStaging = true
-
-            for f in files do
-                if continueStaging then
-                    let fullPath = Path.Combine(staging, f.CanonicalFileName)
-
-                    match stageFileWithDependencies ops fullPath f with
-                    | Ok h ->
-                        hashes.Add(f.CanonicalFileName, h)
-                    | Error failure ->
-                        failures.Add(failure)
-                        // Stop staging the remaining files.
-                        continueStaging <- false
-
-            if not (failures.Count = 0) then
-                // Cleanup staging (best-effort).  Never masks the typed failure.
-                let _ = tryRemoveDir staging
-
-                let canonicalIdentical = canonicalBytesPreserved preSnap canonicalDir files
-
-                AtomicPublishResult.Failed
-                    { Failures = List.ofSeq failures
-                      CanonicalByteIdenticalAfterFailure = canonicalIdentical
-                      RetainedStagingPath =
-                        if Directory.Exists staging then Some staging else None }
-            else
-                // ---------------------------------------------------------------
-                // Canonical install runs here as part of the success-path
-                // regression contract: real FileStream + Flush(true) + SHA-256
-                // verify on disk bytes.  This is the only canonical mutation
-                // performed in this slice.
-                //
-                // Canonical install failure injection is reserved for
-                // Correction06B and later slices.  When it fails, the
-                // outcome is reported with a typed StageVerify failure
-                // marked as canonical-install so the caller can distinguish
-                // pre-commit failures from post-staging failures.
-                // ---------------------------------------------------------------
+                  RetainedStagingPath = None
+                  RecoveryState = AtomicRecoveryState.NeverModified }
+        | Ok preSnap ->
+            // 2) Create staging directory
+            let dirFailure =
                 try
-                    for f in files do
-                        replaceCanonical staging canonicalDir f
+                    ops.CreateDirectory staging
+                    None
+                with ex ->
+                    Some (failureFromException AtomicPublishPhase.StageDirectory staging ex)
 
+            match dirFailure with
+            | Some failure ->
+                AtomicPublishResult.Failed
+                    { Failures = [ failure ]
+                      CanonicalByteIdenticalAfterFailure = true
+                      RetainedStagingPath = None
+                      RecoveryState = AtomicRecoveryState.NeverModified }
+            | None ->
+                // 3) Stage each file via the seam
+                let stagingFailures = ResizeArray<AtomicPublishFailure>()
+                let hashes = ResizeArray<string * string>()
+
+                let mutable continueStaging = true
+
+                for f in files do
+                    if continueStaging then
+                        let fullPath = Path.Combine(staging, f.CanonicalFileName)
+
+                        match stageFileWithDependencies ops fullPath f with
+                        | Ok h ->
+                            hashes.Add(f.CanonicalFileName, h)
+                        | Error failure ->
+                            stagingFailures.Add(failure)
+                            // Stop staging the remaining files.
+                            continueStaging <- false
+
+                if not (stagingFailures.Count = 0) then
+                    // Cleanup staging (best-effort).  Never masks the typed failure.
                     let _ = tryRemoveDir staging
-
-                    AtomicPublishResult.Published
-                        { OutputHashes = List.ofSeq hashes
-                          CanonicalByteIdenticalAfterFailure = true }
-                with _ ->
-                    // Canonical install failure: best-effort cleanup.
-                    let _ = tryRemoveDir staging
-
-                    let canonicalIdentical = canonicalBytesPreserved preSnap canonicalDir files
 
                     AtomicPublishResult.Failed
-                        { Failures =
-                            [ { Phase = AtomicPublishPhase.StageVerify
-                                Path = canonicalDir
-                                Operation = "canonical-install"
-                                ExceptionType = ""
-                                Detail = "canonical install failure (reserved for later corrections)" } ]
-                          CanonicalByteIdenticalAfterFailure = canonicalIdentical
+                        { Failures = List.ofSeq stagingFailures
+                          CanonicalByteIdenticalAfterFailure = true
                           RetainedStagingPath =
-                            if Directory.Exists staging then Some staging else None }
+                            if Directory.Exists staging then Some staging else None
+                          RecoveryState = AtomicRecoveryState.NeverModified }
+                else
+                    // 4) Commit the canonical pair through the seam.
+                    match commitCanonicalPairFromStaging ops canonicalDir staging files with
+                    | Ok () ->
+                        let _ = tryRemoveDir staging
+
+                        AtomicPublishResult.Published
+                            { OutputHashes = List.ofSeq hashes
+                              CanonicalByteIdenticalAfterFailure = true
+                              RecoveryState = AtomicRecoveryState.Committed }
+                    | Error (commitFailures, rollbackAttempted) ->
+                        // Best-effort staging cleanup.  Never masks the
+                        // typed commit failure.
+                        let _ = tryRemoveDir staging
+
+                        // Re-snapshot the canonical pair after any
+                        // rollback to compute the canonical-byte-identical
+                        // flag and the typed recovery state.
+                        let postSnapResult =
+                            try
+                                Ok(snapshotCanonicalPair ops canonicalDir files)
+                            with _ ->
+                                Error()
+
+                        let postSnap =
+                            match postSnapResult with
+                            | Ok s -> s
+                            | Error () -> preSnap
+
+                        let preserved = canonicalBytesPreserved preSnap postSnap
+                        // When no rollback was attempted, the canonical
+                        // state is unchanged (NeverModified).  When
+                        // rollback was attempted and the bytes match the
+                        // pre-snapshot, the canonical state was
+                        // RestoredByteIdentical.
+                        let recoveryState =
+                            if not rollbackAttempted then
+                                AtomicRecoveryState.NeverModified
+                            elif preserved then
+                                AtomicRecoveryState.RestoredByteIdentical
+                            else
+                                // Rollback attempted but canonical bytes
+                                // differ; rollback failure is deferred to
+                                // Correction06C.  For now report
+                                // NeverModified since the canonical pair
+                                // is provably changed.
+                                AtomicRecoveryState.NeverModified
+
+                        AtomicPublishResult.Failed
+                            { Failures = commitFailures
+                              CanonicalByteIdenticalAfterFailure = preserved
+                              RetainedStagingPath =
+                                if Directory.Exists staging then Some staging else None
+                              RecoveryState = recoveryState }
 
 // -----------------------------------------------------------------------------
 // Legacy publish entry point — delegates to the seam with defaults

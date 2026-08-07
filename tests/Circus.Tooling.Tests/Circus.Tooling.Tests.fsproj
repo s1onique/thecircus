@@ -51,6 +51,10 @@
          staging write-flush seam tests (pre-commit failure injection).
          The seam module must compile before any dependent test. -->
     <Compile Include="FSharpDiagnostics/AtomicPublish/StagingWriteFlushSeamTests.fs" />
+    <!-- ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION06B:
+         commit + rollback seam tests (canonical install + successful rollback
+         failure injection).  Depends on the pre-commit seam tests above. -->
+    <Compile Include="FSharpDiagnostics/AtomicPublish/CommitRollbackSeamTests.fs" />
     <Compile Include="FSharpDiagnostics/BinlogExtractorTests.fs" />
     <Compile Include="FSharpDiagnostics/ManifestIntegrityTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/GitIdentityTests.fs" />
