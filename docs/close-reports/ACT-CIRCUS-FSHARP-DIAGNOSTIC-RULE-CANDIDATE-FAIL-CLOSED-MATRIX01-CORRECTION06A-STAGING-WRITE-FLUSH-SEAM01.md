@@ -34,7 +34,7 @@ defects: (1) `nineFaultTests` wrapped `faultTest` inside an outer
 fault-injection bodies never executed; (2) `ProductionAtomicWriteHandle.Dispose`
 performed a hidden `Flush(true)` that weakened the claimed single
 durable-flush authority.  `031a082` is the commit that fixes both
-defects.  The close-report SHA `780cebce71c9ebfaa96e48a7384e4fb91c1937e2`
+defects.  The close-report SHA `918e9c58f5e6e2235c19e4986b8d99f460e4c260`
 references the fixed implementation.
 
 `git diff --check` and `git status --short` are clean after the report
