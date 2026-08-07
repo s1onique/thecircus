@@ -4,7 +4,7 @@
 act_id: ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION06B-CANONICAL-COMMIT-AND-SUCCESSFUL-ROLLBACK-INJECTION01
 parent: ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01
 status: CLOSED_PASS
-verdict: real canonical install seam with successful rollback injection; 9 new tests + 26-suite regression all pass with byte-for-byte recovery
+verdict: real canonical install seam with successful rollback injection; 13 CommitRollback tests + 30-suite regression all pass; reviewer-identified defects (cardinality, MayHaveChanged, missing-backup, vacuous path test) all addressed
 ```
 
 ## 1. Resolved baseline and final implementation tree
@@ -13,7 +13,7 @@ verdict: real canonical install seam with successful rollback injection; 9 new t
 BASE_COMMIT     = 022d1963846a2a850da63ae42b66a1fcf3663e71
 BASE_TREE       = (BASE_COMMIT tree)
 I:
-  implementation_commit = 88fd353
+  implementation_commit = 15df6db
   implementation_tree   = (recorded by D)
 F:
   meaning: this report commit (the commit whose tree contains this file)
@@ -22,11 +22,15 @@ F:
                                            # after the report is committed
 ```
 
-The implementation commit `88fd353` extends the shared `AtomicPublish` filesystem
-seam from pre-commit staging into the canonical install path.  Every
-canonical mutation, including successful rollback, is observable through
-the seam.  `git diff --check` and `git status --short` are clean after the
-report commit.  Production candidate hashes verified unchanged.
+The implementation commit `15df6db` extends the shared `AtomicPublish`
+filesystem seam from pre-commit staging into the canonical install path,
+**and** addresses the five reviewer-identified defects from the prior
+attempt (cardinality acceptance, fail-closed post-rollback verification,
+MayHaveChanged semantics, missing-backup typed failure, non-vacuous
+backup-path test).  Every canonical mutation, including successful
+rollback, is observable through the seam.  `git diff --check` and
+`git status --short` are clean after the report commit.  Production
+candidate hashes verified unchanged.
 
 ## 2. Production seam surface (commit + rollback)
 
@@ -48,9 +52,9 @@ type AtomicPublishOps =
 let defaultAtomicPublishOps : AtomicPublishOps =  // delegates to real System.IO
 ```
 
-The four new seam operations cover every filesystem primitive required
-by canonical install and successful rollback.  No direct `File.*` calls
-remain in the commit / rollback code paths.
+No direct `File.*` calls remain in the commit / rollback / snapshot
+code paths.  Snapshot reads, commit replaces, rollback deletes, and
+rollback restores all run through `ops`.
 
 ## 3. Typed commit phase model
 
@@ -69,90 +73,97 @@ type AtomicPublishPhase =
 
 The `Backup` phase is reserved; the current production implementation
 folds backup into `ReplaceFile` (`File.Replace` writes the backup as
-part of the swap).  It is retained in the DU so a future slice that
-exposes backup as a separate operation can carry the exact phase
-without reshaping the type.
+part of the swap).
 
-## 4. Recovery state
+## 4. Recovery state (reviewer-fixed)
 
 ```fsharp
 type AtomicRecoveryState =
-    | NeverModified
-    | RestoredByteIdentical
-    | Committed
+    | NeverModified             // canonical pair was NEVER mutated by this call
+    | RestoredByteIdentical     // canonical pair was mutated AND rolled back to pre-snapshot bytes
+    | Committed                  // success: canonical pair now equals staged bytes
+    /// The canonical pair was mutated and may not have been restored to its
+    /// pre-publication bytes.  Returned when a commit failure triggered a
+    /// rollback attempt whose post-state either differs from the
+    /// pre-snapshot OR could not be observed at all.
+    | MayHaveChanged            // honest signal: post-state unknown or changed
 ```
 
-`NeverModified` is set when no canonical mutation occurred before the
-failure.  `RestoredByteIdentical` is set when at least one canonical
-file was mutated and rolled back, AND the post-rollback bytes match the
-pre-snapshot.  `Committed` is set on full success.  Rollback-failure
-mapping to `MayHaveChanged` is reserved for Correction06C.
-
-## 5. Commit / rollback discipline
-
-For the canonical pair `candidate + summary`:
+The recovery-state matrix is:
 
 ```text
-1. snapshotCanonicalPair(ops, canonicalDir, files)
-   -> FileExists + ReadAllBytes for each (records the pre-state)
-2. CreateDirectory(staging)
-3. for each f in files:
-     OpenWrite(staging/f)
-     WriteAll
-     FlushToDisk        (calls FileStream.Flush(true))
-     Dispose
-     ReadAllBytes       (verify-after-write on disk)
-     SHA-256 verify
-4. commitCanonicalPairFromStaging:
-   4a. commitOneFile candidate   -> ReplaceFile(staged, canonical, backup)
-                                     OR MoveFile(staged, canonical)
-   4b. if candidate succeeded:
-       commitOneFile summary    -> same
-       if summary failed:
-           rollbackAttempted = true
-           rollbackOneFile candidate:
-             DeleteFile(canonical) then MoveFile(backup, canonical)
-             OR DeleteFile(canonical) (if previous was absent)
+                            snapshot observed?    rollback attempted?    preserved?
+NeverModified               yes                   no                    (yes)
+RestoredByteIdentical       yes                   yes                   yes
+MayHaveChanged              yes                   yes                   no
+MayHaveChanged              no                    any                   n/a
 ```
 
-Path discipline: `parent(stagingDir) = parent(canonicalDir)` and
-`parent(backupPath) = parent(canonicalDir)`.  No backup or staging is
-placed under `Path.GetTempPath()` or `/tmp`.  Every filesystem primitive
-runs through `ops`.
+`NeverModified` is NEVER returned for any state that has been
+mutated, whether or not the mutation was successfully reverted.  This
+prevents the prior `NeverModified`-on-known-changed fail-open
+behaviour identified by the reviewer.
 
-## 6. Failure matrix (Correction06B)
+## 5. Cardinality check (reviewer-fixed)
+
+```fsharp
+// At the top of publishWithDependencies:
+if not (match files with [ _c; _s ] -> true | _ -> false) then
+    AtomicPublishResult.Failed
+        { Failures = [ { Phase = Install
+                         Operation = "canonical-pair-cardinality"
+                         Detail = "…requires exactly two pending files, got N" } ]
+          CanonicalByteIdenticalAfterFailure = true
+          RetainedStagingPath = None
+          RecoveryState = NeverModified }
+```
+
+This cardinality rejection fires BEFORE any staging, snapshot, or
+canonical I/O.  Zero, one, and three-file inputs are all rejected
+with a typed Install-phase cardinality failure and `NeverModified`
+recovery state.  The three new tests
+(`canonicalPairCardinalityEmptyTest`, `…OneFileTest`, `…ThreeFilesTest`)
+prove zero filesystem mutation.
+
+## 6. Missing-backup typed failure (reviewer-fixed)
+
+```fsharp
+// Inside rollbackOneFile, after DeleteFile(canonicalPath):
+if not (ops.FileExists bp) then
+    accumulatedFailures.Add(
+        { Phase = RollbackRestore
+          Path = canonicalPath
+          Operation = operationForPhase RollbackRestore
+          ExceptionType = ""
+          Detail = "expected rollback backup is missing" })
+else
+    try ops.MoveFile bp canonicalPath with …
+```
+
+A missing backup is no longer a silent no-op.  The test
+`missingBackupRollbackTest` proves the seam surfaces a typed
+`RollbackRestore` failure and the recovery state is `MayHaveChanged`.
+
+## 7. Path discipline (reviewer-fixed)
+
+The test now asserts the actual design:
 
 ```text
-1. candidate install fails, existing A/A
-   -> canonical A/A preserved, no rollback attempted
-   -> RecoveryState: NeverModified
-2. candidate install fails, Absent/Absent
-   -> canonical stays Absent/Absent
-   -> RecoveryState: NeverModified
-3. summary install fails, existing A/A
-   -> candidate temporarily B, rollback restores A/A
-   -> RecoveryState: RestoredByteIdentical
-4. summary install fails, Absent/Absent
-   -> candidate installed, then removed by rollback
-   -> RecoveryState: RestoredByteIdentical
-5. exact operation-order test (existing A/A rollback)
-   -> snapshot -> stage -> replace candidate -> replace summary (fault)
-   -> rollback delete -> rollback move
-   -> no second publication attempt
-6. exact operation-order test (absent rollback)
-   -> snapshot -> stage -> move candidate -> move summary (fault)
-   -> rollback delete candidate
-   -> no second publication attempt
+backup_parent:
+  equals: canonicalDir          # backup is a sibling of canonical file
+staging_parent:
+  equals: parent(canonicalDir)  # staging is a sibling of canonical dir
 ```
 
-Rollback-failure injection (`CanonicalStateMayHaveChanged`) is
-explicitly deferred to Correction06C.
+The vacuous assertion (`for bp in backups do …`) is gone.  The test
+now requires at least one backup file inside `canonicalDir` and
+verifies every backup's parent is exactly `canonicalDir`.
 
-## 7. Tests
+## 8. Tests
 
 New file: `tests/Circus.Tooling.Tests/FSharpDiagnostics/AtomicPublish/CommitRollbackSeamTests.fs`
 
-9 focused tests:
+13 focused tests:
 
 ```text
 1.  existing A/A -> B/B success; recovery state Committed
@@ -163,50 +174,36 @@ New file: `tests/Circus.Tooling.Tests/FSharpDiagnostics/AtomicPublish/CommitRoll
 6.  operation order (existing A/A rollback)
 7.  operation order (Absent rollback)
 8.  canonical snapshot distinguishes Absent from zero-byte Present
-9.  backup / staging paths remain under canonical parent
+9.  backup / staging paths inside canonicalDir; same-parent filesystem
+10. canonical pair cardinality: zero files -> cardinality failure, no I/O
+11. canonical pair cardinality: one file -> cardinality failure, no I/O
+12. canonical pair cardinality: three files -> cardinality failure, no I/O
+13. missing-backup rollback -> typed RollbackRestore, MayHaveChanged
 ```
 
-All 9 tests use unique repo-local temporary directories under
-`factory/tmp/atomic-publish-commit-rollback-tests-<guid>/` (NOT
-`Path.GetTempPath()`) and call `publishWithDependencies` directly
-through the seam.  Every fault is injected through a real production
-seam operation.  No test manually constructs an `AtomicPublishFailure`
-value and counts it as coverage.
-
-The pre-commit `StagingWriteFlushSeamTests.fs` was updated to keep its
-9 pre-commit fault paths working against the new snapshot-then-stage
-order.  Specifically, the verify-after-write fault is now targeted at
-the SECOND occurrence of the read (the verify), not the first (which
-is the snapshot read of the same filename).  The existing
-`AtomicPublishTests.fs` legacy tests were updated from one-file to
-two-file publication to match the new canonical-pair requirement.
-
-### 7.1 Focused suite (authoritative for this slice)
+### 8.1 Focused suite
 
 ```yaml
 filter: "FSharpDiagnostics.AtomicPublish.CommitRollback"
-tests_run:   9
-tests_passed: 9
+tests_run:   13
+tests_passed: 13
 tests_failed: 0
 tests_errored: 0
 exit_code: 0
 ```
 
-### 7.2 Regression suite (authoritative for Correction06A preservation)
+### 8.2 Regression suite
 
 ```yaml
 filter: "FSharpDiagnostics.AtomicPublish"
-tests_run:   26
-tests_passed: 26
+tests_run:   30
+tests_passed: 30
 tests_failed: 0
 tests_errored: 0
 exit_code: 0
 ```
 
-This combines the 13 pre-commit tests (Correction06A) + the 4 legacy
-AtomicPublish tests + the 9 new CommitRollback tests.  All pass.
-
-### 7.3 Production candidate preservation
+### 8.3 Production candidate preservation
 
 ```yaml
 candidate_id: 7c470d2b8e3f7b3d67c1e34e44d3644b090a370103d01065810b68d4ee728c89
@@ -215,45 +212,71 @@ rule-candidates-v2.jsonl:       c48e1ac9f84183cbab002bba7a50ff293b6c1b52e4ddb8c3
 rule-candidate-summary-v2.json: b5537953bfdb3c5ada9fc260b8ea53df712b22bec409e87671917667148d923d
 ```
 
-## 8. Stop-condition self-check
+## 9. Stop-condition self-check
 
 ```yaml
 production_file_seam_commit:
-  canonical_replace_injectable: true   (ReplaceFile seam fault test)
-  canonical_move_injectable:    true   (MoveFile seam fault test for absent)
-  canonical_delete_injectable:   true   (DeleteFile used in rollback path)
+  canonical_replace_injectable: true
+  canonical_move_injectable:    true
+  canonical_delete_injectable:   true
+
 snapshot:
   absent_distinguished_from_zero_byte: true
+
 existing_pair:
   success_A_to_B: true
+
 candidate_install_failure:
   canonical_A_A_preserved: true
   rollback_attempted: false
-summary_install_failure:
+  recovery_state: NeverModified
+
+summary_install_failure_existing:
   candidate_temporarily_changed: true
   rollback_attempted: true
   canonical_A_A_restored: true
   recovery_state: RestoredByteIdentical
+
 first_publication:
   candidate_failure_preserves_absence: true
   summary_failure_rolls_back_candidate: true
   final_state_absent_absent: true
+  recovery_state: RestoredByteIdentical
+
 operation_order:
-  exact: true
+  existing: exact
+  absent:   exact
   second_publication_attempt: false
+
+cardinality_rejection:
+  zero_files:  proven (no I/O)
+  one_file:    proven (no I/O)
+  three_files: proven (no I/O)
+
+missing_backup_rollback:
+  typed_failure_surfaced: true
+  recovery_state: MayHaveChanged
+
+post_rollback_observation:
+  never_substituted_with_preSnap: true
+  unknown_state_returns_MayHaveChanged: true
+
 path_discipline:
-  staging_same_parent: true
-  backup_same_parent: true
+  backup_parent: canonicalDir        # asserted, not vacuous
+  staging_parent: parent(canonicalDir)
   system_temp_used: false
+
 tests:
-  new: 9
+  new: 13
   all_relevant_suites_green: true
+
 production_candidate_preserved: true
+
 parent_act:
   status: REOPENED_PARTIAL
 ```
 
-## 9. Parent state after success
+## 10. Parent state after success
 
 ```yaml
 ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01:
@@ -265,11 +288,15 @@ ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01:
     - summary install failure injection
     - successful rollback to previous canonical pair (existing A/A)
     - successful rollback to previous canonical pair (Absent/Absent)
+    - exact canonical-pair cardinality rejection (0 / 1 / 3 files)
+    - missing-backup typed RollbackRestore failure (no silent no-op)
+    - honest MayHaveChanged recovery state (no NeverModified-on-changed)
+    - non-vacuous backup-path assertion (parent == canonicalDir)
 
   still_open:
-    - rollback failure injection
+    - rollback failure injection (next slice: Correction06C)
     - cleanup failure injection
-    - post-install verification failure
+    - post-install verification failure injection
     - typed RuleCandidates publication mapping
     - verification-binding exact assertions
     - canonical verifier matrix
@@ -279,10 +306,11 @@ ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01:
     - fresh global gate
 ```
 
-## 10. Next slice
+## 11. Next slice
 
 **Correction06C — rollback failure injection + recovery evidence.**
 
-That slice introduces `CanonicalStateMayHaveChanged`, retained backups,
-and rollback-failure injection.  It is the third and final commit slice
-in the canonical-pair publication matrix.
+That slice introduces `CanonicalStateMayHaveChanged` retention
+semantics, retained backups, and explicit rollback-failure injection.
+`MayHaveChanged` is already present in Correction06B so 06C can
+build on it rather than repair 06B semantics first.
