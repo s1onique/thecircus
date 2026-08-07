@@ -11,21 +11,15 @@ verdict: real pre-commit staging filesystem seam with typed phases, all 9 fault-
 
 ```text
 BASE_COMMIT     = e247170329cea3a0e1019cc257a19c7c7675391a
-BASE_TREE       = parent commit tree
+BASE_TREE       = 78c45e22808be4cef571f220f4ee4e78c7d3d7b0
 I:
   implementation_commit = 031a082aefe36ff693c45b44366f4e049d41ac57
   implementation_tree   = 463837abf0b0abd2c8826a9e2f6d4699d4570c54
 F:
-  report_only_commit = 4b8e3e78435a1cad9a65712d834a13a6346ab394
-  report_tree        = 93eee41016496737d58723d548298c7dedc51f5f
-D:
-  detached: true
-  binds:
-    - 031a082aefe36ff693c45b44366f4e049d41ac57
-    - 4b8e3e78435a1cad9a65712d834a13a6346ab394
-    - origin/main (4b8e3e78435a1cad9a65712d834a13a6346ab394)
-    - clean worktree
-    - no force push
+  meaning: this report commit (the commit whose tree contains this file)
+  self_sha_recorded_inside_report: false   # recursive F is impossible by
+                                           # construction; F is recorded by D
+                                           # after the report is committed
 ```
 
 A prior commit (`cc91702`) introduced the seam and tests but had two
@@ -34,8 +28,8 @@ defects: (1) `nineFaultTests` wrapped `faultTest` inside an outer
 fault-injection bodies never executed; (2) `ProductionAtomicWriteHandle.Dispose`
 performed a hidden `Flush(true)` that weakened the claimed single
 durable-flush authority.  `031a082` is the commit that fixes both
-defects.  The close-report SHA `4b8e3e78435a1cad9a65712d834a13a6346ab394`
-references the fixed implementation.
+defects.  The close-report tree is the tree of the report commit
+itself; the commit hash is recorded externally by detached `D`.
 
 `git diff --check` and `git status --short` are clean after the report
 commit.  Production candidate hashes verified unchanged.
