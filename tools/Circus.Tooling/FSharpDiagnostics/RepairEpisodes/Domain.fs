@@ -137,12 +137,17 @@ let episodeInputIdentityKindToken (k: EpisodeInputIdentityKind) : string =
     | EpisodeInputIdentityKind.DiagnosticTransition -> "diagnostic_transition"
 
 /// Duplicate identity record.  `OccurrenceIndices` are the 1-based
-/// positions of each duplicate record in the in-memory sorted list
-/// produced by `runEpisodesWithEvidence`, NOT JSONL source lines.
-/// Episodes, change sets, and diagnostic transitions are produced
-/// from declarations + Git resolution + captures and do not have
-/// stable JSONL source-line provenance; this field reflects the
-/// post-computation in-memory position.
+/// positions of each duplicate record in the **sorted in-memory
+/// list** produced by `runEpisodesWithEvidence`.  They are NOT JSONL
+/// source-line numbers: episodes, change sets, and diagnostic
+/// transitions are produced from declarations + Git resolution +
+/// captures, none of which carry stable JSONL line provenance.  The
+/// field reflects the post-computation in-memory position.
+///
+/// Detection runs **post-computation, pre-publication** — after
+/// declarations + Git + qualification produce the in-memory
+/// records but before the `publish` call writes the canonical
+/// artifacts.  See `Engine.fs` for the engine boundary.
 type EpisodeDuplicateIdentity =
     { Kind: EpisodeInputIdentityKind
       Identity: string

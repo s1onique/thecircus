@@ -7,6 +7,7 @@ open Circus.Tooling.FSharpDiagnostics.Paths
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Domain
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Engine
 open Circus.Tooling.FSharpDiagnostics.RepairEpisodes.Paths
+open Circus.Tooling.FSharpDiagnostics.RuleCandidates
 open Circus.Tooling.Tests.FSharpDiagnostics.RuleCandidates.RuleCandidateFailClosedFixture
 
 let private canonicalFileNames =
@@ -116,12 +117,74 @@ let episodeEngineCanonicalPreservationTests =
                       dups
                       |> List.map (fun d -> d.Kind)
                       |> List.distinct
-                  Expect.contains
+                  // The post-computation, pre-publication duplicate gate
+                  // surfaces all three upstream kinds when two
+                  // declarations share the same capture IDs and
+                  // commit OIDs.  This is the only end-to-end
+                  // assertion in the suite; the 18 upstream tests
+                  // exercise `detectUpstreamDuplicates` directly.
+                  Expect.equal
                     kinds
-                    EpisodeInputIdentityKind.RepairEpisode
-                    "must surface RepairEpisode kind"
+                    [ EpisodeInputIdentityKind.RepairEpisode
+                      EpisodeInputIdentityKind.ChangeSet
+                      EpisodeInputIdentityKind.DiagnosticTransition ]
+                    "duplicate declaration must surface all three upstream identity kinds"
               | other ->
                   failwithf "expected Failed(DuplicateInputIdentities), got %A" other
 
               verifyCanonicalExistenceAndBytes repo.Root before "duplicate episode"
+          }
+
+          test "canonical evidence error key: length-prefixed framing survives embedded separators" {
+              // Adversarial regression: the previous delimiter-only
+              // `nonDupKey` would collapse these two structurally
+              // distinct error tuples to the same string.  The
+              // length-prefixed framing must produce distinct keys.
+              let path1 = "factory/evidence/fsharp-diagnostics/corpus/normalized/verification-evidence-v1.jsonl"
+              let path2 = "factory/evidence/fsharp-diagnostics/corpus/normalized/verification-evidence-v1.jsonl"
+              let id1 = "id-with|pipe|1"
+              let id2 = "id-with|pipe|2"
+              let dup1 =
+                  VerificationEvidenceLoadError.DuplicateEvidenceId(path1, id1, 1, 2)
+              let dup2 =
+                  VerificationEvidenceLoadError.DuplicateEvidenceId(path2, id2, 1, 2)
+              let conf =
+                  VerificationEvidenceLoadError.ConflictingEvidenceRecord(path1, id1, 1, 2)
+              let fwd =
+                  Circus.Tooling.FSharpDiagnostics.RuleCandidates.Engine.mapEpisodeEngineFailure(
+                      EpisodeEngineFailure.VerificationEvidenceLoadFailed [ dup1; conf; dup2 ]
+                  )
+              Expect.equal
+                  fwd.Length
+                  2
+                  "expected [Duplicate(identity, identity); VerificationEvidenceLoadFailed(conflicting)]"
+              Expect.equal
+                  (fwd |> List.distinct |> List.length)
+                  2
+                  "duplicate and conflicting must remain in different buckets"
+          }
+
+          test "non-duplicate evidence order is invariant under record reversal even with embedded delimiters" {
+              // Each individual error contains a `|` so delimiter-only
+              // concatenation can collide.  The length-prefixed
+              // framing must still produce a stable order.
+              let fwd =
+                  Circus.Tooling.FSharpDiagnostics.RuleCandidates.Engine.mapEpisodeEngineFailure(
+                      EpisodeEngineFailure.VerificationEvidenceLoadFailed
+                          [ VerificationEvidenceLoadError.ParseError(
+                                VerificationEvidenceParseError.MalformedJson("a", 1, "b|2|c"))
+                            VerificationEvidenceLoadError.ParseError(
+                                VerificationEvidenceParseError.WrongFieldType("a|1|b", 2, "c", "string", "number"))
+                            VerificationEvidenceLoadError.ConflictingEvidenceRecord("p", "id", 1, 2) ]
+                  )
+              let rev =
+                  Circus.Tooling.FSharpDiagnostics.RuleCandidates.Engine.mapEpisodeEngineFailure(
+                      EpisodeEngineFailure.VerificationEvidenceLoadFailed
+                          [ VerificationEvidenceLoadError.ConflictingEvidenceRecord("p", "id", 1, 2)
+                            VerificationEvidenceLoadError.ParseError(
+                                VerificationEvidenceParseError.WrongFieldType("a|1|b", 2, "c", "string", "number"))
+                            VerificationEvidenceLoadError.ParseError(
+                                VerificationEvidenceParseError.MalformedJson("a", 1, "b|2|c")) ]
+                  )
+              Expect.equal fwd rev "mapped result must be invariant under record reversal even with embedded delimiters"
           } ]

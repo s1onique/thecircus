@@ -1621,7 +1621,7 @@ type EpisodeEngineFailure =
     /// Upstream typed duplicate-identity detection.  Identities are detected
     /// in repair episodes, change sets, and diagnostic transitions BEFORE any
     /// qualification or map construction.  Several duplicate identities may
-    /// appear in one failure.  Occurrence lines are 1-based JSONL line numbers
+    /// appear in one failure.  Occurrence indices are 1-based JSONL line numbers
     /// where available.  Sorted by (Kind, Identity ordinal, OccurrenceIndices
     /// ascending).  No rendered error text is parsed to recover identity.
     | DuplicateInputIdentities of EpisodeDuplicateIdentity list
@@ -1738,7 +1738,7 @@ let private sortDuplicateRecords (records: EpisodeDuplicateIdentity list) : Epis
 
 /// Detect duplicates in a list of items using the supplied identity function.
 /// Returns one EpisodeDuplicateIdentity per identity that has more than one
-/// occurrence.  Occurrence lines are 1-based positions in the sorted in-memory list and reflect sorted-order positions (NOT JSONL line numbers).
+/// occurrence.  Occurrence indices are 1-based positions in the sorted in-memory list and reflect sorted-order positions (NOT JSONL line numbers).
 let private detectDuplicates
     (kind: EpisodeInputIdentityKind)
     (identityFn: 'a -> string)
