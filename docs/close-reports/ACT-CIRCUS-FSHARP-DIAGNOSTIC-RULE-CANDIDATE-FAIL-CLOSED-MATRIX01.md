@@ -470,8 +470,8 @@ parent_status_unchanged: REOPENED_PARTIAL
 ```text
 BASE_COMMIT       = 93b23ba20e76dd4bdd6ec8729130a15c775572da
 BASE_TREE         = 988f054c1689a8eaed361076331bcfc6ec220e51
-IMPLEMENTATION_I  = 336579ebb75f7a79af4e0e0964066c6bd05961b6
-IMPLEMENTATION_T  = 14e87a221dc45376e88fc48d0b14f0ca41f6657e
+IMPLEMENTATION_I  = da6ab69559179c2c70aaa9b3d8c9a033bcc52460
+IMPLEMENTATION_T  = 37c47dd2da14ec55d7da913d95420c3d8745d89d
 ```
 
 `git diff --check` and `git status --short` were clean after the
@@ -733,6 +733,60 @@ addressed in this round:
    The map result is invariant under record reversal: a forward
    input and a reversed input produce byte-identical `EngineError list`.
 
+
+
+## 5.7.1 Round-3 review fixes
+
+The round-2 close report passed reviewer 1 but failed reviewer 2 on
+four remaining items.  This round closes them:
+
+1. **End-to-end test asserts all three upstream kinds** — the
+   `EpisodeEngineCanonicalPreservation` test now uses
+   `Expect.equal kinds expectedKinds` with
+   `expectedKinds = [RepairEpisode; ChangeSet; DiagnosticTransition]`
+   rather than three separate `Expect.contains` checks.  This is the
+   only end-to-end test in the suite; the 18 upstream tests exercise
+   `detectUpstreamDuplicates` directly.
+
+2. **I commit is now the actual final implementation** — the round-2
+   report's `I = 336579e...` predated the round-2 code changes
+   (`Cli.fs`, `Engine.fs` re-architecture, adapter mapping, canonical
+   preservation test, mixed-error normalization).  This round's
+   implementation commit `I2 = da6ab69559179c2c70aaa9b3d8c9a033bcc52460`
+   contains ALL final code and test changes (including the round-3
+   revisions below).  The recorded `I` and `I` tree are now `da6ab695...`
+   and `37c47dd2...` respectively.
+
+3. **Stale source comments** — production comments in
+   `RepairEpisodes/Engine.fs` that still claimed "BEFORE any
+   qualification" or "No `Map.ofList` collapse or qualification happens
+   before detection" are updated to the honest contract:
+   * "post-computation but BEFORE any publication of repair-episode
+     canonical artifacts.  When duplicate"
+   * "Detection runs after declarations + Git resolution + qualification
+     produce the in-memory records, but BEFORE the `publish` call."
+   The same change is applied to the helper documentation.
+
+   `OccurrenceLines` references in comments are updated:
+   * "are 1-based JSONL line numbers where available" →
+     "are 1-based positions in the sorted in-memory list (NOT JSONL
+     line numbers)"
+   * "are 1-based and preserved in input order." →
+     "are 1-based positions in the sorted in-memory list and reflect
+     sorted-order positions (NOT JSONL line numbers)."
+
+4. **Length-prefixed framing for non-duplicate sort keys** — the
+   `nonDupKey` helper in `RuleCandidates/Engine.fs` previously
+   concatenated fields with `|`.  Two different error tuples whose
+   textual contents themselves contained `|` could collapse to the
+   same key (e.g. `("a",1,"b|2|c")` vs `("a|1|b",2,"c")`).
+
+   The new helper uses length-prefixed framing
+   `~len~value~len~value...`.  Every value carries an explicit
+   length prefix in code units before its content, so two different
+   tuples cannot produce the same string regardless of internal
+   characters.  `String.CompareOrdinal` then orders the result
+   deterministically.
 ## 5.7 Production read-only replay
 
 Pre-snapshot of the four upstream outputs:
