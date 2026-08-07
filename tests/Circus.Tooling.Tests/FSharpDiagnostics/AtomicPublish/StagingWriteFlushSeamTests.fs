@@ -147,12 +147,6 @@ type private RecordingWriteHandle
 
             if not disposedFlag then
                 disposedFlag <- true
-
-                try
-                    stream.Flush(true)
-                with _ ->
-                    ()
-
                 stream.Dispose()
 
 /// Build a recording AtomicPublishOps that fails at `fault`.  All
@@ -345,17 +339,14 @@ let private faultTest (fault: FaultPhase) =
             let faultCallIndex = findFaultCall ()
 
             if faultCallIndex >= 0 then
-                // After the fault, only disposal of the open resource
-                // (and best-effort staging cleanup) may run.  No further
-                // production file operations (open/write/flush/read on
-                // any file) may run.
+                // After the fault, only disposal of the already-open
+                // handle may run.  No further seam call of any kind
+                // (open / write / flush / read / create-directory /
+                // canonical install) may be observed.
                 let opsAfterFault =
                     opsCalls
                     |> List.skip (faultCallIndex + 1)
-                    |> List.filter (fun c ->
-                        not (c.EndsWith(":dispose"))
-                        && not (c.StartsWith("create-directory:"))
-                        && not (c.StartsWith("read:")))
+                    |> List.filter (fun c -> not (c.EndsWith(":dispose")))
 
                 Expect.isEmpty
                     opsAfterFault
@@ -366,15 +357,16 @@ let private faultTest (fault: FaultPhase) =
             cleanupDir repo
 
 let private nineFaultTests : Test list =
-    [ testCase "fault injection: create-directory" (fun () -> faultTest CreateDirectoryFault |> ignore)
-      testCase "fault injection: first-open" (fun () -> faultTest FirstOpenFault |> ignore)
-      testCase "fault injection: first-write" (fun () -> faultTest FirstWriteFault |> ignore)
-      testCase "fault injection: first-flush" (fun () -> faultTest FirstFlushFault |> ignore)
-      testCase "fault injection: first-verify" (fun () -> faultTest FirstVerifyFault |> ignore)
-      testCase "fault injection: second-open" (fun () -> faultTest SecondOpenFault |> ignore)
-      testCase "fault injection: second-write" (fun () -> faultTest SecondWriteFault |> ignore)
-      testCase "fault injection: second-flush" (fun () -> faultTest SecondFlushFault |> ignore)
-      testCase "fault injection: second-verify" (fun () -> faultTest SecondVerifyFault |> ignore) ]
+    [ CreateDirectoryFault
+      FirstOpenFault
+      FirstWriteFault
+      FirstFlushFault
+      FirstVerifyFault
+      SecondOpenFault
+      SecondWriteFault
+      SecondFlushFault
+      SecondVerifyFault ]
+    |> List.map faultTest
 
 // -----------------------------------------------------------------------------
 // Absent-canonical preservation

@@ -48,8 +48,9 @@ type IAtomicWriteHandle =
     abstract FlushToDisk : unit -> unit
 
 /// Production implementation backed by FileStream.  FlushToDisk calls
-/// `Flush(true)` to force both the .NET buffer and the OS storage cache
-/// to durable state.  Disposal closes the FileStream.
+/// `FileStream.Flush(true)` to flush the OS file buffers for the open
+/// stream to durable state.  Disposal closes the FileStream.  No
+/// additional hidden Flush is performed in Dispose.
 type private ProductionAtomicWriteHandle (stream: FileStream) =
     let mutable disposed = false
 
@@ -69,12 +70,6 @@ type private ProductionAtomicWriteHandle (stream: FileStream) =
         member _.Dispose () =
             if not disposed then
                 disposed <- true
-
-                try
-                    stream.Flush(true)
-                with _ ->
-                    ()
-
                 stream.Dispose()
 
 /// Filesystem seam consumed by `publishWithDependencies`.  Production
@@ -335,10 +330,10 @@ let private failureFromException (phase: AtomicPublishPhase) (path: string) (ex:
 /// Stage-write a single file using the seam.  The required operation
 /// sequence is:
 ///
-///   OpenWrite   (throws → StageOpen failure)
-///   WriteAll    (throws → StageWrite failure; handle disposed via finally)
-///   FlushToDisk (throws → StageFlush failure; handle disposed via finally)
-///   Dispose     (explicit in finally)
+///   OpenWrite    (throws → StageOpen failure)
+///   WriteAll     (throws → StageWrite failure; handle disposed via finally)
+///   FlushToDisk  (throws → StageFlush failure; handle disposed via finally)
+///   Dispose      (explicit in finally)
 ///   ReadAllBytes (throws → StageVerify failure)
 ///   SHA-256 verify (mismatch → StageVerify failure)
 ///
