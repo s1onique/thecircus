@@ -47,6 +47,10 @@
     <Compile Include="FSharpDiagnostics/OccurrenceIdentityTests.fs" />
     <Compile Include="FSharpDiagnostics/LegacyTextExtractorTests.fs" />
     <Compile Include="FSharpDiagnostics/AtomicPublishTests.fs" />
+    <!-- ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION06A:
+         staging write-flush seam tests (pre-commit failure injection).
+         The seam module must compile before any dependent test. -->
+    <Compile Include="FSharpDiagnostics/AtomicPublish/StagingWriteFlushSeamTests.fs" />
     <Compile Include="FSharpDiagnostics/BinlogExtractorTests.fs" />
     <Compile Include="FSharpDiagnostics/ManifestIntegrityTests.fs" />
     <Compile Include="FSharpDiagnostics/RepairEpisodes/GitIdentityTests.fs" />
