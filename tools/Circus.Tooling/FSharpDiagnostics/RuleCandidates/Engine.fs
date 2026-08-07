@@ -429,59 +429,69 @@ let mapEpisodeEngineFailure (failure: EpisodeEngineFailure) : EngineError list =
                 |> List.sortWith (fun a b -> String.CompareOrdinal(a, b))
             output.Add(DuplicateInputIdentities(VerificationEvidenceIdentity, ids))
 
-        // Typed structured key for normalizing non-duplicate errors.
-        // Every DU case carries its own discriminators; we render each
-        // to a tuple that contains every discriminator so identical
-        // string keys cannot collide across semantically different
-        // errors.  Ordinal string comparison via `String.CompareOrdinal`
-        // is independent of language and culture.
+        // Length-prefixed framing for collision-free sort keys.  Every
+        // value is encoded as `~len~value` where `len` is the number
+        // of UTF-16 code units and `~` is a separator that cannot
+        // appear in a length integer.  This guarantees:
+        //   * No two different discriminator tuples can produce the
+        //     same key, regardless of whether their textual contents
+        //     contain `|` or other separator characters.
+        //   * Ordinal string comparison via `String.CompareOrdinal`
+        //     preserves the intended order.
+        let frame (s: string) : string =
+            let n = s.Length
+            sprintf "%d~%s" n s
+        let join (kind: string) (parts: string list) : string =
+            String.concat "~" (kind :: parts |> List.map frame)
+        let ord (s: string) (s2: string) : string = s + "~" + s2
         let nonDupKey (e: VerificationEvidenceLoadError) : string =
-            let ord (s: string) (s2: string) = s + "|" + s2
             match e with
-            | VerificationEvidenceLoadError.EvidenceFileMissing p -> "missing|" + p + "|"
-            | VerificationEvidenceLoadError.EvidenceFileUnreadable(p, msg) -> "unreadable|" + p + "|" + msg
+            | VerificationEvidenceLoadError.EvidenceFileMissing p ->
+                join "missing" [ p ]
+            | VerificationEvidenceLoadError.EvidenceFileUnreadable(p, msg) ->
+                join "unreadable" [ p; msg ]
             | VerificationEvidenceLoadError.DuplicateEvidenceId(p, id, l1, l2) ->
-                sprintf "duplicate|%s|%s|%d|%d|" p id l1 l2
+                join "duplicate" [ p; id; string l1; string l2 ]
             | VerificationEvidenceLoadError.ConflictingEvidenceRecord(p, id, l1, l2) ->
-                sprintf "conflicting|%s|%s|%d|%d|" p id l1 l2
+                join "conflicting" [ p; id; string l1; string l2 ]
             | VerificationEvidenceLoadError.UnsupportedEvidenceSchemaVersion(p, v) ->
-                "unsupported_schema|" + p + "|" + v + "|"
+                join "unsupported_schema" [ p; v ]
             | VerificationEvidenceLoadError.ParseError pe ->
                 match pe with
                 | VerificationEvidenceParseError.MalformedJson(s, l, m) ->
-                    sprintf "malformed|%s|%d|%s|" s l m
+                    join "malformed" [ s; string l; m ]
                 | VerificationEvidenceParseError.ExpectedObject(s, l) ->
-                    sprintf "expected_object|%s|%d|" s l
+                    join "expected_object" [ s; string l ]
                 | VerificationEvidenceParseError.MissingField(s, l, f) ->
-                    sprintf "missing_field|%s|%d|%s|" s l f
+                    join "missing_field" [ s; string l; f ]
                 | VerificationEvidenceParseError.WrongFieldType(s, l, f, e, a) ->
-                    sprintf "wrong_type|%s|%d|%s|%s|%s|" s l f e a
+                    join "wrong_type" [ s; string l; f; e; a ]
                 | VerificationEvidenceParseError.UnsupportedSchemaVersion(s, l, v) ->
-                    sprintf "schema_v|%s|%d|%s|" s l v
+                    join "schema_v" [ s; string l; v ]
                 | VerificationEvidenceParseError.UnknownVerificationKind(s, l, v) ->
-                    sprintf "unknown_kind|%s|%d|%s|" s l v
+                    join "unknown_kind" [ s; string l; v ]
                 | VerificationEvidenceParseError.UnknownVerificationStatus(s, l, v) ->
-                    sprintf "unknown_status|%s|%d|%s|" s l v
+                    join "unknown_status" [ s; string l; v ]
                 | VerificationEvidenceParseError.InvalidExitCode(s, l, v) ->
-                    sprintf "invalid_exit|%s|%d|%s|" s l v
+                    join "invalid_exit" [ s; string l; v ]
                 | VerificationEvidenceParseError.InvalidCommitOid(s, l, f, v) ->
-                    sprintf "invalid_commit|%s|%d|%s|%s|" s l f v
+                    join "invalid_commit" [ s; string l; f; v ]
                 | VerificationEvidenceParseError.InvalidTreeOid(s, l, f, v) ->
-                    sprintf "invalid_tree|%s|%d|%s|%s|" s l f v
+                    join "invalid_tree" [ s; string l; f; v ]
                 | VerificationEvidenceParseError.InvalidSha256(s, l, f, v) ->
-                    sprintf "invalid_sha|%s|%d|%s|%s|" s l f v
+                    join "invalid_sha" [ s; string l; f; v ]
                 | VerificationEvidenceParseError.InvalidEvidenceId(s, l, v) ->
-                    sprintf "invalid_evidence_id|%s|%d|%s|" s l v
+                    join "invalid_evidence_id" [ s; string l; v ]
                 | VerificationEvidenceParseError.PlaceholderEvidenceId(s, l, v) ->
-                    sprintf "placeholder_evidence_id|%s|%d|%s|" s l v
+                    join "placeholder_evidence_id" [ s; string l; v ]
                 | VerificationEvidenceParseError.JsonException(s, l, m) ->
-                    sprintf "json_exception|%s|%d|%s|" s l m
+                    join "json_exception" [ s; string l; m ]
                 | VerificationEvidenceParseError.DuplicateRawProperty(s, l, p, n) ->
-                    sprintf "dup_raw_prop|%s|%d|%s|%d|" s l p n
+                    join "dup_raw_prop" [ s; string l; p; string n ]
                 | VerificationEvidenceParseError.DuplicateSemanticField(s, l, c, a) ->
-                    sprintf "dup_sem_field|%s|%d|%s|%s|" s l c a
+                    join "dup_sem_field" [ s; string l; c; a ]
                 | VerificationEvidenceParseError.ConflictingSemanticFields(s, l, c, a, cv, av) ->
-                    sprintf "conf_sem_field|%s|%d|%s|%s|%s|%s|" s l c a cv av
+                    join "conf_sem_field" [ s; string l; c; a; cv; av ]
         match nonDups with
         | [] -> ()
         | _ ->

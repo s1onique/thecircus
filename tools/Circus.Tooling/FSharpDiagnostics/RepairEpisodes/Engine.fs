@@ -1738,7 +1738,7 @@ let private sortDuplicateRecords (records: EpisodeDuplicateIdentity list) : Epis
 
 /// Detect duplicates in a list of items using the supplied identity function.
 /// Returns one EpisodeDuplicateIdentity per identity that has more than one
-/// occurrence.  Occurrence lines are 1-based and preserved in input order.
+/// occurrence.  Occurrence lines are 1-based positions in the sorted in-memory list and reflect sorted-order positions (NOT JSONL line numbers).
 let private detectDuplicates
     (kind: EpisodeInputIdentityKind)
     (identityFn: 'a -> string)
