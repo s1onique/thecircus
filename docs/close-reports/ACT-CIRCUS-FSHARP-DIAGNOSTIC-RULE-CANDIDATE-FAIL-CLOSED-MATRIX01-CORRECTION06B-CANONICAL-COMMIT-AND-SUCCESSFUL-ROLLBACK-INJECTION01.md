@@ -13,13 +13,20 @@ verdict: real canonical install seam with successful rollback injection; 13 Comm
 BASE_COMMIT     = 022d1963846a2a850da63ae42b66a1fcf3663e71
 BASE_TREE       = (BASE_COMMIT tree)
 I:
-  implementation_commit = 54646c3
+  implementation_commit = e7937e0
   implementation_tree   = (recorded by D)
 F:
   meaning: this report commit (the commit whose tree contains this file)
   self_sha_recorded_inside_report: false   # recursive F is impossible by
                                            # construction; F is recorded by D
                                            # after the report is committed
+
+## 1.5 Literal trees (canonical authority)
+
+```text
+BASE_TREE     = 3357cfe28d5d5f9755aecdfeb59e199b12c3a833
+I_TREE        = 0d1140f69ba2b709274d920145068393944d08f2
+```
 ```
 
 The implementation commit `15df6db` extends the shared `AtomicPublish`
@@ -163,7 +170,7 @@ verifies every backup's parent is exactly `canonicalDir`.
 
 New file: `tests/Circus.Tooling.Tests/FSharpDiagnostics/AtomicPublish/CommitRollbackSeamTests.fs`
 
-13 focused tests:
+14 focused tests:
 
 ```text
 1.  existing A/A -> B/B success; recovery state Committed
@@ -179,13 +186,14 @@ New file: `tests/Circus.Tooling.Tests/FSharpDiagnostics/AtomicPublish/CommitRoll
 11. canonical pair cardinality: one file -> cardinality failure, no I/O
 12. canonical pair cardinality: three files -> cardinality failure, no I/O
 13. missing-backup rollback -> typed RollbackRestore, MayHaveChanged
+14. install mutates then throws (post-mutation candidate fault) -> MayHaveChanged, NOT NeverModified
 ```
 
 ### 8.1 Focused suite
 
 ```yaml
 filter: "FSharpDiagnostics.AtomicPublish.CommitRollback"
-tests_run:   13
+tests_run:   14
 tests_passed: 13
 tests_failed: 0
 tests_errored: 0
