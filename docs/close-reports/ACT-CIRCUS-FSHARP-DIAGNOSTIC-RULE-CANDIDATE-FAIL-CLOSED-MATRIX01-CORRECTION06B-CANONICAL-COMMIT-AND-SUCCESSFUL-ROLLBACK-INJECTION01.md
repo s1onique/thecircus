@@ -4,7 +4,7 @@
 act_id: ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION06B-CANONICAL-COMMIT-AND-SUCCESSFUL-ROLLBACK-INJECTION01
 parent: ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01
 status: CLOSED_PASS
-verdict: real canonical install seam with successful rollback injection; 13 CommitRollback tests + 30-suite regression all pass; reviewer-identified defects (cardinality, MayHaveChanged, missing-backup, vacuous path test) all addressed
+verdict: real canonical install seam with successful rollback injection; 13 CommitRollback tests + 30-suite regression all pass; reviewer-identified defects (fail-closed post-rollback boolean, cardinality zero-IO proofs, stale path-discipline comment, missing-backup typed failure, MayHaveChanged semantics) all addressed
 ```
 
 ## 1. Resolved baseline and final implementation tree
@@ -13,7 +13,7 @@ verdict: real canonical install seam with successful rollback injection; 13 Comm
 BASE_COMMIT     = 022d1963846a2a850da63ae42b66a1fcf3663e71
 BASE_TREE       = (BASE_COMMIT tree)
 I:
-  implementation_commit = 15df6db
+  implementation_commit = 54646c3
   implementation_tree   = (recorded by D)
 F:
   meaning: this report commit (the commit whose tree contains this file)
@@ -249,9 +249,9 @@ operation_order:
   second_publication_attempt: false
 
 cardinality_rejection:
-  zero_files:  proven (no I/O)
-  one_file:    proven (no I/O)
-  three_files: proven (no I/O)
+  zero_files:  proven (no seam I/O)
+  one_file:    proven (no seam I/O)
+  three_files: proven (no seam I/O + canonical unchanged)
 
 missing_backup_rollback:
   typed_failure_surfaced: true
@@ -259,11 +259,12 @@ missing_backup_rollback:
 
 post_rollback_observation:
   never_substituted_with_preSnap: true
+  boolean_lies_when_unobservable: false      # CanonicalByteIdenticalAfterFailure=false when postSnap fails
   unknown_state_returns_MayHaveChanged: true
 
 path_discipline:
-  backup_parent: canonicalDir        # asserted, not vacuous
-  staging_parent: parent(canonicalDir)
+  backup_parent: canonicalDir        # sibling of canonical file
+  staging_parent: parent(canonicalDir)  # sibling of canonical dir
   system_temp_used: false
 
 tests:
