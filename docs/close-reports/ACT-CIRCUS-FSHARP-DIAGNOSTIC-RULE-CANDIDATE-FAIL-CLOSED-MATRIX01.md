@@ -470,8 +470,8 @@ parent_status_unchanged: REOPENED_PARTIAL
 ```text
 BASE_COMMIT       = 93b23ba20e76dd4bdd6ec8729130a15c775572da
 BASE_TREE         = 988f054c1689a8eaed361076331bcfc6ec220e51
-IMPLEMENTATION_I  = f884dad84204912bf8f8fba61eb11e40a8896de8
-IMPLEMENTATION_T  = $(git rev-parse f884dad84204912bf8f8fba61eb11e40a8896de8^{tree})
+IMPLEMENTATION_I  = ce404db16e899cccb212eb4de4bc04edb494daab
+IMPLEMENTATION_T  = 5666df5bbd85d724b540867a223188274d130829
 ```
 
 `git diff --check` and `git status --short` were clean after the
@@ -824,6 +824,88 @@ Reviewer 2 identified four additional defects.  All are now closed:
    lines` in `Engine.fs` source comments has been replaced with
    `Occurrence indices` (which the regex-based rename already
    covered across all occurrences in the round-3 patch).
+
+## 5.7.3 Round-5 review fixes (final)
+
+Reviewer 2 identified three P0 defects remaining after round 4.
+All are now closed in the round-5 implementation commit
+`I = ce404db16e899cccb212eb4de4bc04edb494daab`,
+tree `T = 5666df5bbd85d724b540867a223188274d130829`:
+
+1. **`IMPLEMENTATION_T` is now recorded literally** — the round-4
+   report contained the shell expression
+   `$(git rev-parse f884dad…^{tree})` instead of the resolved tree
+   SHA.  Markdown does not execute command substitutions.  The
+   round-5 report now records the literal tree SHA
+   `5666df5bbd85d724b540867a223188274d130829` so the implementation
+   tree authority is auditable without shell interpretation.
+   (`<rev>^{tree}` resolves the corresponding tree object per
+   `git-rev-parse` documentation.)
+
+2. **`Engine.fs` post-computation comments are now consistent** —
+   three comment sites still narrated the superseded contract after
+   round 4:
+   * The `DuplicateInputIdentities` case-doc claimed "BEFORE any
+     qualification or map construction" and "Occurrence indices are
+     1-based JSONL line numbers where available", directly
+     contradicting the canonical `Domain.fs` contract.
+   * The `runEpisodeEngine` boundary-doc claimed "Detection runs
+     BEFORE qualification or any map construction in the rule-candidate
+     adapter".
+   * The module-level detection-helper comment claimed "No
+     `Map.ofList` collapse or qualification happens before detection".
+
+   All three sites are updated to the honest contract: duplicate
+   identities are detected **after** parsing, Git resolution, and
+   qualification have produced the in-memory records, but **before**
+   the `publish` call writes the canonical artifacts.  `OccurrenceIndices`
+   are documented as 1-based positions in the sorted in-memory
+   population and explicitly NOT JSONL source-line numbers.
+
+3. **The framing regression test now genuinely collides under the
+   OLD delimiter framing** — the round-4 reversal test compared
+   `MalformedJson("a", 1, "b|2|c")` against
+   `WrongFieldType("a|1|b", 2, "c", "string", "number")`, whose
+   old keys begin with different case tags (`malformed|...` vs
+   `wrong_type|...`) and therefore never collided.  The round-5
+   reversal test now uses two `ParseError(MalformedJson)` tuples
+   whose OLD delimiter-only `nonDupKey` strings are byte-identical:
+
+   ```text
+   key("MalformedJson(\"a\", 1, \"b|2|c\")")   = "malformed|a|1|b|2|c|"
+   key("MalformedJson(\"a|1|b\", 2, \"c\")") = "malformed|a|1|b|2|c|"
+   ```
+
+   Under the OLD framing these collide and one error is silently
+   dropped.  Under the NEW length-prefixed framing they produce
+   distinct keys and both errors survive in the mapped output.  The
+   test asserts (a) `fwd = rev` (byte-equal under record reversal),
+   (b) the single `VerificationEvidenceLoadFailed` carries 3 distinct
+   strings (2 MalformedJson + 1 ConflictingEvidenceRecord), and
+   (c) all three rendered strings are byte-distinct.
+
+   The third error is a `ConflictingEvidenceRecord("p|x", "id|q", 1, 2)`
+   whose `source` and `id` fields both contain `|`, demonstrating
+   that separator-bearing fields in the non-`ParseError` DU cases
+   are also stable under length-prefixed framing.
+
+Targeted CanonicalPreservation tests after round-5:
+
+```text
+FSharpDiagnostics.RepairEpisodes.CanonicalPreservation                      3/3   passed
+```
+
+The 18 upstream `detectUpstreamDuplicates` tests, the 6
+`UpstreamDuplicateMapping` tests, the 6 `MixedEvidenceLoadMapping`
+tests, the 12 `IdentityFailures` tests, and the 8
+`ProductionRegression` tests remain green; Engine.fs changes are
+doc-only and cannot regress runtime behaviour.
+
+With the three round-5 P0 defects closed, Correction05 itself
+closes (`status: CLOSED_PASS`).  The parent ACT remains
+`REOPENED_PARTIAL` and the causal-family clustering ACT remains
+`BLOCKED` as previously reported.
+
 ## 5.7 Production read-only replay
 
 Pre-snapshot of the four upstream outputs:
