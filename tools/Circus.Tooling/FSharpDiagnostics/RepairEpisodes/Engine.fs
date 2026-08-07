@@ -1618,12 +1618,18 @@ type EpisodeEngineResult =
 [<RequireQualifiedAccess>]
 type EpisodeEngineFailure =
     /// ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05:
-    /// Upstream typed duplicate-identity detection.  Identities are detected
-    /// in repair episodes, change sets, and diagnostic transitions BEFORE any
-    /// qualification or map construction.  Several duplicate identities may
-    /// appear in one failure.  Occurrence indices are 1-based JSONL line numbers
-    /// where available.  Sorted by (Kind, Identity ordinal, OccurrenceIndices
-    /// ascending).  No rendered error text is parsed to recover identity.
+    /// Upstream typed duplicate-identity detection.
+    ///
+    /// Duplicate identities detected in the computed repair episodes,
+    /// change sets, and diagnostic transitions before canonical publication.
+    /// Detection is post-computation/post-qualification.
+    ///
+    /// OccurrenceIndices are 1-based positions in the sorted in-memory
+    /// population and are not JSONL source-line numbers.
+    ///
+    /// Several duplicate identities may appear in one failure.  Sorted by
+    /// (Kind, Identity ordinal, OccurrenceIndices ascending).  No rendered
+    /// error text is parsed to recover identity.
     | DuplicateInputIdentities of EpisodeDuplicateIdentity list
     /// Evidence loading failed with specific errors.
     | VerificationEvidenceLoadFailed of VerificationEvidenceLoadError list
@@ -1704,9 +1710,13 @@ let private verificationIdFor (cmd: string) (episodeId: string) (kind: Verificat
 
 // ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION05
 // Upstream duplicate identity detection.
-// Detection runs over the uncollapsed parsed records produced by
-// `runEpisodesWithEvidence`.  No `Map.ofList` collapse or qualification
-// happens before detection.  Duplicate records are sorted by:
+// Detection runs over the in-memory records produced by
+// `runEpisodesWithEvidence` AFTER parsing, Git resolution, and
+// qualification have completed, but BEFORE the `publish` call writes
+// the canonical repair-episode artifacts.  The records are sorted by
+// (EpisodeId, ChangeSetId, EpisodeId|ExactFingerprint) at this point,
+// so each duplicate identity is reported with its 1-based position in
+// that sorted list.  Duplicate records are sorted by:
 //   1. Kind order: RepairEpisode, ChangeSet, DiagnosticTransition
 //   2. Identity: StringComparison.Ordinal
 //   3. OccurrenceIndices: ascending
@@ -2051,8 +2061,8 @@ let private runEpisodesWithEvidence
 /// Run the episode engine with fail-closed error propagation.
 /// If evidence loading fails, return EpisodeEngineExecution.Failed to preserve exact errors.
 /// If upstream duplicate identities are detected, return EpisodeEngineExecution.Failed with
-/// the typed DuplicateInputIdentities failure.  Detection runs BEFORE qualification or any
-/// map construction in the rule-candidate adapter.
+/// the typed DuplicateInputIdentities failure.  Detection runs AFTER computation/qualification
+/// but BEFORE any publication in the rule-candidate adapter.
 let runEpisodeEngine (repoRoot: string) (options: EpisodeEngineOptions) : EpisodeEngineExecution =
     clearObjectFormatCache ()
 

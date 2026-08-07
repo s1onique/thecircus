@@ -165,26 +165,63 @@ let episodeEngineCanonicalPreservationTests =
           }
 
           test "non-duplicate evidence order is invariant under record reversal even with embedded delimiters" {
-              // Each individual error contains a `|` so delimiter-only
-              // concatenation can collide.  The length-prefixed
-              // framing must still produce a stable order.
+              // True collision regression for the OLD delimiter-only `nonDupKey`:
+              //
+              //   key("MalformedJson(\"a\", 1, \"b|2|c\")")
+              //     = "malformed|a|1|b|2|c|"
+              //   key("MalformedJson(\"a|1|b\", 2, \"c\")")
+              //     = "malformed|a|1|b|2|c|"
+              //
+              // Two structurally distinct ParseError(MalformedJson) tuples
+              // produce IDENTICAL old `nonDupKey` strings because the `|`
+              // inside the field values is not escaped.  When the
+              // pre-existing mapping collapsed identical keys via `Map`,
+              // one of these two errors was silently dropped.  The NEW
+              // length-prefixed framing produces distinct keys, so both
+              // errors survive in the mapped output as independent strings.
+              //
+              // The third error is a `ConflictingEvidenceRecord` whose own
+              // delimiter-only key also embeds `|` via its `source` field.
+              // Length-prefixed framing keeps it stable too.
               let fwd =
                   Circus.Tooling.FSharpDiagnostics.RuleCandidates.Engine.mapEpisodeEngineFailure(
                       EpisodeEngineFailure.VerificationEvidenceLoadFailed
                           [ VerificationEvidenceLoadError.ParseError(
                                 VerificationEvidenceParseError.MalformedJson("a", 1, "b|2|c"))
                             VerificationEvidenceLoadError.ParseError(
-                                VerificationEvidenceParseError.WrongFieldType("a|1|b", 2, "c", "string", "number"))
-                            VerificationEvidenceLoadError.ConflictingEvidenceRecord("p", "id", 1, 2) ]
+                                VerificationEvidenceParseError.MalformedJson("a|1|b", 2, "c"))
+                            VerificationEvidenceLoadError.ConflictingEvidenceRecord("p|x", "id|q", 1, 2) ]
                   )
               let rev =
                   Circus.Tooling.FSharpDiagnostics.RuleCandidates.Engine.mapEpisodeEngineFailure(
                       EpisodeEngineFailure.VerificationEvidenceLoadFailed
-                          [ VerificationEvidenceLoadError.ConflictingEvidenceRecord("p", "id", 1, 2)
+                          [ VerificationEvidenceLoadError.ConflictingEvidenceRecord("p|x", "id|q", 1, 2)
                             VerificationEvidenceLoadError.ParseError(
-                                VerificationEvidenceParseError.WrongFieldType("a|1|b", 2, "c", "string", "number"))
+                                VerificationEvidenceParseError.MalformedJson("a|1|b", 2, "c"))
                             VerificationEvidenceLoadError.ParseError(
                                 VerificationEvidenceParseError.MalformedJson("a", 1, "b|2|c")) ]
                   )
               Expect.equal fwd rev "mapped result must be invariant under record reversal even with embedded delimiters"
+              // The adapter groups every non-duplicate into a single
+              // `VerificationEvidenceLoadFailed` carrying a sorted list of
+              // stringified errors.  The OLD delimiter framing would have
+              // collapsed the two MalformedJson cases to the same key and
+              // emitted only TWO distinct strings.  Length-prefixed framing
+              // must yield THREE distinct strings.
+              Expect.equal
+                  fwd.Length
+                  1
+                  "non-duplicates must collapse into one VerificationEvidenceLoadFailed"
+              match fwd with
+              | [ Circus.Tooling.FSharpDiagnostics.RuleCandidates.Engine.EngineError.VerificationEvidenceLoadFailed strs ] ->
+                  Expect.equal
+                      strs.Length
+                      3
+                      "both distinct MalformedJson errors and the conflicting record must survive length-prefixed framing"
+                  Expect.equal
+                      (strs |> List.distinct |> List.length)
+                      3
+                      "all three rendered strings must be byte-distinct"
+              | other ->
+                  failwithf "expected [VerificationEvidenceLoadFailed [_;_;_]], got %A" other
           } ]
