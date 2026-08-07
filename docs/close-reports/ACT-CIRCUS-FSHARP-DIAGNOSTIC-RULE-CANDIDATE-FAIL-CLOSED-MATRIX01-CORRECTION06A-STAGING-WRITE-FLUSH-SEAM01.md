@@ -4,22 +4,43 @@
 act_id: ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION06A-STAGING-WRITE-FLUSH-SEAM01
 parent: ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01
 status: CLOSED_PASS
-verdict: real staging filesystem seam with typed pre-commit failure phases, all 9 fault injections + absent-canonical + success-path regression + invariant + operation-order tests pass
+verdict: real pre-commit staging filesystem seam with typed phases, all 9 fault-injection bodies actually execute and assert exact phase + canonical byte preservation + disposal-only sequencing
 ```
 
 ## 1. Resolved baseline and final implementation tree
 
 ```text
-BASE_COMMIT       = e247170329cea3a0e1019cc257a19c7c7675391a
-BASE_TREE         = parent commit tree
-IMPLEMENTATION_I = cc91702<ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION06A: staging write-flush seam>
-FINAL_F_TREE      = cc91702<ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01-CORRECTION06A>
+BASE_COMMIT     = e247170329cea3a0e1019cc257a19c7c7675391a
+BASE_TREE       = parent commit tree
+I:
+  implementation_commit = 031a082aefe36ff693c45b44366f4e049d41ac57
+  implementation_tree   = 463837abf0b0abd2c8826a9e2f6d4699d4570c54
+F:
+  report_only_commit = 780cebce71c9ebfaa96e48a7384e4fb91c1937e2
+  report_tree        = 72ca4a4fe679798ebf3e36f2b6658d28b6dcbcbf
+D:
+  detached: true
+  binds:
+    - 031a082aefe36ff693c45b44366f4e049d41ac57
+    - 780cebce71c9ebfaa96e48a7384e4fb91c1937e2
+    - origin/main (780cebce71c9ebfaa96e48a7384e4fb91c1937e2)
+    - clean worktree
+    - no force push
 ```
 
-`git diff --check` and `git status --short` are clean after the implementation
+A prior commit (`cc91702`) introduced the seam and tests but had two
+defects: (1) `nineFaultTests` wrapped `faultTest` inside an outer
+`testCase` that constructed and discarded the inner Test, so the 9
+fault-injection bodies never executed; (2) `ProductionAtomicWriteHandle.Dispose`
+performed a hidden `Flush(true)` that weakened the claimed single
+durable-flush authority.  `031a082` is the commit that fixes both
+defects.  The close-report SHA `780cebce71c9ebfaa96e48a7384e4fb91c1937e2`
+references the fixed implementation.
+
+`git diff --check` and `git status --short` are clean after the report
 commit.  Production candidate hashes verified unchanged.
 
-## 2. Production seam surface
+## 2. Production seam surface (pre-commit only)
 
 ```fsharp
 type IAtomicWriteHandle =
@@ -36,8 +57,9 @@ type AtomicPublishOps =
 let defaultAtomicPublishOps : AtomicPublishOps  // delegates to real System.IO
 ```
 
-`PublishOutcome` and the legacy `publish` entry point are preserved so
-existing callers (Engine.fs) compile unchanged.
+Canonical install (`replaceCanonical`) still calls `File.Move`/`File.Delete`
+directly — that path is reserved for Correction06B.  This slice owns only
+the **pre-commit staging path**, not the full publication path.
 
 ## 3. Typed pre-commit failure model
 
@@ -79,13 +101,14 @@ For each staged file the required operation sequence is:
 OpenWrite
 WriteAll
 FlushToDisk   (calls FileStream.Flush(true))
-Dispose       (handle closed)
+Dispose       (closes FileStream; no hidden flush)
 ReadAllBytes
 SHA-256 verify
 ```
 
-`FlushToDisk` always invokes `FileStream.Flush(true)` so both the .NET buffer
-and the OS storage cache are forced to durable state.
+`FlushToDisk` is the one operation that invokes `FileStream.Flush(true)`,
+which flushes intermediate file buffers for the open stream.  `Dispose`
+performs no additional flush.
 
 ## 5. Staging location invariant
 
@@ -117,12 +140,12 @@ second staged file:
 Each test asserts:
 
 ```yaml
-typed_failure_phase: exact preserved
-operation:           phase-specific (not "publish")
-canonical_after:     A/A
-canonical_bytes_identical: true
+typed_failure_phase:        exact preserved
+operation:                  phase-specific (not "publish")
+canonical_bytes_identical:  true
 canonical_mutation_operations: 0
-operations_after_fault: only dispose
+operations_after_fault:      only dispose (no opens / writes / flushes / reads /
+                              create-directory calls allowed)
 ```
 
 ## 7. Tests
@@ -152,7 +175,15 @@ All 13 tests use unique repo-local temporary directories under
 and call `publishWithDependencies` directly through the seam.  No test
 manually constructs an `AtomicPublishFailure` and counts it as coverage.
 
-### 7.1 Focused suite
+### 7.1 Sanity check that fault bodies execute
+
+A `failwithf` sanity marker was temporarily added to the first fault
+test body to prove the inner test body actually executes.  With the
+buggy outer wrapper the marker would never fire; with the fix it
+caused that one test to error, confirming the inner body runs.  The
+sanity marker was reverted before commit.
+
+### 7.2 Focused suite
 
 ```yaml
 filter: "FSharpDiagnostics.AtomicPublish"
@@ -163,7 +194,7 @@ tests_errored: 0
 exit_code: 0
 ```
 
-### 7.2 Production candidate preservation
+### 7.3 Production candidate preservation
 
 ```yaml
 candidate_id: 7c470d2b8e3f7b3d67c1e34e44d3644b090a370103d01065810b68d4ee728c89
@@ -175,22 +206,23 @@ rule-candidate-summary-v2.json: b5537953bfdb3c5ada9fc260b8ea53df712b22bec409e876
 ## 8. Stop-condition self-check
 
 ```yaml
-production_file_seam: present
-real_filestream_write: true
-flush_true_used: true
-injectable_create_directory: true
-injectable_open: true
-injectable_write: true
-injectable_flush: true
-injectable_read_verify: true
-failure_tests_exact_phase_asserted: true
+production_file_seam:                present (pre-commit only)
+real_filestream_write:                true
+flush_true_used:                      true (FlushToDisk, not Dispose)
+injectable_create_directory:          true
+injectable_open:                      true
+injectable_write:                     true
+injectable_flush:                     true
+injectable_read_verify:               true
+failure_tests_exact_phase_asserted:   true (9 fault paths actually execute)
 failure_tests_canonical_bytes_preserved: true
-canonical_mutation_before_failure: false
-staging_same_parent_filesystem: true
-staging_system_temp_used: false
-tests_new_count: 13
-tests_all_green: true
-production_candidate_preserved: true
+canonical_mutation_before_failure:    false
+post_fault_disposal_only:             true (every non-dispose seam call rejected)
+staging_same_parent_filesystem:       true
+staging_system_temp_used:             false
+tests_new_count:                      13
+tests_all_green:                      true
+production_candidate_preserved:       true
 ```
 
 ## 9. Parent state after success
@@ -200,8 +232,8 @@ ACT-CIRCUS-FSHARP-DIAGNOSTIC-RULE-CANDIDATE-FAIL-CLOSED-MATRIX01:
   status: REOPENED_PARTIAL
 
   newly_closed:
-    - real staging filesystem seam
-    - real write failure injection
+    - real pre-commit staging filesystem seam
+    - real write failure injection (9 fault paths executing)
     - real flush failure injection
     - real staged verification failure injection
     - precommit canonical preservation
