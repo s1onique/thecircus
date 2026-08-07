@@ -16,14 +16,14 @@ I:
   implementation_commit = 031a082aefe36ff693c45b44366f4e049d41ac57
   implementation_tree   = 463837abf0b0abd2c8826a9e2f6d4699d4570c54
 F:
-  report_only_commit = 918e9c58f5e6e2235c19e4986b8d99f460e4c260
-  report_tree        = 99bcada19f82048a7d58223318408878e79fd485
+  report_only_commit = 1bff13d05fc0232df88bff3fae089acbb3876364
+  report_tree        = 9340691f08a71203a34ae9e0a98a25ac500a87c2
 D:
   detached: true
   binds:
     - 031a082aefe36ff693c45b44366f4e049d41ac57
-    - 918e9c58f5e6e2235c19e4986b8d99f460e4c260
-    - origin/main (918e9c58f5e6e2235c19e4986b8d99f460e4c260)
+    - 1bff13d05fc0232df88bff3fae089acbb3876364
+    - origin/main (1bff13d05fc0232df88bff3fae089acbb3876364)
     - clean worktree
     - no force push
 ```
@@ -34,7 +34,7 @@ defects: (1) `nineFaultTests` wrapped `faultTest` inside an outer
 fault-injection bodies never executed; (2) `ProductionAtomicWriteHandle.Dispose`
 performed a hidden `Flush(true)` that weakened the claimed single
 durable-flush authority.  `031a082` is the commit that fixes both
-defects.  The close-report SHA `918e9c58f5e6e2235c19e4986b8d99f460e4c260`
+defects.  The close-report SHA `1bff13d05fc0232df88bff3fae089acbb3876364`
 references the fixed implementation.
 
 `git diff --check` and `git status --short` are clean after the report
